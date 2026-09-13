@@ -224,10 +224,31 @@ export function useSettingsModel() {
     setBusy(true);
     setErr("");
     try {
+      await api.setBiometricMethod("fingerprint");
       await api.biometricEnable(password);
       setBioPw("");
       setBio(await api.biometricStatus());
-      setMsg("已开启指纹/生物识别解锁");
+      setMsg("已开启指纹解锁");
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setBioMethod(method: string) {
+    setBusy(true);
+    setErr("");
+    try {
+      if (method === "password") {
+        if (bio?.enabled) await api.biometricDisable();
+        await api.setBiometricMethod("password");
+        setBio(await api.biometricStatus());
+        setMsg("已改为访问密码解锁");
+        return;
+      }
+      await api.setBiometricMethod("fingerprint");
+      setBio(await api.biometricStatus());
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -241,7 +262,8 @@ export function useSettingsModel() {
     try {
       await api.biometricDisable();
       setBio(await api.biometricStatus());
-      setMsg("已关闭指纹/生物识别解锁");
+      await api.setBiometricMethod("password");
+      setMsg("已关闭指纹解锁");
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -335,6 +357,7 @@ export function useSettingsModel() {
     bioPw,
     setBioPw,
     enableBio,
+    setBioMethod,
     disableBio,
     toggleBioReveal,
     toggleBioSecret,

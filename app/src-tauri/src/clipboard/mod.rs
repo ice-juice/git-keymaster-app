@@ -1,19 +1,71 @@
 //! 剪贴板写入：机密路径在 Windows 同一会话内打排除标记，避免进历史 / 云剪贴板。
 //!
-//! 非机密与 macOS/Linux 降级为 `arboard`。`clear_if_ours` 只清我们写入的那一份。
+//! 非机密与 macOS/Linux 降级为 `arboard`。Android 走系统 ClipboardManager。
+//! `clear_if_ours` 只清我们写入的那一份。
+#![cfg_attr(all(mobile, not(target_os = "android")), allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
+use tauri::Runtime;
+#[cfg(target_os = "android")]
+use tauri::{AppHandle, Manager};
+
 use sha2::{Digest, Sha256};
-#[cfg(any(test, not(windows)))]
+#[cfg(any(test, all(desktop, not(windows))))]
 use zeroize::Zeroize;
 
 #[cfg(windows)]
 mod windows;
 
-#[cfg(not(windows))]
+#[cfg(all(desktop, not(windows)))]
 mod unix;
+
+#[cfg(target_os = "android")]
+struct ClipboardHandle<R: Runtime>(tauri::plugin::PluginHandle<R>);
+
+/// 注册 Android 原生剪贴板插件。桌面端为空插件。
+pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("app-clipboard")
+        .setup(|app, api| {
+            #[cfg(target_os = "android")]
+            {
+                let handle = api.register_android_plugin("com.jeck.gitkeymaster", "ClipboardPlugin")?;
+                app.manage(ClipboardHandle(handle));
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                let _ = (app, api);
+            }
+            Ok(())
+        })
+        .build()
+}
+
+#[cfg(target_os = "android")]
+pub fn write_android(app: &AppHandle, text: &str) -> Result<WriteOutcome, String> {
+    let handle = app.state::<ClipboardHandle<tauri::Wry>>();
+    handle
+        .0
+        .run_mobile_plugin::<()>("writeText", serde_json::json!({ "text": text }))
+        .map_err(|e| format!("写入系统剪贴板失败：{e}"))?;
+    remember_write(text, None);
+    Ok(WriteOutcome {
+        excluded: false,
+        fallback: false,
+    })
+}
+
+#[cfg(target_os = "android")]
+pub fn clear_android(app: &AppHandle) -> Result<(), String> {
+    let handle = app.state::<ClipboardHandle<tauri::Wry>>();
+    handle
+        .0
+        .run_mobile_plugin::<()>("clear", ())
+        .map_err(|e| format!("清空系统剪贴板失败：{e}"))?;
+    forget_write();
+    Ok(())
+}
 
 /// 请求剪贴板监听者不要处理本次内容。
 pub const FMT_EXCLUDE_MONITOR: &str = "ExcludeClipboardContentFromMonitorProcessing";
@@ -42,9 +94,13 @@ pub fn exclusion_supported() -> bool {
     {
         windows::exclusion_supported()
     }
-    #[cfg(not(windows))]
+    #[cfg(all(desktop, not(windows)))]
     {
         unix::exclusion_supported()
+    }
+    #[cfg(mobile)]
+    {
+        false
     }
 }
 
@@ -78,23 +134,39 @@ pub fn write(text: &str, secret: bool) -> Result<WriteOutcome, String> {
 }
 
 pub fn clear_if_ours() -> Result<(), String> {
-    if !is_still_ours()? {
+    #[cfg(mobile)]
+    {
         forget_write();
         return Ok(());
     }
-    arboard::Clipboard::new()
-        .and_then(|mut cb| cb.clear())
-        .map_err(|e| e.to_string())?;
-    forget_write();
-    Ok(())
+    #[cfg(desktop)]
+    {
+        if !is_still_ours()? {
+            forget_write();
+            return Ok(());
+        }
+        arboard::Clipboard::new()
+            .and_then(|mut cb| cb.clear())
+            .map_err(|e| e.to_string())?;
+        forget_write();
+        Ok(())
+    }
 }
 
 fn write_plain(text: &str) -> Result<(), String> {
-    arboard::Clipboard::new()
-        .and_then(|mut cb| cb.set_text(text.to_string()))
-        .map_err(|e| e.to_string())?;
-    remember_write(text, current_seq());
-    Ok(())
+    #[cfg(mobile)]
+    {
+        let _ = text;
+        Err("当前平台尚未接入系统剪贴板".into())
+    }
+    #[cfg(desktop)]
+    {
+        arboard::Clipboard::new()
+            .and_then(|mut cb| cb.set_text(text.to_string()))
+            .map_err(|e| e.to_string())?;
+        remember_write(text, current_seq());
+        Ok(())
+    }
 }
 
 fn remember_write(text: &str, seq: Option<u32>) {
@@ -136,7 +208,7 @@ fn is_still_ours() -> Result<bool, String> {
             windows::sequence_number(),
         ))
     }
-    #[cfg(not(windows))]
+    #[cfg(all(desktop, not(windows)))]
     {
         let expected = *LAST_HASH.lock().expect("clipboard hash lock");
         let Some(expected) = expected else {
@@ -149,6 +221,10 @@ fn is_still_ours() -> Result<bool, String> {
         let matched = should_clear_by_hash(Some(expected), content_hash(&current));
         current.zeroize();
         Ok(matched)
+    }
+    #[cfg(mobile)]
+    {
+        Ok(false)
     }
 }
 

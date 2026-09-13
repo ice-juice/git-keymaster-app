@@ -6,6 +6,7 @@ pub mod identity;
 pub mod autostart;
 pub mod biometric;
 mod clipboard;
+pub mod camera_perm;
 pub mod commands;
 pub mod session;
 pub mod security;
@@ -17,12 +18,14 @@ pub mod model;
 pub mod qrscan;
 pub mod net;
 pub mod platform;
+#[cfg(desktop)]
 pub mod single_instance;
 pub mod ssh;
 pub mod store;
 pub mod sync;
 pub mod sys;
 pub mod totp;
+#[cfg(desktop)]
 pub mod tray;
 pub mod update;
 pub mod util;
@@ -30,8 +33,11 @@ pub mod vault;
 pub mod workspace_path;
 
 use commands::AppState;
+#[cfg(desktop)]
 use std::sync::atomic::Ordering;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
+#[cfg(desktop)]
+use tauri::Emitter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -65,7 +71,10 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_log::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(camera_perm::init())
+        .plugin(clipboard::init())
+        .plugin(biometric::init());
 
     // 应用内自更新只有桌面端有意义；移动端交给应用商店。
     #[cfg(desktop)]
@@ -76,6 +85,7 @@ pub fn run() {
     builder
         .invoke_handler(tauri::generate_handler![
             commands::vault::vault_status,
+            commands::vault::default_workspace_path,
             commands::vault::check_workspace_path,
             commands::vault::vault_init,
             commands::vault::vault_unlock,
@@ -96,6 +106,7 @@ pub fn run() {
             commands::biometric::reveal_authorize_biometric,
             commands::biometric::set_biometric_reveal_enabled,
             commands::biometric::set_biometric_reveal_secret,
+            commands::biometric::set_biometric_method,
             commands::security::security_checklist,
             commands::assets::read_ssh_config,
             commands::assets::open_ssh_config,
@@ -150,6 +161,7 @@ pub fn run() {
             commands::sync::save_cloud_sync_config,
             commands::sync::export_s3_config,
             commands::sync::import_s3_config,
+            commands::sync::import_s3_config_text,
             commands::sync::test_cloud_sync_config,
             commands::sync::get_cloud_sync_status,
             commands::sync::get_cloud_sync_page,
@@ -185,6 +197,10 @@ pub fn run() {
             commands::totp::totp_parse_uri,
             commands::totp::totp_import_from_image,
             commands::totp::totp_scan_screen,
+            commands::qr::render_qr_png,
+            commands::qr::decode_qr_from_image,
+            camera_perm::request_camera_permission,
+            camera_perm::open_app_permission_settings,
             commands::totp::totp_reveal_secret,
             commands::totp::totp_export_qr,
             commands::accounts::account_list,
@@ -221,6 +237,7 @@ pub fn run() {
                 std::fs::create_dir_all(&dir).ok();
                 crate::identity::init_base_dir(dir);
                 crate::identity::migrate_app_data();
+                crate::identity::adopt_parent_app_config();
             }
 
             // 桌面端在 `run()` 开头已经迁移过，这里只负责注册状态。
@@ -285,6 +302,7 @@ pub fn run() {
 }
 
 /// 仅 `GAM_DISABLE_GPU=1` 时附加软件渲染参数；debug 保留远程调试端口。
+#[cfg(any(windows, test))]
 fn webview2_extra_browser_args(disable_gpu: bool, debug: bool) -> String {
     let mut parts: Vec<&str> = Vec::new();
     if disable_gpu {

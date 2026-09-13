@@ -74,7 +74,7 @@ export function SettingsMobile() {
             {subSection === "animation" && "解锁开门动画"}
             {subSection === "checklist" && "安全健康自查"}
             {subSection === "password" && "修改主访问密码"}
-            {subSection === "biometric" && "生物识别解锁"}
+            {subSection === "biometric" && "解锁方式"}
             {subSection === "timeout" && "时效与剪贴板保护"}
             {subSection === "recovery" && "灾难恢复密钥"}
             {subSection === "workspace" && "工作空间存储信息"}
@@ -252,27 +252,50 @@ export function SettingsMobile() {
 
         {/* 5. 生物识别解锁 */}
         {subSection === "biometric" && (
-          <Card title="指纹 / 人脸生物识别">
+          <Card title="解锁方式">
             <div className="stack">
               <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                使用移动设备录入的指纹或人脸快速解锁与验证。密钥由系统底层安全芯片保护，密码与恢复密钥随时可兜底。
+                用访问密码解锁，或改用本机已录入的指纹。恢复密钥随时可兜底。
               </div>
-
-              {!m.bio?.available && (
-                <div className="callout warn">
-                  当前设备未检测到可用的系统生物识别或硬件支持。
-                </div>
-              )}
 
               {m.bio?.stale && (
                 <div className="callout warn">
-                  指纹凭据已失效，请重新输入访问密码开启。
+                  指纹凭据已失效，请改用访问密码，或重新输入访问密码开启指纹。
                 </div>
               )}
 
+              <div className="field">
+                <FieldLabel name="解锁方式" tip="指纹需本机已录入，并先用访问密码绑定一次。" />
+                <div className="m-bio-methods">
+                  <button
+                    type="button"
+                    className={"choice" + (m.bio?.enabled ? " on" : "")}
+                    disabled={m.busy || m.bio?.available === false}
+                    onClick={() => void m.setBioMethod("fingerprint")}
+                  >
+                    <Fingerprint size={18} />
+                    <span>指纹</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={"choice" + (!m.bio?.enabled ? " on" : "")}
+                    disabled={m.busy}
+                    onClick={() => void m.setBioMethod("password")}
+                  >
+                    <KeyRound size={18} />
+                    <span>密码</span>
+                  </button>
+                </div>
+                {m.bio?.available === false && (
+                  <div className="hint" style={{ marginTop: 6 }}>
+                    这台设备没有可用指纹，只能用访问密码解锁。
+                  </div>
+                )}
+              </div>
+
               {m.bio?.available && !m.bio.enabled && (
                 <div className="stack" style={{ marginTop: 8 }}>
-                  <label className="field-label">输入访问密码以启用</label>
+                  <label className="field-label">输入访问密码以启用指纹</label>
                   <input
                     className="input"
                     type="password"
@@ -286,19 +309,18 @@ export function SettingsMobile() {
                     disabled={m.busy || !m.bioPw.trim()}
                     onClick={() => m.enableBio(m.bioPw)}
                   >
-                    <Fingerprint size={15} /> 立即启用生物识别
+                    <Fingerprint size={15} />
+                    启用指纹解锁
                   </button>
                 </div>
               )}
 
               {m.bio?.enabled && (
                 <div className="stack" style={{ marginTop: 6 }}>
-                  <div className="callout good">
-                    ✓ 系统生物识别已启用，启动解锁与查看凭据时可轻触指纹直接解锁。
-                  </div>
+                  <div className="callout good">已启用指纹解锁。启动与查看凭据时可验证指纹。</div>
 
                   <div className="field">
-                    <FieldLabel name="查看验证码 / 账密时允许生物识别" tip="金库已解锁后，查看一次性验证码或账户密码可用指纹代替访问密码。" />
+                    <FieldLabel name="查看验证码 / 账密时允许指纹" tip="金库已解锁后，查看一次性验证码或账户密码可用指纹代替访问密码。" />
                     <label className="row" style={{ marginTop: 6, gap: 8 }}>
                       <input
                         type="checkbox"
@@ -306,12 +328,12 @@ export function SettingsMobile() {
                         disabled={m.busy}
                         onChange={(e) => m.toggleBioReveal(e.target.checked)}
                       />
-                      <span className="hint">允许免输密码直接指纹解锁凭据</span>
+                      <span className="hint">允许免输密码直接验证后查看凭据</span>
                     </label>
                   </div>
 
                   <div className="field">
-                    <FieldLabel name="取回 TOTP 原始密钥也允许生物识别" tip="这是导出级操作，默认建议关闭以确保最高安全性。" />
+                    <FieldLabel name="取回 TOTP 原始密钥也允许指纹" tip="这是导出级操作，默认建议关闭以确保最高安全性。" />
                     <label className="row" style={{ marginTop: 6, gap: 8 }}>
                       <input
                         type="checkbox"
@@ -322,16 +344,6 @@ export function SettingsMobile() {
                       <span className="hint">导出级操作，默认建议关闭</span>
                     </label>
                   </div>
-
-                  <button
-                    type="button"
-                    className="btn ghost sm danger"
-                    style={{ marginTop: 8 }}
-                    disabled={m.busy}
-                    onClick={m.disableBio}
-                  >
-                    关闭生物识别
-                  </button>
                 </div>
               )}
             </div>
@@ -616,8 +628,8 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(245, 158, 11, 0.12)", color: "#f59e0b" }}>
             <Fingerprint size={16} />
           </div>
-          <span className="m-settings-cell-title">指纹 / 生物识别解锁</span>
-          <span className="m-settings-cell-value">{m.bio?.enabled ? "已开启" : "未开启"}</span>
+          <span className="m-settings-cell-title">解锁方式</span>
+          <span className="m-settings-cell-value">{m.bio?.enabled ? "指纹" : "密码"}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
 

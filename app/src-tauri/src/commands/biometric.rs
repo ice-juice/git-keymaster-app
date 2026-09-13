@@ -7,7 +7,8 @@ use crate::error::{AppError, Result};
 use tauri::{AppHandle, State};
 
 #[tauri::command(async)]
-pub fn biometric_status(state: State<'_, AppState>) -> biometric::BiometricStatus {
+pub fn biometric_status(app: AppHandle, state: State<'_, AppState>) -> biometric::BiometricStatus {
+    biometric::bind_window(&app);
     let _ = ensure_loaded(&state);
     let cfg = recover_lock(&state.config).clone();
     let workspace_id = resolve_workspace_id(&state);
@@ -28,10 +29,15 @@ pub fn biometric_enable(app: AppHandle, state: State<'_, AppState>, password: St
         v.verify_password(&password)?;
         (v.workspace_id().to_string(), v.master_key()?.clone())
     };
-    biometric::enable(&workspace_id, &mk)?;
+    let method = {
+        let cfg = recover_lock(&state.config);
+        crate::app_config::clamp_biometric_method(&cfg.biometric_method)
+    };
+    biometric::enable(&workspace_id, &mk, &method)?;
     let mut cfg = recover_lock(&state.config);
     cfg.biometric_unlock_enabled = true;
     cfg.biometric_reveal_enabled = true;
+    cfg.biometric_method = method;
     cfg.save()
 }
 
@@ -81,4 +87,13 @@ pub fn set_biometric_reveal_secret(state: State<AppState>, enabled: bool) -> Res
     let mut cfg = recover_lock(&state.config);
     cfg.biometric_reveal_secret = enabled;
     cfg.save()
+}
+
+#[tauri::command]
+pub fn set_biometric_method(state: State<AppState>, method: String) -> Result<String> {
+    let method = crate::app_config::clamp_biometric_method(&method);
+    let mut cfg = recover_lock(&state.config);
+    cfg.biometric_method = method.clone();
+    cfg.save()?;
+    Ok(method)
 }

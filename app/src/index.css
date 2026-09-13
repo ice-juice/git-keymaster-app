@@ -1861,5 +1861,28 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 6px 0; }
   flex: 1;
 }
 
+.app-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  z-index: 80;
+  pointer-events: none;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: rgba(20, 24, 36, 0.88);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.18);
+}
+.app-toast.on {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 
 

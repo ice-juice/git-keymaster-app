@@ -32,6 +32,17 @@ fn default_account_history_limit() -> u32 {
     10
 }
 
+fn default_biometric_method() -> String {
+    "auto".into()
+}
+
+pub fn clamp_biometric_method(raw: &str) -> String {
+    match raw.trim() {
+        "fingerprint" | "password" | "auto" => raw.trim().into(),
+        _ => "password".into(),
+    }
+}
+
 pub fn clamp_reveal_grace_minutes(minutes: u32) -> u32 {
     minutes.min(30)
 }
@@ -123,6 +134,9 @@ pub struct AppConfig {
     /// 是否允许指纹替代密码取回 TOTP 原始密钥。默认关。
     #[serde(default)]
     pub biometric_reveal_secret: bool,
+    /// 解锁方式：`password` | `fingerprint` | `auto`。
+    #[serde(default = "default_biometric_method")]
+    pub biometric_method: String,
 }
 
 /// 本机 HTTP/HTTPS/SOCKS5 代理。
@@ -243,6 +257,7 @@ impl Default for AppConfig {
             biometric_unlock_enabled: false,
             biometric_reveal_enabled: false,
             biometric_reveal_secret: false,
+            biometric_method: default_biometric_method(),
         }
     }
 }
@@ -302,6 +317,10 @@ mod tests {
         assert_eq!(cfg.skipped_update_version, None);
         assert_eq!(cfg.last_update_check_at, None);
         assert_eq!(cfg.network_proxy, None);
+        assert_eq!(cfg.biometric_method, "auto");
+        assert_eq!(clamp_biometric_method("fingerprint"), "fingerprint");
+        assert_eq!(clamp_biometric_method("face"), "password");
+        assert_eq!(clamp_biometric_method("nope"), "password");
         let filled = UpdateSource::effective(cfg.update_source.as_ref());
         assert_eq!(filled.kind, "github");
         assert_eq!(filled.repo.as_deref(), Some(DEFAULT_UPDATE_REPO));

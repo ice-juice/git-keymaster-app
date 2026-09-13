@@ -516,7 +516,7 @@ function ReauthInner({ hint, onConfirm, onCancel }: { hint: string; onConfirm: (
               }
             }}
           >
-            用指纹验证
+            用生物识别验证
           </button>
         )}
         <button

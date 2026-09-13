@@ -31,6 +31,8 @@ pub fn availability() -> BiometricAvailability {
         available,
         kind,
         strong: available,
+        fingerprint: available && kind == "touch-id",
+        face: available && kind == "face-id",
     }
 }
 

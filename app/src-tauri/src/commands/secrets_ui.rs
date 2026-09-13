@@ -7,7 +7,7 @@ use crate::error::{AppError, Result};
 use crate::icons::{self, BuiltinIconInfo, CustomIconInfo};
 use crate::store;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, State};
 use zeroize::Zeroize;
 
 fn clipboard_err(e: impl ToString) -> AppError {
@@ -24,25 +24,50 @@ pub struct ClipboardWriteResult {
 }
 
 #[tauri::command]
-pub fn clipboard_write(mut text: String, secret: Option<bool>) -> Result<ClipboardWriteResult> {
-    let secret = secret.unwrap_or(false);
-    let outcome = clipboard::write(&text, secret);
-    text.zeroize();
-    let outcome = outcome.map_err(clipboard_err)?;
-    Ok(ClipboardWriteResult {
-        excluded: outcome.excluded,
-        fallback: outcome.fallback,
-        notice: if outcome.fallback {
-            Some("剪贴板正被其他程序占用，已改为普通复制；本次内容可能进入剪贴板历史。".into())
-        } else {
-            None
-        },
-    })
+pub fn clipboard_write(app: AppHandle, mut text: String, secret: Option<bool>) -> Result<ClipboardWriteResult> {
+    #[cfg(target_os = "android")]
+    {
+        let outcome = clipboard::write_android(&app, &text);
+        text.zeroize();
+        let _ = secret;
+        let outcome = outcome.map_err(clipboard_err)?;
+        return Ok(ClipboardWriteResult {
+            excluded: outcome.excluded,
+            fallback: outcome.fallback,
+            notice: None,
+        });
+    }
+
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        let secret = secret.unwrap_or(false);
+        let outcome = clipboard::write(&text, secret);
+        text.zeroize();
+        let outcome = outcome.map_err(clipboard_err)?;
+        Ok(ClipboardWriteResult {
+            excluded: outcome.excluded,
+            fallback: outcome.fallback,
+            notice: if outcome.fallback {
+                Some("剪贴板正被其他程序占用，已改为普通复制；本次内容可能进入剪贴板历史。".into())
+            } else {
+                None
+            },
+        })
+    }
 }
 
 #[tauri::command]
-pub fn clipboard_clear() -> Result<()> {
-    clipboard::clear_if_ours().map_err(clipboard_err)
+pub fn clipboard_clear(app: AppHandle) -> Result<()> {
+    #[cfg(target_os = "android")]
+    {
+        return clipboard::clear_android(&app).map_err(clipboard_err);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        clipboard::clear_if_ours().map_err(clipboard_err)
+    }
 }
 
 #[derive(Serialize)]

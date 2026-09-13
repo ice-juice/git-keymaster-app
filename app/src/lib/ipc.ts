@@ -31,10 +31,19 @@ export interface BiometricStatus {
   revealEnabled: boolean;
   revealSecret: boolean;
   stale: boolean;
+  fingerprintAvailable?: boolean;
+  faceAvailable?: boolean;
+  preferredMethod?: string;
+  enrolledMethod?: string;
 }
 export interface InitResult {
   recoveryKey: string;
   workspaceId: string;
+}
+
+export interface CameraPermissionStatus {
+  granted: boolean;
+  permanentlyDenied?: boolean;
 }
 export interface PathCheck {
   warning: string | null;
@@ -418,6 +427,7 @@ export const api = {
   // vault
   vaultStatus: () => invoke<VaultStatus>("vault_status"),
   checkWorkspacePath: (path: string) => invoke<PathCheck>("check_workspace_path", { path }),
+  defaultWorkspacePath: () => invoke<string>("default_workspace_path"),
   vaultInit: (path: string, password: string) => invoke<InitResult>("vault_init", { path, password }),
   vaultUnlock: (password: string) => invoke<void>("vault_unlock", { password }),
   vaultUnlockRecovery: (recoveryKey: string) => invoke<void>("vault_unlock_recovery", { recoveryKey }),
@@ -428,6 +438,7 @@ export const api = {
   revealAuthorizeBiometric: () => invoke<void>("reveal_authorize_biometric"),
   setBiometricRevealEnabled: (enabled: boolean) => invoke<void>("set_biometric_reveal_enabled", { enabled }),
   setBiometricRevealSecret: (enabled: boolean) => invoke<void>("set_biometric_reveal_secret", { enabled }),
+  setBiometricMethod: (method: string) => invoke<string>("set_biometric_method", { method }),
   vaultLock: () => invoke<void>("vault_lock"),
   changePassword: (oldPassword: string, newPassword: string) =>
     invoke<void>("change_password", { oldPassword, newPassword }),
@@ -536,6 +547,7 @@ export const api = {
   exportS3Config: (destPath: string, syncConfig: S3Config) =>
     invoke<void>("export_s3_config", { destPath, syncConfig }),
   importS3Config: (srcPath: string) => invoke<S3Config>("import_s3_config", { srcPath }),
+  importS3ConfigText: (raw: string) => invoke<S3Config>("import_s3_config_text", { raw }),
   testCloudSyncConfig: (syncConfig: S3Config) =>
     invoke<number>("test_cloud_sync_config", { syncConfig }),
   getCloudSyncPage: () => invoke<CloudSyncPageData>("get_cloud_sync_page"),
@@ -584,6 +596,11 @@ export const api = {
   totpParseUri: (uri: string) => invoke<ParsedTotpPreview>("totp_parse_uri", { uri }),
   totpImportFromImage: (path: string) => invoke<ParsedTotpPreview>("totp_import_from_image", { path }),
   totpScanScreen: () => invoke<ScreenHit[]>("totp_scan_screen"),
+  renderQrPng: (text: string) => invoke<string>("render_qr_png", { text }),
+  decodeQrFromImage: (bytes: number[]) => invoke<string[]>("decode_qr_from_image", { bytes }),
+  requestCameraPermission: () =>
+    invoke<CameraPermissionStatus>("request_camera_permission"),
+  openAppPermissionSettings: () => invoke<void>("open_app_permission_settings"),
   totpRevealSecret: (id: string, password: string) =>
     invoke<TotpSecretReveal>("totp_reveal_secret", { id, password }),
   totpExportQr: (id: string, password: string) => invoke<string>("totp_export_qr", { id, password }),

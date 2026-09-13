@@ -19,6 +19,7 @@ import { Settings } from "./pages/Settings";
 import { TotpPage } from "./pages/Totp";
 import { AccountsPage } from "./pages/Accounts";
 import { CloseConfirmHost } from "./ui/CloseConfirm";
+import { ToastHost } from "./ui/Toast";
 import UnlockAnimation from "./ui/UnlockAnimation";
 import { MobileShell } from "./ui/MobileShell";
 import { useIsCompact, supportsLocalGitTools } from "./lib/platform";
@@ -54,6 +55,7 @@ export default function App() {
   const compact = useIsCompact();
   // 本机 Git / SSH 工具链相关页面在移动端没有消费者，连路由都不注册，
   // 避免深链接或历史记录把用户带到一个必然报错的页面。
+  // 平台标记（<html data-platform>）已由 main.tsx 在首帧前写好，这里无需再动。
   const localTools = supportsLocalGitTools();
 
   const unlockOverlay = playUnlockAnim ? (
@@ -159,6 +161,7 @@ export default function App() {
   return (
     <>
       <CloseConfirmHost />
+      <ToastHost />
       <div className="app-shell">
         {/* 移动端没有窗口控制，标题栏由 MobileShell 的精简顶栏代替 */}
         {!compact && <TitleBar />}

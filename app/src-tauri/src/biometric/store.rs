@@ -19,6 +19,9 @@ pub struct BiometricEnvFile {
     pub challenge: String,
     pub envelope: Envelope,
     pub created_at: String,
+    /// password | fingerprint | auto。旧文件没有该字段。
+    #[serde(default)]
+    pub method: Option<String>,
 }
 
 pub fn file_path() -> PathBuf {
@@ -34,7 +37,11 @@ pub fn current_platform() -> &'static str {
     {
         "macos"
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    {
+        "android"
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
     {
         "linux"
     }
@@ -111,6 +118,7 @@ mod tests {
                 wrapped_key: "d3JhcA==".into(),
             },
             created_at: "2026-09-10T00:00:00Z".into(),
+            method: Some("fingerprint".into()),
         }
     }
 

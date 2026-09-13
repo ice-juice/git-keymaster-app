@@ -9,6 +9,8 @@ pub fn availability() -> BiometricAvailability {
         available: false,
         kind: "none",
         strong: false,
+        fingerprint: false,
+        face: false,
     }
 }
 

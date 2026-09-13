@@ -772,7 +772,12 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
           <Card
             title="S3 / Cloudflare R2 存储配置"
             actions={
-              compact ? undefined : (
+              compact ? (
+                <button type="button" className="m-s3-head-scan" onClick={scanS3Qr}>
+                  <Camera size={14} />
+                  扫码导入
+                </button>
+              ) : (
                 <div className="flex gap-1">
                   <span className="muted" style={{ fontSize: 11, alignSelf: "center", marginRight: 4 }}>快速预设:</span>
                   <button type="button" className="btn ghost sm" onClick={() => applyPreset("r2")}>Cloudflare R2</button>
@@ -897,45 +902,62 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               </div>
             )}
 
-            <div className={compact ? "m-s3-actions" : "flex gap-2 items-center"}>
-              <button
-                type="button"
-                className="btn primary sm"
-                onClick={saveConfig}
-              >
-                {configSaved ? "已保存配置 ✓" : "保存配置"}
-              </button>
-              <button
-                type="button"
-                className="btn ghost sm"
-                disabled={testing}
-                onClick={testConnection}
-                style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
-              >
-                <Zap size={13} />
-                {testing ? "正在测试…" : "测试连通性"}
-              </button>
-              <button type="button" className="btn ghost sm" onClick={exportS3File}>
-                <Download size={13} />
-                导出配置
-              </button>
-              <button type="button" className="btn ghost sm" onClick={importS3File}>
-                <Upload size={13} />
-                导入配置
-              </button>
-              {!compact && (
+            {compact ? (
+              <div className="m-s3-actions">
+                <div className="m-s3-actions-main">
+                  <button type="button" className="btn primary" onClick={saveConfig}>
+                    {configSaved ? "已保存配置 ✓" : "保存配置"}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn"
+                    disabled={testing}
+                    onClick={testConnection}
+                  >
+                    <Zap size={14} />
+                    {testing ? "正在测试…" : "测试连通性"}
+                  </button>
+                </div>
+                <div className="m-s3-tools">
+                  <button type="button" className="m-s3-tool" onClick={exportS3File}>
+                    <Download size={16} />
+                    <span>导出配置</span>
+                  </button>
+                  <button type="button" className="m-s3-tool" onClick={importS3File}>
+                    <Upload size={16} />
+                    <span>导入配置</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex gap-2 items-center">
+                <button type="button" className="btn primary sm" onClick={saveConfig}>
+                  {configSaved ? "已保存配置 ✓" : "保存配置"}
+                </button>
+                <button
+                  type="button"
+                  className="btn ghost sm"
+                  disabled={testing}
+                  onClick={testConnection}
+                  style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
+                >
+                  <Zap size={13} />
+                  {testing ? "正在测试…" : "测试连通性"}
+                </button>
+                <button type="button" className="btn ghost sm" onClick={exportS3File}>
+                  <Download size={13} />
+                  导出配置
+                </button>
+                <button type="button" className="btn ghost sm" onClick={importS3File}>
+                  <Upload size={13} />
+                  导入配置
+                </button>
                 <button type="button" className="btn ghost sm" disabled={sharing} onClick={shareConfigQr}>
                   <QrCode size={13} />
                   {sharing ? "正在生成…" : "分享配置"}
                 </button>
-              )}
-              {compact && (
-                <button type="button" className="btn ghost sm" onClick={scanS3Qr}>
-                  <Camera size={13} />
-                  扫码导入
-                </button>
-              )}
-            </div>
+              </div>
+            )}
           </Card>
 
           {/* 板块 4: 云端历史快照 (下移一个板块至存储配置下方) */}

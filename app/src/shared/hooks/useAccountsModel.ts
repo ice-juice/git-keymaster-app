@@ -9,6 +9,7 @@ import {
   type TotpEntry,
 } from "../../lib/ipc";
 import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
+import { resolvePlatform } from "../../platform/resolve";
 import { resolvePlatformBrand, platformFamily } from "../../lib/accountInput";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { useApp } from "../../store";
@@ -100,7 +101,12 @@ export function useAccountsModel() {
   }
 
   async function copyUsername(id: string, username: string) {
-    await copyWithClear(username, undefined, false);
+    try {
+      await copyWithClear(username, undefined, false);
+    } catch (e) {
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      return;
+    }
     triggerCopied(`user-${id}`);
   }
 
@@ -210,7 +216,12 @@ export function useAccountsModel() {
       pw = got;
       setPwShown((m) => ({ ...m, [id]: pw }));
     }
-    await copyWithClear(pw);
+    try {
+      await copyWithClear(pw);
+    } catch (e) {
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      return;
+    }
     await api.accountTouch(id);
     triggerCopied(`pw-${id}`);
   }
@@ -228,7 +239,12 @@ export function useAccountsModel() {
       item = { code: c.code, remain: c.remainingSeconds, period: c.period };
       setTotpShown((m) => ({ ...m, [totpId]: item }));
     }
-    await copyWithClear(item.code.replace(/\s/g, ""));
+    try {
+      await copyWithClear(item.code.replace(/\s/g, ""));
+    } catch (e) {
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      return;
+    }
     triggerCopied(`totp-${totpId}`);
   }
 

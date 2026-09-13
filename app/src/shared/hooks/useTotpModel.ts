@@ -10,6 +10,7 @@ import {
   type TotpEntry,
 } from "../../lib/ipc";
 import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
+import { resolvePlatform } from "../../platform/resolve";
 import { detectTotpInput } from "../../lib/totpInput";
 import { firstOtpauth, pickQrFromGallery, scanQrWithCamera } from "../../lib/qrCapture";
 import { isMobilePlatform } from "../../lib/platform";
@@ -176,7 +177,12 @@ export function useTotpModel() {
       cur = { code: c.code, remain: c.remainingSeconds, period: c.period };
       setCodes((m) => ({ ...m, [id]: cur }));
     }
-    await copyWithClear(cur.code.replace(/\s/g, ""));
+    try {
+      await copyWithClear(cur.code.replace(/\s/g, ""));
+    } catch (e) {
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      return;
+    }
     setCopiedId(id);
     window.setTimeout(() => {
       setCopiedId((prev) => (prev === id ? null : prev));
