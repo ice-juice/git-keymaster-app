@@ -50,10 +50,52 @@ export function detectAccountSource(raw: string, builtins: BuiltinHint[]): Detec
 export function suggestIcon(name: string, builtins: BuiltinHint[]): string | undefined {
   const q = name.trim().toLowerCase();
   if (!q) return undefined;
-  const hit = builtins.find(
-    (i) => q.includes(i.id) || i.name.toLowerCase().includes(q) || q.includes(i.name.toLowerCase()),
-  );
+  const stem = q.replace(/\.(com|cn|net|org|io|me|co|cc)$/i, "");
+  const hit = builtins.find((i) => {
+    const id = i.id.toLowerCase();
+    const bName = i.name.toLowerCase();
+    return q === id || q === bName || stem === id || stem === bName;
+  });
   return hit ? `builtin:${hit.id}` : undefined;
+}
+
+/** 同一平台的归并键：能精准匹配内置站用图标 id，其余用小写平台名。 */
+export function platformFamily(platform: string, builtins: BuiltinHint[]): string {
+  const trimmed = platform.trim();
+  if (!trimmed) return "";
+  const icon = suggestIcon(trimmed, builtins);
+  if (icon) return icon;
+  return trimmed.toLowerCase();
+}
+
+export function resolvePlatformBrand(
+  platform: string,
+  icon: string | null | undefined,
+  existing: { platform: string; icon?: string | null }[],
+  builtins: BuiltinHint[],
+): { platform: string; icon?: string } {
+  const rawTrimmed = platform.trim();
+  if (!rawTrimmed) return { platform: "", icon: icon ? icon.trim() || undefined : undefined };
+
+  const family = platformFamily(rawTrimmed, builtins);
+  const siblings = existing.filter((e) => platformFamily(e.platform, builtins) === family);
+
+  let canonicalName = siblings[0]?.platform;
+  if (!canonicalName && family.startsWith("builtin:")) {
+    const b = builtins.find((item) => `builtin:${item.id}` === family);
+    if (b && (rawTrimmed.toLowerCase() === b.id.toLowerCase() || rawTrimmed.toLowerCase() === b.name.toLowerCase())) {
+      canonicalName = b.name;
+    }
+  }
+
+  const finalName = canonicalName || rawTrimmed;
+
+  const resolved =
+    (icon && icon.trim()) ||
+    siblings.find((e) => e.icon)?.icon ||
+    suggestIcon(finalName, builtins);
+
+  return { platform: finalName, icon: resolved || undefined };
 }
 
 function looksLikeUrl(s: string): boolean {
