@@ -90,6 +90,7 @@ pub fn apply_reqwest_async(
     Ok(builder.no_proxy().proxy(proxy))
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub fn apply_updater(
     builder: tauri_plugin_updater::UpdaterBuilder,
     p: &NetworkProxy,

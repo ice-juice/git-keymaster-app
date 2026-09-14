@@ -18,14 +18,14 @@ pub mod model;
 pub mod qrscan;
 pub mod net;
 pub mod platform;
-#[cfg(desktop)]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod single_instance;
 pub mod ssh;
 pub mod store;
 pub mod sync;
 pub mod sys;
 pub mod totp;
-#[cfg(desktop)]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod tray;
 pub mod update;
 pub mod util;
@@ -33,10 +33,10 @@ pub mod vault;
 pub mod workspace_path;
 
 use commands::AppState;
-#[cfg(desktop)]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::Ordering;
 use tauri::Manager;
-#[cfg(desktop)]
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use tauri::Emitter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -44,7 +44,7 @@ pub fn run() {
     // 这些迁移都在动本机 `~/.ssh` 与启动脚本，移动端没有对应物。
     // 注意：`migrate_app_data` 依赖本机配置根目录，移动端要等沙箱路径注入后
     // 才能跑，所以它挪到了 `setup()` 里。
-    #[cfg(desktop)]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         // 从访达 / 开始菜单启动时 PATH 往往没有 Homebrew、Git for Windows。
         crate::sys::augment_search_path();
@@ -62,7 +62,7 @@ pub fn run() {
 
     // 单实例检测：若已有同款程序在运行，弹窗询问是否通知旧实例锁定保险库后退出。
     // 桌面平台在创建窗口前完成，取消时直接退出、不会闪现界面。
-    #[cfg(desktop)]
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let single_instance::Decision::Exit = single_instance::check() {
         std::process::exit(0);
     }
@@ -77,7 +77,9 @@ pub fn run() {
         .plugin(biometric::init());
 
     // 应用内自更新只有桌面端有意义；移动端交给应用商店。
-    #[cfg(desktop)]
+    // 必须用 target_os，不能用 Tauri 的 `desktop`：交叉编译到 Android 时
+    // 宿主编译器仍可能带上 desktop，但 tauri-plugin-updater 不会进依赖。
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
     }
@@ -243,7 +245,7 @@ pub fn run() {
             // 桌面端在 `run()` 开头已经迁移过，这里只负责注册状态。
             app.manage(AppState::new());
 
-            #[cfg(desktop)]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 tray::install(app.handle())?;
                 let handle = app.handle().clone();
@@ -263,7 +265,7 @@ pub fn run() {
             {
                 let _ = (window, event);
             }
-            #[cfg(desktop)]
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 if window.label() != "main" {
                     return;
@@ -295,7 +297,7 @@ pub fn run() {
         .run(|_app, event| {
             // 应用退出时释放单实例锁（各退出路径最终都会触发 Exit）
             if let tauri::RunEvent::Exit = event {
-                #[cfg(desktop)]
+                #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 crate::single_instance::release_lock();
             }
         });
