@@ -5,25 +5,11 @@ use crate::error::{AppError, Result};
 use crate::net;
 use crate::platform;
 use crate::update::source::{self, github_tag_json_url};
+use crate::update::UpdateCheckResult;
 use semver::Version;
-use serde::Serialize;
 use tauri::AppHandle;
 use tauri_plugin_updater::{Updater, UpdaterExt};
 use url::Url;
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UpdateCheckResult {
-    pub available: bool,
-    pub current_version: String,
-    pub latest_version: Option<String>,
-    pub notes: Option<String>,
-    pub pub_date: Option<String>,
-    pub source: UpdateSource,
-    pub download_url: Option<String>,
-    pub platform: String,
-    pub self_update_supported: bool,
-}
 
 pub async fn check(
     app: &AppHandle,
