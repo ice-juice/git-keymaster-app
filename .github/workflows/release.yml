@@ -382,7 +382,7 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
           NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
-        run: npx tauri android build --apk --target aarch64
+        run: npx tauri android build --apk --target aarch64 --split-per-abi
 
       - name: Stamp locale on Android APK name
         run: node scripts/rename-release-assets.mjs --android ${{ matrix.lang == 'en' && 'en-US' || 'zh-CN' }}

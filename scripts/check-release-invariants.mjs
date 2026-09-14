@@ -161,6 +161,13 @@ function checkRenameStem() {
   if (!src.includes("androidApkFilename") || !src.includes("arm64-v8a")) {
     fail("rename-release-assets.mjs 必须能把安卓 APK 改成 Git.Keymaster_{版本}_arm64-v8a_{locale}.apk");
   }
+  if (!src.includes("findSignedReleaseApk") || !src.includes("app-universal-release.apk")) {
+    fail("rename-release-assets.mjs 必须能识别 universal 和 arm64 两种正式 APK");
+  }
+  const yml = read(".github/workflows/release.yml");
+  if (!yml.includes("tauri android build --apk --target aarch64 --split-per-abi")) {
+    fail("安卓正式包必须加 --split-per-abi，否则产出的是 universal APK，改名会找不到文件");
+  }
 }
 
 function checkAndroidSigningSource() {

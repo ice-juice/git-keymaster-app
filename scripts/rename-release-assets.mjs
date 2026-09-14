@@ -5,6 +5,7 @@
  *   node scripts/rename-release-assets.mjs --android zh-CN|en-US
  */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { INSTALLER_STEM as BRAND } from "./brand.mjs";
 
@@ -40,6 +41,52 @@ export function androidApkFilename(version, locale) {
     throw new Error(`invalid android version: ${version}`);
   }
   return `${BRAND}_${version}_arm64-v8a_${locale}.apk`;
+}
+
+export function androidApkOutputRoot(cwd = process.cwd()) {
+  return path.join(cwd, "app", "src-tauri", "gen", "android", "app", "build", "outputs", "apk");
+}
+
+function listApkFiles(dir) {
+  if (!fs.existsSync(dir)) {
+    return [];
+  }
+  const found = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      found.push(...listApkFiles(full));
+    } else if (entry.isFile() && entry.name.endsWith(".apk")) {
+      found.push(full);
+    }
+  }
+  return found;
+}
+
+/** 没加 --split-per-abi 时 Tauri 打的是 universal；加了才是 arm64。 */
+export function findSignedReleaseApk(apkRoot) {
+  const preferred = [
+    path.join(apkRoot, "arm64", "release", "app-arm64-release.apk"),
+    path.join(apkRoot, "universal", "release", "app-universal-release.apk"),
+  ];
+  for (const candidate of preferred) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  const fallback = listApkFiles(apkRoot).filter((file) => {
+    const name = path.basename(file);
+    return name.includes("release") && !name.includes("unsigned") && name.endsWith(".apk");
+  });
+  if (fallback.length === 1) {
+    return fallback[0];
+  }
+  const listing = listApkFiles(apkRoot).map((file) => path.relative(apkRoot, file));
+  throw new Error(
+    `missing signed APK under ${apkRoot} (looked for app-arm64-release.apk / app-universal-release.apk); found: ${
+      listing.length ? listing.join(", ") : "(none)"
+    }`,
+  );
 }
 
 export function stampLocaleFilename(name, locale) {
@@ -193,6 +240,18 @@ function runSelfTest() {
       throw new Error(`android apk ${version} / ${locale} => ${got}, expected ${expected}`);
     }
   }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gkm-apk-"));
+  try {
+    const uni = path.join(tmp, "universal", "release");
+    fs.mkdirSync(uni, { recursive: true });
+    fs.writeFileSync(path.join(uni, "app-universal-release.apk"), "apk");
+    const found = findSignedReleaseApk(tmp);
+    if (path.basename(found) !== "app-universal-release.apk") {
+      throw new Error(`findSignedReleaseApk should pick universal APK, got ${found}`);
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
   for (const [input, locale, expected] of cases) {
     const got = stampLocaleFilename(input, locale);
     if (got !== expected) {
@@ -226,32 +285,19 @@ function runSelfTest() {
 function renameAndroidApk(locale) {
   const cwd = process.cwd();
   const version = JSON.parse(fs.readFileSync(path.join(cwd, "app", "src-tauri", "tauri.conf.json"), "utf8")).version;
-  const dir = path.join(
-    cwd,
-    "app",
-    "src-tauri",
-    "gen",
-    "android",
-    "app",
-    "build",
-    "outputs",
-    "apk",
-    "arm64",
-    "release",
-  );
-  const src = path.join(dir, "app-arm64-release.apk");
-  if (!fs.existsSync(src)) {
-    throw new Error(`missing signed APK: ${src}`);
-  }
+  const apkRoot = androidApkOutputRoot(cwd);
+  const src = findSignedReleaseApk(apkRoot);
+  const destDir = path.join(apkRoot, "arm64", "release");
+  fs.mkdirSync(destDir, { recursive: true });
   const destName = androidApkFilename(version, locale);
-  const dest = path.join(dir, destName);
+  const dest = path.join(destDir, destName);
   if (fs.existsSync(dest) && dest !== src) {
     fs.unlinkSync(dest);
   }
   fs.copyFileSync(src, dest);
-  const mapping = [["app-arm64-release.apk", destName]];
+  const mapping = [[path.basename(src), destName]];
   fs.writeFileSync(path.join(cwd, "renamed-release-assets.json"), JSON.stringify(mapping, null, 2), "utf-8");
-  console.log(`[rename] app-arm64-release.apk -> ${destName}`);
+  console.log(`[rename] ${path.relative(apkRoot, src)} -> arm64/release/${destName}`);
   return dest;
 }
 
