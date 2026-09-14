@@ -6,6 +6,7 @@ pub mod agent;
 pub mod assets;
 pub mod biometric;
 pub mod proxy;
+pub mod qr;
 pub mod repo;
 pub mod secrets_ui;
 pub mod security;

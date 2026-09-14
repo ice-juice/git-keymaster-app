@@ -72,14 +72,19 @@ pub fn import_from_image(bytes: &[u8]) -> Result<ParsedOtpauth> {
     parse_otpauth(&uris[0])
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(mobile)]
+pub fn scan_screen() -> Result<Vec<ScreenHit>> {
+    Err(AppError::Unsupported("屏幕扫码"))
+}
+
+#[cfg(all(desktop, target_os = "linux"))]
 pub fn scan_screen() -> Result<Vec<ScreenHit>> {
     Err(AppError::Other(
         "当前 Linux 安装包未包含屏幕扫码（系统截屏库与 Ubuntu 22.04 不兼容）。请改用图片或 otpauth URI 导入。".into(),
     ))
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(all(desktop, not(target_os = "linux")))]
 pub fn scan_screen() -> Result<Vec<ScreenHit>> {
     let monitors = xcap::Monitor::all().map_err(|e| AppError::Other(format!("截屏失败：{e}")))?;
     let mut hits = Vec::new();
@@ -112,7 +117,11 @@ pub fn scan_screen() -> Result<Vec<ScreenHit>> {
 }
 
 pub fn render_otpauth_png_b64(uri: &str) -> Result<String> {
-    let code = qrcode::QrCode::new(uri.as_bytes())
+    render_qr_png_b64(uri)
+}
+
+pub fn render_qr_png_b64(payload: &str) -> Result<String> {
+    let code = qrcode::QrCode::new(payload.as_bytes())
         .map_err(|_| AppError::Invalid("无法生成二维码（内容过长或非法）".into()))?;
     let img = code
         .render::<image::Luma<u8>>()
