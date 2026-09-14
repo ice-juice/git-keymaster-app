@@ -41,6 +41,14 @@ pub struct InitResult {
 
 pub use crate::workspace_path::PathCheck;
 
+#[cfg(mobile)]
+fn discover_existing_workspace() -> Option<PathBuf> {
+    crate::identity::workspace_search_roots()
+        .into_iter()
+        .map(|root| root.join("workspace"))
+        .find(|p| Vault::exists(p))
+}
+
 /// 查询当前状态（前端启动时首先调用）。
 #[tauri::command]
 pub fn vault_status(state: State<AppState>) -> VaultStatus {
@@ -78,6 +86,18 @@ pub fn vault_status(state: State<AppState>) -> VaultStatus {
             .load(std::sync::atomic::Ordering::SeqCst),
         startup_note: state.startup_note.lock().ok().and_then(|n| n.clone()),
     }
+}
+
+/// 移动端固定保险库目录；已有库时优先返回实际路径。桌面端也返回同一约定（前端只在手机上用）。
+#[tauri::command]
+pub fn default_workspace_path() -> String {
+    #[cfg(mobile)]
+    if let Some(found) = discover_existing_workspace() {
+        return found.to_string_lossy().into_owned();
+    }
+    crate::identity::workspace_dir()
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// 检测工作空间路径：非法字符拒绝；空格 / 非 ASCII / 同步盘只警告。

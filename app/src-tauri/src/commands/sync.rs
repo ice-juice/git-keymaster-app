@@ -205,6 +205,14 @@ pub fn import_s3_config(src_path: String) -> Result<S3Config> {
     Ok(cfg)
 }
 
+/// 手机端系统选文件给的是内容 URI，`std::fs` 读不到；由前端读成文本再解析。
+#[tauri::command]
+pub fn import_s3_config_text(raw: String) -> Result<S3Config> {
+    let cfg = crate::sync::s3::parse_s3_config_file(&raw)?;
+    validate_s3_config(&cfg)?;
+    Ok(cfg)
+}
+
 #[tauri::command]
 pub fn test_cloud_sync_config(state: State<AppState>, sync_config: S3Config) -> Result<u128> {
     let proxy = {

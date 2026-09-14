@@ -79,6 +79,27 @@ pub fn app_config_dir() -> PathBuf {
     config_base_dir().join(APP_DIR)
 }
 
+/// 移动端保险库固定目录：`<配置根>/workspace`。
+pub fn workspace_dir() -> PathBuf {
+    config_base_dir().join("workspace")
+}
+
+/// 冷启动时要扫的配置根。Android 上 JS `appDataDir()` 有时是包根，
+/// Rust `app_data_dir()` 则是 `files/`，两边都可能已经落下 vault。
+pub fn workspace_search_roots_from(base: PathBuf) -> Vec<PathBuf> {
+    let mut roots = vec![base.clone()];
+    if let Some(parent) = base.parent() {
+        if parent != base.as_path() {
+            roots.push(parent.to_path_buf());
+        }
+    }
+    roots
+}
+
+pub fn workspace_search_roots() -> Vec<PathBuf> {
+    workspace_search_roots_from(config_base_dir())
+}
+
 pub fn legacy_app_config_dir() -> PathBuf {
     config_base_dir().join(LEGACY_APP_DIR)
 }
