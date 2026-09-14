@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
+  Languages,
   Palette,
   ShieldCheck,
   FolderKanban,
@@ -22,14 +24,18 @@ import { UNLOCK_ANIM_STYLES } from "../lib/prefs";
 import { writeClipboard } from "../lib/clipboard";
 import { Badge, Card, ErrorDialog, FieldLabel } from "../ui/common";
 import {
-  AboutUpdateCard,
   FactoryResetPanel,
   GithubPatSettings,
   SecurityChecklistCard,
 } from "./Settings.shared";
+import { LanguageChoiceRow } from "../ui/LanguageCard";
+import { MobileAboutUpdateCard } from "./MobileAboutUpdateCard";
+import { useAppName } from "../lib/config";
+import { useLocale } from "../lib/locale";
 
 type SubSection =
   | "theme"
+  | "language"
   | "animation"
   | "checklist"
   | "password"
@@ -43,11 +49,14 @@ type SubSection =
   | null;
 
 export function SettingsMobile() {
+  const { t } = useTranslation();
+  const APP_NAME = useAppName();
+  const { uiLocale } = useLocale();
   const m = useSettingsModel();
   const [subSection, setSubSection] = useState<SubSection>(null);
 
-  // 辅助获取当前主题名称
-  const currentThemeName = THEME_OPTIONS.find((t) => t.id === m.theme)?.name ?? "默认";
+  const currentThemeName = t(`theme.options.${m.theme}.name`);
+  const localeLabel = t(`settings.language.${uiLocale}`);
 
   // 渲染二级子页面
   if (subSection !== null) {
@@ -67,26 +76,22 @@ export function SettingsMobile() {
             }}
           >
             <ChevronLeft size={16} />
-            <span>设置</span>
+            <span>{t("settings.title")}</span>
           </button>
           <div className="m-subpage-title">
-            {subSection === "theme" && "界面主题与色彩"}
-            {subSection === "animation" && "解锁开门动画"}
-            {subSection === "checklist" && "安全健康自查"}
-            {subSection === "password" && "修改主访问密码"}
-            {subSection === "biometric" && "解锁方式"}
-            {subSection === "timeout" && "时效与剪贴板保护"}
-            {subSection === "recovery" && "灾难恢复密钥"}
-            {subSection === "workspace" && "工作空间存储信息"}
-            {subSection === "pat" && "GitHub 个人访问令牌"}
-            {subSection === "about" && "关于与检查更新"}
-            {subSection === "danger" && "高危操作 · 出厂清空"}
+            {subSection && t(`settings.sub.${subSection}`)}
           </div>
         </div>
 
         {/* 1. 主题与外观 */}
+        {subSection === "language" && (
+          <Card title={t("settings.language.title")}>
+            <LanguageChoiceRow />
+          </Card>
+        )}
+
         {subSection === "theme" && (
-          <Card title="选择配色风格">
+          <Card title={t("settings.pickTheme")}>
             <div className="stack">
               <div className="choice-row">
                 {THEME_OPTIONS.map((opt) => {
@@ -100,7 +105,7 @@ export function SettingsMobile() {
                       onClick={() => m.setTheme(opt.id)}
                     >
                       <div className="row" style={{ justifyContent: "space-between", marginBottom: 4 }}>
-                        <strong style={{ fontSize: 14 }}>{opt.name}</strong>
+                        <strong style={{ fontSize: 14 }}>{t(`theme.options.${opt.id}.name`)}</strong>
                         <span
                           style={{
                             display: "inline-block",
@@ -112,7 +117,7 @@ export function SettingsMobile() {
                           }}
                         />
                       </div>
-                      <div className="muted sm">{opt.desc}</div>
+                      <div className="muted sm">{t(`theme.options.${opt.id}.desc`)}</div>
                     </button>
                   );
                 })}
@@ -523,7 +528,7 @@ export function SettingsMobile() {
         )}
 
         {/* 10. 关于与更新 */}
-        {subSection === "about" && <AboutUpdateCard />}
+        {subSection === "about" && <MobileAboutUpdateCard />}
 
         {/* 11. 出厂还原 */}
         {subSection === "danger" && (
@@ -555,15 +560,28 @@ export function SettingsMobile() {
           <ShieldCheck size={28} style={{ color: "#ffffff" }} />
         </div>
         <div className="m-settings-app-info">
-          <div className="m-settings-app-name">御钥师 · Git Keymaster</div>
-          <div className="m-settings-app-desc">端到端加密金库与凭据安全中心</div>
+          <div className="m-settings-app-name">{APP_NAME}</div>
+          <div className="m-settings-app-desc">{t("settings.appCardDesc")}</div>
         </div>
-        <Badge kind="ok">已保护</Badge>
+        <Badge kind="ok">{t("settings.protected")}</Badge>
       </div>
 
       {/* 分组 1: 外观与个性化 */}
       <div className="m-settings-group">
-        <div className="m-settings-group-header">外观与偏好</div>
+        <div className="m-settings-group-header">{t("settings.groupAppear")}</div>
+
+        <button
+          type="button"
+          className="m-settings-cell"
+          onClick={() => setSubSection("language")}
+        >
+          <div className="m-settings-cell-icon" style={{ background: "rgba(14, 165, 233, 0.12)", color: "#0ea5e9" }}>
+            <Languages size={16} />
+          </div>
+          <span className="m-settings-cell-title">{t("settings.language.cell")}</span>
+          <span className="m-settings-cell-value">{localeLabel}</span>
+          <ChevronRight size={16} className="m-settings-cell-chevron" />
+        </button>
 
         <button
           type="button"
@@ -573,7 +591,7 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(99, 102, 241, 0.12)", color: "var(--accent)" }}>
             <Palette size={16} />
           </div>
-          <span className="m-settings-cell-title">界面主题与色彩</span>
+          <span className="m-settings-cell-title">{t("settings.themeCell")}</span>
           <span className="m-settings-cell-value">{currentThemeName}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
@@ -586,15 +604,15 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(168, 85, 247, 0.12)", color: "#a855f7" }}>
             <Sparkles size={16} />
           </div>
-          <span className="m-settings-cell-title">解锁开门动画</span>
-          <span className="m-settings-cell-value">{m.unlockAnimEnabled ? "已开启" : "已关闭"}</span>
+          <span className="m-settings-cell-title">{t("settings.animCell")}</span>
+          <span className="m-settings-cell-value">{m.unlockAnimEnabled ? t("common.on") : t("common.off")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
       </div>
 
       {/* 分组 2: 安全与凭据保护 */}
       <div className="m-settings-group">
-        <div className="m-settings-group-header">安全与凭据保护</div>
+        <div className="m-settings-group-header">{t("settings.groupSecurity")}</div>
 
         <button
           type="button"
@@ -604,7 +622,7 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(16, 185, 129, 0.12)", color: "var(--green)" }}>
             <ShieldCheck size={16} />
           </div>
-          <span className="m-settings-cell-title">安全健康自查</span>
+          <span className="m-settings-cell-title">{t("settings.checklistCell")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
 
@@ -616,7 +634,7 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(59, 130, 246, 0.12)", color: "#3b82f6" }}>
             <KeyRound size={16} />
           </div>
-          <span className="m-settings-cell-title">修改主访问密码</span>
+          <span className="m-settings-cell-title">{t("settings.passwordCell")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
 
@@ -628,8 +646,8 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(245, 158, 11, 0.12)", color: "#f59e0b" }}>
             <Fingerprint size={16} />
           </div>
-          <span className="m-settings-cell-title">解锁方式</span>
-          <span className="m-settings-cell-value">{m.bio?.enabled ? "指纹" : "密码"}</span>
+          <span className="m-settings-cell-title">{t("settings.bioCell")}</span>
+          <span className="m-settings-cell-value">{m.bio?.enabled ? t("settings.fingerprint") : t("settings.password")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
 
@@ -641,8 +659,8 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(14, 165, 233, 0.12)", color: "#0ea5e9" }}>
             <Timer size={16} />
           </div>
-          <span className="m-settings-cell-title">时效与剪贴板保护</span>
-          <span className="m-settings-cell-value">{m.clipSec}秒清空</span>
+          <span className="m-settings-cell-title">{t("settings.timeoutCell")}</span>
+          <span className="m-settings-cell-value">{t("settings.clipClearValue", { sec: m.clipSec })}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
 
@@ -654,14 +672,14 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(239, 68, 68, 0.12)", color: "var(--red)" }}>
             <RefreshCw size={16} />
           </div>
-          <span className="m-settings-cell-title">灾难恢复密钥轮换</span>
+          <span className="m-settings-cell-title">{t("settings.recoveryCell")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
       </div>
 
       {/* 分组 3: 工作空间与服务 */}
       <div className="m-settings-group">
-        <div className="m-settings-group-header">工作空间与同步</div>
+        <div className="m-settings-group-header">{t("settings.groupWorkspace")}</div>
 
         <button
           type="button"
@@ -671,7 +689,7 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(107, 114, 128, 0.14)", color: "var(--text)" }}>
             <FolderKanban size={16} />
           </div>
-          <span className="m-settings-cell-title">工作空间详情</span>
+          <span className="m-settings-cell-title">{t("settings.workspaceCell")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
 
@@ -683,7 +701,7 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(99, 102, 241, 0.12)", color: "var(--accent)" }}>
             <Info size={16} />
           </div>
-          <span className="m-settings-cell-title">GitHub 个人访问令牌 (PAT)</span>
+          <span className="m-settings-cell-title">{t("settings.patCell")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
 
@@ -695,14 +713,14 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(16, 185, 129, 0.12)", color: "var(--green)" }}>
             <Cloud size={16} />
           </div>
-          <span className="m-settings-cell-title">云端同步与备份管理</span>
+          <span className="m-settings-cell-title">{t("settings.syncCell")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
       </div>
 
       {/* 分组 4: 软件关于 */}
       <div className="m-settings-group">
-        <div className="m-settings-group-header">关于软件</div>
+        <div className="m-settings-group-header">{t("settings.groupAbout")}</div>
 
         <button
           type="button"
@@ -712,14 +730,14 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(59, 130, 246, 0.12)", color: "#3b82f6" }}>
             <Rocket size={16} />
           </div>
-          <span className="m-settings-cell-title">关于与检查更新</span>
+          <span className="m-settings-cell-title">{t("settings.aboutCell")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
       </div>
 
       {/* 分组 5: 高危操作 */}
       <div className="m-settings-group">
-        <div className="m-settings-group-header">危险区域</div>
+        <div className="m-settings-group-header">{t("settings.groupDanger")}</div>
 
         <button
           type="button"
@@ -729,7 +747,7 @@ export function SettingsMobile() {
           <div className="m-settings-cell-icon" style={{ background: "rgba(239, 68, 68, 0.12)", color: "var(--red)" }}>
             <AlertTriangle size={16} />
           </div>
-          <span className="m-settings-cell-title">出厂清空还原</span>
+          <span className="m-settings-cell-title">{t("settings.dangerCell")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
       </div>

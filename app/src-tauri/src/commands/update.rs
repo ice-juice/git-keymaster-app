@@ -3,12 +3,10 @@
 use crate::app_config::UpdateSource;
 use crate::commands::{recover_lock, AppState};
 use crate::error::{AppError, Result};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use crate::platform;
 use crate::update::{self, UpdateCheckResult};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use serde_json::json;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, State};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -46,36 +44,28 @@ pub fn set_auto_check_update(state: State<AppState>, enabled: bool) -> Result<()
 
 #[tauri::command]
 pub async fn check_update(app: AppHandle, state: State<'_, AppState>) -> Result<UpdateCheckResult> {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        let _ = (app, state);
-        return Err(AppError::Unsupported("应用内更新"));
-    }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        let (src, proxy) = {
-            let cfg = recover_lock(&state.config);
-            (
-                update::source::effective_source(&cfg),
-                crate::net::effective(&cfg),
-            )
-        };
-        let result = update::checker::check(&app, &src, proxy.as_ref()).await?;
-        persist_last_check(&state);
-        Ok(result)
-    }
+    let (src, proxy) = {
+        let cfg = recover_lock(&state.config);
+        (
+            update::source::effective_source(&cfg),
+            crate::net::effective(&cfg),
+        )
+    };
+    let result = update::run_check(&app, &src, proxy.as_ref()).await?;
+    persist_last_check(&state);
+    Ok(result)
 }
 
 #[tauri::command]
 pub async fn download_and_install_update(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
-    #[cfg(any(target_os = "android", target_os = "ios"))]
+    #[cfg(target_os = "ios")]
     {
         let _ = (app, state);
-        return Err(AppError::Unsupported("应用内更新"));
+        return Err(AppError::Unsupported("请到 App Store 更新"));
     }
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(not(target_os = "ios"))]
     {
-        if !platform::self_update_supported() {
+        if !platform::self_update_supported() && !platform::sideload_update_supported() {
             return Err(AppError::Invalid(
                 "当前安装方式不支持应用内更新，请使用手动下载".into(),
             ));
@@ -156,7 +146,18 @@ async fn install_inner(app: &AppHandle, state: &AppState) -> Result<()> {
     app.restart();
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(target_os = "android")]
+async fn install_inner(app: &AppHandle, state: &AppState) -> Result<()> {
+    let (src, proxy) = {
+        let cfg = recover_lock(&state.config);
+        (
+            update::source::effective_source(&cfg),
+            crate::net::effective(&cfg),
+        )
+    };
+    crate::mobile::update::download_and_install(app, &src, proxy.as_ref()).await
+}
+
 fn persist_last_check(state: &AppState) {
     if let Ok(mut cfg) = state.config.lock() {
         cfg.last_update_check_at = Some(iso_now());
@@ -164,7 +165,6 @@ fn persist_last_check(state: &AppState) {
     }
 }
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn iso_now() -> String {
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)

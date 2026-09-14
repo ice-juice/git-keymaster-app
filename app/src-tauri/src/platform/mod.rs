@@ -82,7 +82,7 @@ pub fn updater_platform_key() -> String {
     format!("{}-{}", updater_target(), updater_arch())
 }
 
-/// 是否支持应用内整包自更新。Linux 仅 AppImage 可用；移动端一律交给应用商店。
+/// 官方 updater 插件整包替换：仅桌面。Linux 仅 AppImage。移动端永远 false。
 pub fn self_update_supported() -> bool {
     #[cfg(mobile)]
     {
@@ -98,6 +98,16 @@ pub fn self_update_supported() -> bool {
     }
 }
 
+/// GitHub 侧载：下载 APK + 系统安装器。仅正式 Android 包。
+pub fn sideload_update_supported() -> bool {
+    cfg!(target_os = "android")
+}
+
+/// Play / App Store 应用内更新。第一期未接商店，永远 false。
+pub fn store_update_supported() -> bool {
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,9 +120,14 @@ mod tests {
         assert_eq!(self_update_supported(), std::env::var_os("APPIMAGE").is_some());
         #[cfg(target_os = "macos")]
         assert!(self_update_supported());
-        // 移动端必须关掉应用内自更新，否则会给出无效的更新入口。
+        // 官方插件不能装 APK/IPA；安卓侧载走自研安装器。
         #[cfg(mobile)]
         assert!(!self_update_supported());
+        #[cfg(target_os = "android")]
+        assert!(sideload_update_supported());
+        #[cfg(not(target_os = "android"))]
+        assert!(!sideload_update_supported());
+        assert!(!store_update_supported());
     }
 
     #[test]

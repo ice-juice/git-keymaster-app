@@ -1,15 +1,16 @@
 //! 调用插件 check、语义化版本比较、结果映射。
 
-use crate::app_config::{NetworkProxy, UpdateSource, DEFAULT_UPDATE_REPO};
+use crate::app_config::{NetworkProxy, UpdateSource};
 use crate::error::{AppError, Result};
 use crate::net;
 use crate::platform;
-use crate::update::source::{self, github_tag_json_url};
+use crate::update::manifest;
 use crate::update::UpdateCheckResult;
-use semver::Version;
 use tauri::AppHandle;
 use tauri_plugin_updater::{Updater, UpdaterExt};
 use url::Url;
+
+pub use crate::update::manifest::{is_newer, manual_download_url, parse_version};
 
 pub async fn check(
     app: &AppHandle,
@@ -19,6 +20,8 @@ pub async fn check(
     let current_version = app.package_info().version.to_string();
     let platform = platform::updater_platform_key();
     let self_update_supported = platform::self_update_supported();
+    let sideload_update_supported = platform::sideload_update_supported();
+    let store_update_supported = platform::store_update_supported();
     let fallback = manual_download_url(src);
 
     let endpoints = resolve_check_endpoints(src, proxy).await?;
@@ -41,23 +44,29 @@ pub async fn check(
                 download_url: Some(update.download_url.to_string()).or(fallback),
                 platform,
                 self_update_supported,
+                sideload_update_supported,
+                store_update_supported,
             })
         }
-        Ok(None) => Ok(no_update(
+        Ok(None) => Ok(UpdateCheckResult::none(
             current_version,
             src.clone(),
             fallback,
             platform,
             self_update_supported,
+            sideload_update_supported,
+            store_update_supported,
         )),
         Err(e) => {
             if is_absent_release(&e) {
-                Ok(no_update(
+                Ok(UpdateCheckResult::none(
                     current_version,
                     src.clone(),
                     fallback,
                     platform,
                     self_update_supported,
+                    sideload_update_supported,
+                    store_update_supported,
                 ))
             } else {
                 Err(map_updater_err(e))
@@ -86,46 +95,7 @@ pub async fn resolve_check_endpoints(
     src: &UpdateSource,
     proxy: Option<&NetworkProxy>,
 ) -> Result<Vec<Url>> {
-    if src.kind == "github" && src.include_prerelease {
-        let repo = src
-            .repo
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(DEFAULT_UPDATE_REPO);
-        source::validate_github_repo(repo)?;
-        if let Some(tag) = fetch_latest_github_tag(repo, true, proxy).await? {
-            return Ok(vec![github_tag_json_url(repo, &tag)?]);
-        }
-    }
-    source::resolve_endpoints(src)
-}
-
-pub fn is_newer(current: &str, latest: &str) -> bool {
-    match (parse_version(current), parse_version(latest)) {
-        (Some(c), Some(l)) => l > c,
-        _ => false,
-    }
-}
-
-pub fn parse_version(raw: &str) -> Option<Version> {
-    Version::parse(raw.trim().trim_start_matches(['v', 'V'])).ok()
-}
-
-pub fn manual_download_url(src: &UpdateSource) -> Option<String> {
-    match src.kind.as_str() {
-        "github" => {
-            let repo = src
-                .repo
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .unwrap_or(DEFAULT_UPDATE_REPO);
-            Some(format!("https://github.com/{repo}/releases"))
-        }
-        "manifest" => src.manifest_url.clone(),
-        _ => None,
-    }
+    manifest::resolve_check_endpoints(src, proxy).await
 }
 
 pub fn map_updater_err(e: tauri_plugin_updater::Error) -> AppError {
@@ -148,69 +118,6 @@ fn is_absent_release(e: &tauri_plugin_updater::Error) -> bool {
             | tauri_plugin_updater::Error::TargetNotFound(_)
             | tauri_plugin_updater::Error::TargetsNotFound(_)
     )
-}
-
-fn no_update(
-    current_version: String,
-    source: UpdateSource,
-    download_url: Option<String>,
-    platform: String,
-    self_update_supported: bool,
-) -> UpdateCheckResult {
-    UpdateCheckResult {
-        available: false,
-        current_version,
-        latest_version: None,
-        notes: None,
-        pub_date: None,
-        source,
-        download_url,
-        platform,
-        self_update_supported,
-    }
-}
-
-async fn fetch_latest_github_tag(
-    repo: &str,
-    include_prerelease: bool,
-    proxy: Option<&NetworkProxy>,
-) -> Result<Option<String>> {
-    let url = format!("https://api.github.com/repos/{repo}/releases?per_page=15");
-    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(15));
-    if let Some(p) = proxy {
-        builder = net::apply_reqwest_async(builder, p)?;
-    }
-    let client = builder
-        .build()
-        .map_err(|e| AppError::Other(format!("HTTP 客户端构建失败：{e}")))?;
-    let resp = client
-        .get(&url)
-        .header("User-Agent", crate::identity::USER_AGENT)
-        .header("Accept", "application/vnd.github+json")
-        .timeout(std::time::Duration::from_secs(15))
-        .send()
-        .await
-        .map_err(|e| AppError::Other(format!("读取 GitHub Releases 失败：{e}")))?;
-    if !resp.status().is_success() {
-        return Ok(None);
-    }
-    let items: Vec<GitHubRelease> = resp
-        .json()
-        .await
-        .map_err(|e| AppError::Other(format!("解析 GitHub Releases 失败：{e}")))?;
-    Ok(items
-        .into_iter()
-        .find(|r| !r.draft && (include_prerelease || !r.prerelease))
-        .map(|r| r.tag_name))
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct GitHubRelease {
-    tag_name: String,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    prerelease: bool,
 }
 
 #[cfg(test)]
@@ -251,7 +158,8 @@ mod tests {
                 "darwin-x86_64": { "signature": "s", "url": "https://example.com/a.app.tar.gz" },
                 "darwin-aarch64": { "signature": "s", "url": "https://example.com/a.app.tar.gz" },
                 "darwin-universal": { "signature": "s", "url": "https://example.com/a.app.tar.gz" },
-                "linux-x86_64": { "signature": "s", "url": "https://example.com/a.AppImage" }
+                "linux-x86_64": { "signature": "s", "url": "https://example.com/a.AppImage" },
+                "android-aarch64": { "signature": "", "url": "https://example.com/a.apk" }
             }
         });
         let platforms = sample["platforms"].as_object().unwrap();
@@ -261,6 +169,7 @@ mod tests {
             "darwin-x86_64",
             "darwin-aarch64",
             "darwin-universal",
+            "android-aarch64",
         ] {
             assert!(platforms.contains_key(key), "missing {key}");
         }

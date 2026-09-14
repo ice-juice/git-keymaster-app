@@ -593,7 +593,6 @@ pub(crate) fn schedule_after_unlock(app: AppHandle) {
             .unwrap_or(false);
         if still_unlocked {
             end_write_lock(&state, &app);
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
             crate::update::scheduler::kick_after_unlock(app.clone());
         } else {
             state

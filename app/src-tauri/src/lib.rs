@@ -27,6 +27,7 @@ pub mod sys;
 pub mod totp;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod tray;
+pub mod mobile;
 pub mod update;
 pub mod util;
 pub mod vault;
@@ -74,9 +75,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(camera_perm::init())
         .plugin(clipboard::init())
-        .plugin(biometric::init());
+        .plugin(biometric::init())
+        .plugin(mobile::update::init());
 
-    // 应用内自更新只有桌面端有意义；移动端交给应用商店。
+    // 官方 updater 只编进桌面三 OS。安卓侧载走 mobile::update，禁止把插件加进 APK。
     // 必须用 target_os，不能用 Tauri 的 `desktop`：交叉编译到 Android 时
     // 宿主编译器仍可能带上 desktop，但 tauri-plugin-updater 不会进依赖。
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -176,6 +178,8 @@ pub fn run() {
             commands::sync::run_auto_sync_now,
             commands::sync::preview_cloud_restore,
             commands::sync::restore_from_cloud,
+            commands::locale::get_ui_locale,
+            commands::locale::set_ui_locale,
             commands::window::apply_close_choice,
             commands::window::get_close_preference,
             commands::window::clear_close_preference,
@@ -253,9 +257,9 @@ pub fn run() {
                     let state = handle.state::<AppState>();
                     crate::commands::window::quit_app(&handle, &state);
                 });
-                crate::update::scheduler::start(app.handle().clone());
                 commands::agent::bootstrap_git_agent(app.handle());
             }
+            crate::update::scheduler::start(app.handle().clone());
             crate::sync::scheduler::start(app.handle().clone());
             Ok(())
         })
