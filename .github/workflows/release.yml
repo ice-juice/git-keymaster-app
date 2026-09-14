@@ -276,8 +276,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Pin latest.json to Chinese manifest
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/sync-release-assets.mjs --pin-legacy "${GITHUB_REF_NAME}"
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          command -v gh
+          gh release view "${GITHUB_REF_NAME}" --repo ice-juice/git-keymaster-app
+          node scripts/sync-release-assets.mjs --pin-legacy "${GITHUB_REF_NAME}"
 
   build-android:
     name: android (${{ matrix.lang }})

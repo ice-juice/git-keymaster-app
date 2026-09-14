@@ -236,27 +236,49 @@ function syncTag(tag, locale) {
   }
 }
 
+function downloadReleaseFile(tag, name, dir) {
+  const dest = path.join(dir, name);
+  const attempts = [
+    ["release", "download", tag, name, "--repo", REPO, "--dir", dir, "--clobber"],
+    ["release", "download", tag, "--repo", REPO, "--pattern", name, "--dir", dir, "--clobber"],
+  ];
+  for (const args of attempts) {
+    const status = runGh(args, { ignoreFail: true });
+    if (status === 0 && fs.existsSync(dest)) {
+      return dest;
+    }
+  }
+  return null;
+}
+
 function pinLegacyLatest(tag) {
   if (!tag || !/^v\d/.test(tag)) {
     console.error("usage: node scripts/sync-release-assets.mjs --pin-legacy vX.Y.Z");
     process.exit(1);
   }
+  runGh(["release", "view", tag, "--repo", REPO], { ignoreFail: true });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-pin-"));
   try {
     const zhName = latestJsonFilename("zh-CN");
-    const downloaded = runGh(
-      ["release", "download", tag, "--repo", REPO, "--pattern", zhName, "--dir", tmp, "--clobber"],
-      { ignoreFail: true },
-    );
-    const zhPath = path.join(tmp, zhName);
-    if (downloaded !== 0 || !fs.existsSync(zhPath)) {
-      console.error(`[sync] missing ${zhName}, cannot pin latest.json`);
+    let source = downloadReleaseFile(tag, zhName, tmp);
+    if (!source) {
+      const fallback = downloadReleaseFile(tag, "latest.json", tmp);
+      if (fallback) {
+        const text = fs.readFileSync(fallback, "utf8");
+        if (text.includes("_zh-CN") || text.includes("zh-CN")) {
+          source = fallback;
+          console.log(`[sync] ${zhName} missing, pinning from existing latest.json`);
+        }
+      }
+    }
+    if (!source) {
+      console.error(`[sync] missing ${zhName} and no Chinese latest.json fallback`);
       process.exit(1);
     }
     const legacy = path.join(tmp, "latest.json");
-    fs.copyFileSync(zhPath, legacy);
+    fs.copyFileSync(source, legacy);
     runGh(["release", "upload", tag, legacy, "--repo", REPO, "--clobber"], { retries: 4 });
-    console.log(`[sync] pinned latest.json to ${zhName}`);
+    console.log(`[sync] pinned latest.json from ${path.basename(source)}`);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
