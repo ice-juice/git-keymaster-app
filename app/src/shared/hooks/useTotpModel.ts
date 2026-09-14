@@ -206,7 +206,7 @@ export function useTotpModel() {
 
   async function saveEditor() {
     if (!editor) return;
-    if (editor.id && editor.hasSeed !== true && !editor.secret?.trim()) {
+    if (editor.id && editor.hasSeed === false && !editor.secret?.trim()) {
       setErr("这条记录的种子已丢失，请重新填入密钥或 otpauth 链接。");
       return;
     }

@@ -128,7 +128,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                   const isCopiedUser = m.copiedKey === `user-${e.id}`;
                   const isCopiedPw = m.copiedKey === `pw-${e.id}`;
                   const isCopiedTotp = e.totpRef ? m.copiedKey === `totp-${e.totpRef}` : false;
-                  const pwMissing = e.hasPassword !== true;
+                  const pwMissing = e.hasPassword === false;
 
                   return (
                     <div key={e.id} className="account-item">
@@ -764,7 +764,7 @@ function AccountEditor({
 
           <div className="field">
             <FieldLabel
-              name={value.id ? (value.hasPassword !== true ? "重新填入密码（必填）" : "密码（留空则不改）") : "密码"}
+              name={value.id ? (value.hasPassword === false ? "重新填入密码（必填）" : "密码（留空则不改）") : "密码"}
               tip="改密会自动留下旧密码，可在卡片上的时钟入口查看或回滚。"
             />
             <div className={compact ? "stack" : "row"}>
@@ -773,7 +773,7 @@ function AccountEditor({
                 type={showPw ? "text" : "password"}
                 autoComplete="new-password"
                 enterKeyHint="done"
-                placeholder={value.id ? (value.hasPassword !== true ? "请重新填入密码" : "不改请留空") : "登录密码"}
+                placeholder={value.id ? (value.hasPassword === false ? "请重新填入密码" : "不改请留空") : "登录密码"}
                 value={value.password || ""}
                 onChange={(e) => onChange({ ...value, password: e.target.value })}
               />

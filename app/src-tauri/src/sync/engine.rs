@@ -8,7 +8,7 @@
 //!    云端 / 快照 / 比对只存 `%GAM_WORKSPACE%/ssh-keys/...`。换机重写不得原样上传。
 
 use crate::error::{AppError, Result};
-use crate::model::{Secrets, VaultData};
+use crate::model::{AccountData, Secrets, TotpData, VaultData};
 use crate::store;
 use crate::sync::backup::deploy_key_to_workspace;
 use crate::sync::s3::S3Client;
@@ -162,23 +162,22 @@ fn fetch_remote_manifest_with_key(
     Ok(Some(manifest))
 }
 
-fn fetch_remote_vault_data(
-    vault: &Vault,
-    s3: &S3Client,
-    enc_key: &[u8; KEY_LEN],
-) -> Result<Option<VaultData>> {
-    let Some(manifest) = fetch_remote_manifest(vault, s3)? else {
-        return Ok(None);
-    };
-    fetch_remote_vault_data_with(s3, enc_key, &manifest)
-}
-
 fn fetch_remote_vault_data_with(
     s3: &S3Client,
     enc_key: &[u8; KEY_LEN],
     manifest: &SyncManifest,
 ) -> Result<Option<VaultData>> {
-    let Some(entry) = manifest.objects.get("data/identities.json") else {
+    fetch_remote_json(s3, enc_key, manifest, "data/identities.json", "身份数据")
+}
+
+fn fetch_remote_json<T: serde::de::DeserializeOwned>(
+    s3: &S3Client,
+    enc_key: &[u8; KEY_LEN],
+    manifest: &SyncManifest,
+    logical_path: &str,
+    what: &str,
+) -> Result<Option<T>> {
+    let Some(entry) = manifest.objects.get(logical_path) else {
         return Ok(None);
     };
     let Some(raw) = s3.get_object(&format!("obj/{}", entry.object_name))? else {
@@ -186,7 +185,7 @@ fn fetch_remote_vault_data_with(
     };
     let plain = decrypt_payload(enc_key, &raw)?;
     let data = serde_json::from_slice(&plain)
-        .map_err(|e| AppError::Invalid(format!("解析云端身份数据失败: {e}")))?;
+        .map_err(|e| AppError::Invalid(format!("解析云端{what}失败: {e}")))?;
     Ok(Some(data))
 }
 
@@ -590,14 +589,58 @@ pub fn push_to_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
     if data.keys != original_keys || repos_changed {
         store::save_data(vault, &data)?;
     }
-    let secrets = store::load_secrets(vault)?;
+    let mut secrets = store::load_secrets(vault)?;
+    let totp_data = store::load_totp(vault)?;
+    let account_data = store::load_accounts(vault)?;
+    let remote_manifest = fetch_remote_manifest(vault, s3).ok().flatten();
+    if crate::model::secrets_incomplete_for_entries(&secrets, &totp_data, &account_data) {
+        if let Some(manifest) = &remote_manifest {
+            if let Ok(Some(remote_secrets)) =
+                fetch_remote_json::<Secrets>(s3, &enc_key, manifest, "data/secrets.json", "口令数据")
+            {
+                let remote_totp = fetch_remote_json::<TotpData>(
+                    s3,
+                    &enc_key,
+                    manifest,
+                    "data/totp.json",
+                    "TOTP 数据",
+                )
+                .ok()
+                .flatten();
+                let remote_acc = fetch_remote_json::<AccountData>(
+                    s3,
+                    &enc_key,
+                    manifest,
+                    "data/accounts.json",
+                    "账号数据",
+                )
+                .ok()
+                .flatten();
+                secrets = crate::model::merge_secrets_with_meta(
+                    secrets,
+                    &remote_secrets,
+                    Some(&totp_data),
+                    remote_totp.as_ref(),
+                    Some(&account_data),
+                    remote_acc.as_ref(),
+                );
+                if let Err(e) = store::save_secrets(vault, &secrets) {
+                    log::warn!("从云端补回机密后写回本地失败（仍会按补全结果推送）: {e}");
+                } else {
+                    log::warn!("本地密码/种子不完整，已从云端补回后再推送，避免把空机密盖到云端");
+                }
+            }
+        }
+    }
 
     let mut upload_data = data.clone();
-    if let Ok(Some(remote_data)) = fetch_remote_vault_data(vault, s3, &enc_key) {
-        let (repos, deleted_repos) =
-            crate::model::compose_cloud_repos(&upload_data, &remote_data, &machine_id);
-        upload_data.repos = repos;
-        upload_data.deleted_repos = deleted_repos;
+    if let Some(manifest) = &remote_manifest {
+        if let Ok(Some(remote_data)) = fetch_remote_vault_data_with(s3, &enc_key, manifest) {
+            let (repos, deleted_repos) =
+                crate::model::compose_cloud_repos(&upload_data, &remote_data, &machine_id);
+            upload_data.repos = repos;
+            upload_data.deleted_repos = deleted_repos;
+        }
     }
 
     let mut logical_objects: HashMap<String, Vec<u8>> = HashMap::new();
@@ -606,9 +649,7 @@ pub fn push_to_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
     logical_objects.insert("data/identities.json".into(), serde_json::to_vec(&upload_data)?);
     // (2) 机密口令
     logical_objects.insert("data/secrets.json".into(), serde_json::to_vec(&secrets)?);
-    let totp_data = store::load_totp(vault)?;
     logical_objects.insert("data/totp.json".into(), serde_json::to_vec(&totp_data)?);
-    let account_data = store::load_accounts(vault)?;
     logical_objects.insert("data/accounts.json".into(), serde_json::to_vec(&account_data)?);
     for hash in store::list_icon_hashes(vault) {
         if let Ok(bytes) = store::load_icon(vault, &hash) {
@@ -625,7 +666,6 @@ pub fn push_to_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
     }
     // (4) 工作空间 SSH config：只上传可移植形态，绝不上传本机重写后的绝对路径。
     // 换机后本机正本若仍为空，不得用空文件盖掉云端已有 Host。
-    let remote_manifest = fetch_remote_manifest(vault, s3).ok().flatten();
     if let Some(portable) = ssh_text_for_sync(vault) {
         if crate::sys::text_has_host_blocks(&portable) {
             logical_objects.insert("ssh/config".into(), portable.into_bytes());

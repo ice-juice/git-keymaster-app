@@ -21,7 +21,7 @@ import { formatCode, TotpDialogs, TotpFilters } from "./Totp.shared";
 
 function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
   const shown = m.codes[e.id];
-  const seedMissing = e.hasSeed !== true;
+  const seedMissing = e.hasSeed === false;
   const isCopied = m.copiedId === e.id;
 
   return (

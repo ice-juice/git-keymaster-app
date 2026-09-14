@@ -290,7 +290,7 @@ export function useAccountsModel() {
       if (dup && !window.confirm(`已存在 ${platform} / ${username}，仍要保存吗？`)) {
         return;
       }
-      if (editor.id && editor.hasPassword !== true && !editor.password?.trim()) {
+      if (editor.id && editor.hasPassword === false && !editor.password?.trim()) {
         setErr("这条账号的密码已丢失，请重新填入密码。");
         return;
       }

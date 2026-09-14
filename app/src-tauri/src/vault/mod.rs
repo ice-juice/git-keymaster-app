@@ -308,8 +308,28 @@ impl Vault {
     }
 }
 
-/// 原子写：写临时文件后 rename，避免写一半损坏。
-/// Windows 上若目标只读、被短暂锁住或禁止覆盖改名，会清只读、重试，再回退为直接覆盖。
+/// 目标文件被挪走后留下的上一份，供安装更新杀进程后找回。
+pub fn previous_path(path: &Path) -> PathBuf {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("f");
+    path.with_file_name(format!("{name}.prev"))
+}
+
+/// 正本不在、但 `.prev` 还在时，把上一份搬回来。更新安装杀掉进程时可能停在这个窗口。
+pub fn recover_previous_if_missing(path: &Path) {
+    if path.is_file() {
+        return;
+    }
+    let bak = previous_path(path);
+    if !bak.is_file() {
+        return;
+    }
+    if std::fs::rename(&bak, path).is_err() {
+        let _ = std::fs::copy(&bak, path);
+    }
+}
+
+/// 原子写：先写临时文件，再把正本挪到 `.prev`，最后把新文件改名就位。
+/// 绝不先删除正本；安装更新中途杀进程时，至少还能从 `.prev` 找回。
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     let dir = path.parent().ok_or_else(|| AppError::Invalid("无效路径".into()))?;
     std::fs::create_dir_all(dir)
@@ -344,24 +364,54 @@ fn make_writable(path: &Path) {
 }
 
 fn replace_file_with_tmp(path: &Path, tmp: &Path, data: &[u8]) -> std::io::Result<()> {
+    let bak = previous_path(path);
     if path.exists() {
         make_writable(path);
-        for attempt in 0..4 {
-            match std::fs::remove_file(path) {
-                Ok(()) => break,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
-                Err(_) if attempt < 3 => {
-                    std::thread::sleep(std::time::Duration::from_millis(20 * (attempt as u64 + 1)));
-                    make_writable(path);
-                }
-                Err(_) => return std::fs::write(path, data),
-            }
+        if bak.exists() {
+            make_writable(&bak);
+            let _ = std::fs::remove_file(&bak);
+        }
+        if let Err(e) = rename_with_retry(path, &bak) {
+            log::warn!("无法把 {} 挪到上一份副本，改为直接覆盖：{e}", path.display());
+            make_writable(path);
+            std::fs::write(path, data)?;
+            let _ = std::fs::remove_file(tmp);
+            return Ok(());
         }
     }
-    match std::fs::rename(tmp, path) {
-        Ok(()) => Ok(()),
-        Err(_) => std::fs::write(path, data),
+    match rename_with_retry(tmp, path) {
+        Ok(()) => {
+            if bak.exists() {
+                make_writable(&bak);
+                let _ = std::fs::remove_file(&bak);
+            }
+            Ok(())
+        }
+        Err(_) => {
+            if !path.exists() && bak.exists() {
+                let _ = std::fs::rename(&bak, path);
+            }
+            make_writable(path);
+            std::fs::write(path, data)?;
+            let _ = std::fs::remove_file(tmp);
+            Ok(())
+        }
     }
+}
+
+fn rename_with_retry(from: &Path, to: &Path) -> std::io::Result<()> {
+    for attempt in 0..4 {
+        match std::fs::rename(from, to) {
+            Ok(()) => return Ok(()),
+            Err(_) if attempt < 3 => {
+                std::thread::sleep(std::time::Duration::from_millis(20 * (attempt as u64 + 1)));
+                make_writable(from);
+                make_writable(to);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    std::fs::rename(from, to)
 }
 
 fn now_iso8601() -> String {
@@ -398,6 +448,23 @@ mod tests {
         std::fs::set_permissions(&path, perms).unwrap();
         atomic_write(&path, b"newer").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"newer");
+        assert!(!previous_path(&path).exists(), "写成功后不应留下上一份");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn recover_previous_restores_when_primary_missing() {
+        let dir = temp_root();
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secrets.enc");
+        std::fs::write(&path, b"live").unwrap();
+        atomic_write(&path, b"next").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"next");
+
+        std::fs::write(previous_path(&path), b"live").unwrap();
+        std::fs::remove_file(&path).unwrap();
+        recover_previous_if_missing(&path);
+        assert_eq!(std::fs::read(&path).unwrap(), b"live");
         std::fs::remove_dir_all(&dir).ok();
     }
 

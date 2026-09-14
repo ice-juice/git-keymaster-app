@@ -90,7 +90,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
     <div className="totp-list-card">
       {m.filtered.map((e) => {
         const shown = m.codes[e.id];
-        const seedMissing = e.hasSeed !== true;
+        const seedMissing = e.hasSeed === false;
         const isCopied = m.copiedId === e.id;
         return (
           <div key={e.id} className="totp-list-row">
@@ -363,7 +363,7 @@ function TotpCard({
   onDelete: () => void;
   locked: boolean;
 }) {
-  const seedMissing = e.hasSeed !== true;
+  const seedMissing = e.hasSeed === false;
   return (
     <div className="totp-card">
       <div className="totp-card-head">
@@ -596,7 +596,7 @@ function Editor({
         <div className="card-body stack">
           <div className="field">
             <FieldLabel
-              name={value.id ? (value.hasSeed !== true ? "重新填入密钥（必填）" : "更换密钥（可选）") : "密钥"}
+              name={value.id ? (value.hasSeed === false ? "重新填入密钥（必填）" : "更换密钥（可选）") : "密钥"}
               tip="otpauth 链接和 Base32 密钥只需填一种。粘贴后会自动识别：链接会顺带填好平台、账号和算法；密钥则只需再补平台和账号。"
             />
             <textarea

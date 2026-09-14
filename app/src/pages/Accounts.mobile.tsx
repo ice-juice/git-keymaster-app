@@ -23,7 +23,7 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
   const isCopiedUser = m.copiedKey === `user-${e.id}`;
   const isCopiedPw = m.copiedKey === `pw-${e.id}`;
   const isCopiedTotp = e.totpRef ? m.copiedKey === `totp-${e.totpRef}` : false;
-  const pwMissing = e.hasPassword !== true;
+  const pwMissing = e.hasPassword === false;
 
   return (
     <div className="m-account-card">
