@@ -128,6 +128,35 @@ pub fn migrate_app_data() {
     }
 }
 
+/// Android 上 JS `appDataDir()` 有时是包根，Rust `app_data_dir()` 是 `files/`。
+/// 若上层已经有 `git-keymaster/config.json` 而当前配置根还没有，拷过来。
+pub fn adopt_parent_app_config() {
+    let new_dir = app_config_dir();
+    if new_dir.join("config.json").is_file() {
+        return;
+    }
+    let base = config_base_dir();
+    let Some(parent) = base.parent() else {
+        return;
+    };
+    let old_dir = parent.join(APP_DIR);
+    if old_dir == new_dir || !old_dir.join("config.json").is_file() {
+        return;
+    }
+    match copy_dir_recursive(&old_dir, &new_dir) {
+        Ok(()) => log::info!(
+            "已从沙箱上层目录拷贝配置：{} → {}",
+            old_dir.display(),
+            new_dir.display()
+        ),
+        Err(e) => log::warn!(
+            "拷贝沙箱上层配置失败：{} → {}：{e}",
+            old_dir.display(),
+            new_dir.display()
+        ),
+    }
+}
+
 pub fn copy_file_if_missing(src: &Path, dest: &Path) -> bool {
     if dest.exists() || !src.is_file() {
         return false;
@@ -189,6 +218,19 @@ mod tests {
         assert_eq!(std::fs::read_to_string(new.join("keep.json")).unwrap(), "keep");
         assert!(old.join("config.json").is_file());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn workspace_search_includes_base_and_parent() {
+        let base = PathBuf::from("/data/user/0/com.jeck.gitkeymaster/files");
+        let roots = workspace_search_roots_from(base);
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/data/user/0/com.jeck.gitkeymaster/files"),
+                PathBuf::from("/data/user/0/com.jeck.gitkeymaster"),
+            ]
+        );
     }
 
     #[test]
