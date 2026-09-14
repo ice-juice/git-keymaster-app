@@ -65,13 +65,10 @@ pub fn resolve_endpoints_with(src: &UpdateSource, ctx: &EndpointCtx) -> Result<V
     }
 }
 
-/// 当前安装包界面语言对应的更新清单。中英文包不能共用 latest.json，
-/// 否则后上传的语言会盖掉另一边，中文用户会装上英文包。
+/// 统一包装一份 `latest.json`。旧客户端仍拉的 `latest-zh-CN.json` /
+/// `latest-en-US.json` 由发版脚本复制成同一内容的别名，不在这里按语言分叉。
 pub fn updater_manifest_name() -> &'static str {
-    match option_env!("GAM_APP_LANG").unwrap_or("zh") {
-        "en" | "en-US" | "en-us" => "latest-en-US.json",
-        _ => "latest-zh-CN.json",
-    }
+    "latest.json"
 }
 
 pub fn github_latest_json_url(repo: &str) -> Result<Url> {
@@ -156,7 +153,7 @@ mod tests {
         let urls = resolve_endpoints_with(&src, &ctx()).unwrap();
         assert_eq!(
             urls[0].as_str(),
-            "https://github.com/ice-juice/git-keymaster-app/releases/latest/download/latest-zh-CN.json"
+            "https://github.com/ice-juice/git-keymaster-app/releases/latest/download/latest.json"
         );
     }
 
@@ -171,7 +168,7 @@ mod tests {
         let urls = resolve_endpoints_with(&src, &ctx()).unwrap();
         assert_eq!(
             urls[0].as_str(),
-            "https://github.com/acme/mirror/releases/latest/download/latest-zh-CN.json"
+            "https://github.com/acme/mirror/releases/latest/download/latest.json"
         );
     }
 
@@ -246,12 +243,17 @@ mod tests {
     }
 
     #[test]
-    fn compiled_lang_picks_matching_manifest() {
-        let name = updater_manifest_name();
-        assert!(
-            name == "latest-zh-CN.json" || name == "latest-en-US.json",
-            "unexpected manifest {name}"
+    fn unified_package_always_uses_latest_json() {
+        assert_eq!(updater_manifest_name(), "latest.json");
+        assert_eq!(
+            github_latest_json_url(DEFAULT_UPDATE_REPO).unwrap().as_str(),
+            "https://github.com/ice-juice/git-keymaster-app/releases/latest/download/latest.json"
         );
-        assert_ne!(name, "latest.json");
+        assert_eq!(
+            github_tag_json_url(DEFAULT_UPDATE_REPO, "v1.5.1")
+                .unwrap()
+                .as_str(),
+            "https://github.com/ice-juice/git-keymaster-app/releases/download/v1.5.1/latest.json"
+        );
     }
 }

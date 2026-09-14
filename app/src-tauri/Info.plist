@@ -6,6 +6,11 @@
 	<string>御钥师</string>
 	<key>CFBundleName</key>
 	<string>御钥师</string>
+	<key>CFBundleLocalizations</key>
+	<array>
+		<string>zh_CN</string>
+		<string>en</string>
+	</array>
 	<key>NSFaceIDUsageDescription</key>
 	<string>用于解锁工作空间并确认查看验证码或账户密码。</string>
 </dict>

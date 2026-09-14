@@ -1,6 +1,6 @@
 ; Forked from Tauri 2.11.3 installer.nsi.
 ; 安装目录、卸载项身份固定为 ASCII GitKeymaster。
-; 开始菜单 / ARP 显示名仍跟 productName（御钥师 / Git Keymaster）走。
+; 开始菜单 / ARP 显示名跟安装向导 $LANGUAGE 走（简中→御钥师，否则 Git Keymaster）。
 Unicode true
 ManifestDPIAware true
 ; Add in `dpiAwareness` `PerMonitorV2` to manifest for Windows 10 1607+ (note this should not affect lower versions since they should be able to ignore this and pick up `dpiAware` `true` set by `ManifestDPIAware true`)
@@ -68,8 +68,8 @@ ${StrLoc}
 !define WEBVIEW2INSTALLERPATH "{{webview2_installer_path}}"
 !define MINIMUMWEBVIEW2VERSION "{{minimum_webview2_version}}"
 ; 卸载项身份跟安装目录走（ASCII GitKeymaster），不要用显示名。
-; 中文包 productName 是「御钥师」、英文包是 Git Keymaster；若 UNINSTKEY 跟显示名走，
-; 自动更新下到另一种语言后会再写一套卸载项，开始菜单里并排出两个程序。
+; DisplayName / 开始菜单跟 $LANGUAGE 走；若 UNINSTKEY 跟显示名走，
+; 向导改语言或自动更新后会再写一套卸载项，开始菜单里并排出两个程序。
 !define INSTALLIDENTITY "GitKeymaster"
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLIDENTITY}"
 !define MANUKEY "Software\${MANUFACTURER}"
@@ -110,6 +110,7 @@ Var UpdateMode
 Var NoShortcutMode
 Var WixMode
 Var OldMainBinaryName
+Var ShellDisplayName
 
 Name "${PRODUCTNAME}"
 BrandingText "${COPYRIGHT}"
@@ -239,7 +240,11 @@ Function PageReinstall
  IntOp $0 $0 + 1
  ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "DisplayName"
  ReadRegStr $R1 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "Publisher"
- StrCmp "$R0$R1" "${PRODUCTNAME}${MANUFACTURER}" 0 wix_loop
+ StrCmp "$R0$R1" "${LEGACY_DISPLAY_ZH}${MANUFACTURER}" 0 wix_try_en
+ Goto wix_matched
+ wix_try_en:
+ StrCmp "$R0$R1" "${LEGACY_DISPLAY_EN}${MANUFACTURER}" 0 wix_loop
+ wix_matched:
  ReadRegStr $R0 HKLM "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\$1" "UninstallString"
  ${StrCase} $R1 $R0 "L"
  ${StrLoc} $R0 $R1 "msiexec" ">"
@@ -540,8 +545,17 @@ Function .onInit
  ${EndIf}
 
  !if "${DISPLAYLANGUAGESELECTOR}" == "true"
+ ${If} $PassiveMode = 0
+ ${AndIf} $UpdateMode = 0
  !insertmacro MUI_LANGDLL_DISPLAY
+ ${Else}
+ ReadRegStr $0 HKCU "${MANUPRODUCTKEY}" "Installer Language"
+ ${If} $0 != ""
+   StrCpy $LANGUAGE $0
+ ${EndIf}
+ ${EndIf}
  !endif
+ Call ResolveShellDisplayName
 
  !insertmacro SetContext
 
@@ -752,7 +766,8 @@ Section Install
  WriteRegStr SHCTX "${UNINSTKEY}" "MainBinaryName" "${MAINBINARYNAME}.exe"
 
  ; Registry information for add/remove programs
- WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "${PRODUCTNAME}"
+ WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "$ShellDisplayName"
+ WriteRegStr HKCU "${MANUPRODUCTKEY}" "Installer Language" $LANGUAGE
  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayIcon" "$\"$INSTDIR\${MAINBINARYNAME}.exe$\""
  WriteRegStr SHCTX "${UNINSTKEY}" "DisplayVersion" "${VERSION}"
  WriteRegStr SHCTX "${UNINSTKEY}" "Publisher" "${MANUFACTURER}"
@@ -823,6 +838,7 @@ Function un.onInit
  !endif
 
  !insertmacro MUI_UNGETLANGUAGE
+ Call un.ResolveShellDisplayName
 
  ${GetOptions} $CMDLINE "/P" $PassiveMode
  ${IfNot} ${Errors}
@@ -884,29 +900,20 @@ Section Uninstall
  ${If} $UpdateMode <> 1
  !insertmacro DeleteAppUserModelId
 
- ; Remove start menu shortcut
+ ; Remove start menu shortcut（当前安装期显示名 + 旧中英文名）
  !insertmacro MUI_STARTMENU_GETFOLDER Application $AppStartMenuFolder
- !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
- Pop $0
- ${If} $0 = 1
- !insertmacro UnpinShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
- Delete "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
+ !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\$AppStartMenuFolder\$ShellDisplayName.lnk"
+ !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\$AppStartMenuFolder\${LEGACY_DISPLAY_ZH}.lnk"
+ !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\$AppStartMenuFolder\${LEGACY_DISPLAY_EN}.lnk"
  RMDir "$SMPROGRAMS\$AppStartMenuFolder"
- ${EndIf}
- !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
- Pop $0
- ${If} $0 = 1
- !insertmacro UnpinShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk"
- Delete "$SMPROGRAMS\${PRODUCTNAME}.lnk"
- ${EndIf}
+ !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\$ShellDisplayName.lnk"
+ !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\${LEGACY_DISPLAY_ZH}.lnk"
+ !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\${LEGACY_DISPLAY_EN}.lnk"
 
  ; Remove desktop shortcuts
- !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
- Pop $0
- ${If} $0 = 1
- !insertmacro UnpinShortcut "$DESKTOP\${PRODUCTNAME}.lnk"
- Delete "$DESKTOP\${PRODUCTNAME}.lnk"
- ${EndIf}
+ !insertmacro RemoveShortcutIfOurs "$DESKTOP\$ShellDisplayName.lnk"
+ !insertmacro RemoveShortcutIfOurs "$DESKTOP\${LEGACY_DISPLAY_ZH}.lnk"
+ !insertmacro RemoveShortcutIfOurs "$DESKTOP\${LEGACY_DISPLAY_EN}.lnk"
  ${EndIf}
 
  ; Remove registry information for add/remove programs
@@ -999,6 +1006,25 @@ Function RestorePreviousInstallLocation
  !insertmacro PreferExistingAppDir "$PROGRAMFILES\Git.Keymaster"
 FunctionEnd
 
+!macro ResolveShellDisplayNameImpl
+  ${If} $LANGUAGE = ${LANG_SIMPCHINESE}
+    StrCpy $ShellDisplayName "${LEGACY_DISPLAY_ZH}"
+  ${Else}
+    StrCpy $ShellDisplayName "${LEGACY_DISPLAY_EN}"
+  ${EndIf}
+  ${If} $ShellDisplayName == ""
+    StrCpy $ShellDisplayName "${PRODUCTNAME}"
+  ${EndIf}
+!macroend
+
+Function ResolveShellDisplayName
+  !insertmacro ResolveShellDisplayNameImpl
+FunctionEnd
+
+Function un.ResolveShellDisplayName
+  !insertmacro ResolveShellDisplayNameImpl
+FunctionEnd
+
 Function Skip
  Abort
 FunctionEnd
@@ -1012,7 +1038,7 @@ FunctionEnd
 
 Function RemoveCrossLanguageShortcuts
   ; 另一种语言留下的快捷方式会让开始菜单并排出两个名字。
-  ${If} "${PRODUCTNAME}" == "${LEGACY_DISPLAY_EN}"
+  ${If} $ShellDisplayName == "${LEGACY_DISPLAY_EN}"
     !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\${LEGACY_DISPLAY_ZH}.lnk"
     !insertmacro RemoveShortcutIfOurs "$DESKTOP\${LEGACY_DISPLAY_ZH}.lnk"
     !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\${LEGACY_DISPLAY_ZH}\${LEGACY_DISPLAY_ZH}.lnk"
@@ -1030,17 +1056,17 @@ Function CreateOrUpdateStartMenuShortcut
  ; migrate old shortcuts to target the new MAINBINARYNAME
  StrCpy $R0 0
 
- !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+ !insertmacro IsShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\$ShellDisplayName.lnk" "$INSTDIR\$OldMainBinaryName"
  Pop $0
  ${If} $0 = 1
- !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+ !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\$ShellDisplayName.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
  StrCpy $R0 1
  ${EndIf}
 
- !insertmacro IsShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+ !insertmacro IsShortcutTarget "$SMPROGRAMS\$ShellDisplayName.lnk" "$INSTDIR\$OldMainBinaryName"
  Pop $0
  ${If} $0 = 1
- !insertmacro SetShortcutTarget "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+ !insertmacro SetShortcutTarget "$SMPROGRAMS\$ShellDisplayName.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
  StrCpy $R0 1
  ${EndIf}
 
@@ -1048,44 +1074,69 @@ Function CreateOrUpdateStartMenuShortcut
  Return
  ${EndIf}
 
- ; Skip creating shortcut if in update mode or no shortcut mode
- ; but always create if migrating from wix
- ${If} $WixMode = 0
- ${If} $UpdateMode = 1
- ${OrIf} $NoShortcutMode = 1
+ ; 交互安装或 WiX 迁移：按当前安装期显示名写开始菜单。
+ ; /UPDATE：若已有任一语言的快捷方式，按当前语言重写，避免并排两个名字。
+ ${If} $NoShortcutMode = 1
+ ${AndIf} $WixMode = 0
  Return
  ${EndIf}
+
+ ${If} $UpdateMode = 1
+ ${AndIf} $WixMode = 0
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\$ShellDisplayName.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $0
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\${LEGACY_DISPLAY_ZH}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $1
+  !insertmacro IsShortcutTarget "$SMPROGRAMS\${LEGACY_DISPLAY_EN}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $2
+  ${If} $0 <> 1
+  ${AndIf} $1 <> 1
+  ${AndIf} $2 <> 1
+    Return
+  ${EndIf}
  ${EndIf}
 
  !if "${STARTMENUFOLDER}" != ""
  CreateDirectory "$SMPROGRAMS\$AppStartMenuFolder"
- CreateShortcut "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
- !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
+ CreateShortcut "$SMPROGRAMS\$AppStartMenuFolder\$ShellDisplayName.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+ !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\$AppStartMenuFolder\$ShellDisplayName.lnk"
  !else
- CreateShortcut "$SMPROGRAMS\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
- !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\${PRODUCTNAME}.lnk"
+ CreateShortcut "$SMPROGRAMS\$ShellDisplayName.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+ !insertmacro SetLnkAppUserModelId "$SMPROGRAMS\$ShellDisplayName.lnk"
  !endif
 FunctionEnd
 
 Function CreateOrUpdateDesktopShortcut
  ; We used to use product name as MAINBINARYNAME
  ; migrate old shortcuts to target the new MAINBINARYNAME
- !insertmacro IsShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\$OldMainBinaryName"
+ !insertmacro IsShortcutTarget "$DESKTOP\$ShellDisplayName.lnk" "$INSTDIR\$OldMainBinaryName"
  Pop $0
  ${If} $0 = 1
- !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+ !insertmacro SetShortcutTarget "$DESKTOP\$ShellDisplayName.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
  Return
  ${EndIf}
 
  ; Skip creating shortcut if in update mode or no shortcut mode
- ; but always create if migrating from wix
+ ; but always create if migrating from wix. /UPDATE 时若已有桌面快捷方式，按当前显示名重写。
  ${If} $WixMode = 0
- ${If} $UpdateMode = 1
- ${OrIf} $NoShortcutMode = 1
+ ${If} $NoShortcutMode = 1
  Return
+ ${EndIf}
+ ${If} $UpdateMode = 1
+  !insertmacro IsShortcutTarget "$DESKTOP\${LEGACY_DISPLAY_ZH}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $0
+  !insertmacro IsShortcutTarget "$DESKTOP\${LEGACY_DISPLAY_EN}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $1
+  !insertmacro IsShortcutTarget "$DESKTOP\$ShellDisplayName.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $2
+  ${If} $0 <> 1
+  ${AndIf} $1 <> 1
+  ${AndIf} $2 <> 1
+    Return
+  ${EndIf}
  ${EndIf}
  ${EndIf}
 
- CreateShortcut "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
- !insertmacro SetLnkAppUserModelId "$DESKTOP\${PRODUCTNAME}.lnk"
+ CreateShortcut "$DESKTOP\$ShellDisplayName.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+ !insertmacro SetLnkAppUserModelId "$DESKTOP\$ShellDisplayName.lnk"
 FunctionEnd

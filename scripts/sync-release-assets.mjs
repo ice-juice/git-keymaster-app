@@ -1,7 +1,7 @@
 /**
- * 把带语言后缀的安装包同步到 GitHub Release，并删掉未加后缀的旧文件名。
+ * 把规范化后的安装包同步到 GitHub Release，并按平台合并唯一的 latest.json。
  * 用法：
- *   node scripts/sync-release-assets.mjs vX.Y.Z zh-CN|en-US
+ *   node scripts/sync-release-assets.mjs vX.Y.Z
  *   node scripts/sync-release-assets.mjs --fix-notes vX.Y.Z
  *   node scripts/sync-release-assets.mjs --pin-legacy vX.Y.Z
  *   node scripts/sync-release-assets.mjs --require-bundles
@@ -13,7 +13,13 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildReleaseNotes } from "./build-release-notes.mjs";
-import { latestJsonFilename, mergeLatestJson, rewriteLatestJson } from "./rename-release-assets.mjs";
+import {
+  ANDROID_PLATFORM_KEY,
+  LEGACY_MANIFEST_NAMES,
+  injectAndroidAarch64,
+  mergeLatestJson,
+  rewriteLatestJson,
+} from "./rename-release-assets.mjs";
 
 const REPO = "ice-juice/git-keymaster-app";
 const BUNDLE_ROOTS = [
@@ -130,7 +136,7 @@ function fixPublishedNotes(tag) {
   const notes = loadCanonicalNotes(tag.replace(/^v/, ""));
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-latest-"));
   try {
-    for (const name of ["latest.json", "latest-zh-CN.json", "latest-en-US.json"]) {
+    for (const name of ["latest.json", ...LEGACY_MANIFEST_NAMES]) {
       const downloaded = runGh(
         ["release", "download", tag, "--repo", REPO, "--pattern", name, "--dir", tmp, "--clobber"],
         { ignoreFail: true },
@@ -159,7 +165,7 @@ function requireBundles() {
   }
 }
 
-function publishLocaleManifest(tag, locale, mapping) {
+function publishUnifiedManifest(tag, mapping) {
   const localPath = findLocalLatestJson();
   if (!localPath) {
     console.log("no local latest.json to merge");
@@ -170,40 +176,30 @@ function publishLocaleManifest(tag, locale, mapping) {
   incomingData.notes = loadCanonicalNotes(tag.replace(/^v/, ""));
   const incomingText = `${JSON.stringify(incomingData, null, 2)}\n`;
 
-  const localeName = latestJsonFilename(locale);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-latest-"));
   try {
-    const existingPath = path.join(tmp, localeName);
+    const existingPath = path.join(tmp, "latest.json");
     runGh(
-      ["release", "download", tag, "--repo", REPO, "--pattern", localeName, "--dir", tmp, "--clobber"],
+      ["release", "download", tag, "--repo", REPO, "--pattern", "latest.json", "--dir", tmp, "--clobber"],
       { ignoreFail: true },
     );
     const existingText = fs.existsSync(existingPath) ? fs.readFileSync(existingPath, "utf8") : "";
-    const merged = mergeLatestJson(existingText, incomingText);
-    const outPath = path.join(tmp, localeName);
-    fs.writeFileSync(outPath, merged);
-    runGh(["release", "upload", tag, outPath, "--repo", REPO, "--clobber"], { retries: 4 });
-    console.log(`[sync] merged ${localeName}`);
-
-    // 旧客户端只认 latest.json。用中文清单做兼容副本，避免再被英文任务盖掉。
-    if (locale === "zh-CN") {
-      const legacy = path.join(tmp, "latest.json");
-      fs.writeFileSync(legacy, merged);
-      runGh(["release", "upload", tag, legacy, "--repo", REPO, "--clobber"], { retries: 4 });
-      console.log("[sync] copied latest-zh-CN.json -> latest.json for old clients");
-    }
+    const merged = injectAndroidAarch64(mergeLatestJson(existingText, incomingText), tag);
+    fs.writeFileSync(existingPath, merged);
+    runGh(["release", "upload", tag, existingPath, "--repo", REPO, "--clobber"], { retries: 4 });
+    console.log("[sync] merged latest.json");
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
-function syncTag(tag, locale) {
+function syncTag(tag) {
   if (!tag || tag === "v__VERSION__") {
     console.log("skip release asset sync (no real tag)");
     return;
   }
-  if (!locale || !["zh-CN", "en-US"].includes(locale)) {
-    console.error("usage: node scripts/sync-release-assets.mjs vX.Y.Z zh-CN|en-US");
+  if (!/^v\d/.test(tag)) {
+    console.error("usage: node scripts/sync-release-assets.mjs vX.Y.Z");
     process.exit(1);
   }
 
@@ -227,7 +223,7 @@ function syncTag(tag, locale) {
     runGh(["release", "upload", tag, ...uploads, "--repo", REPO, "--clobber"], { retries: 4 });
   }
 
-  publishLocaleManifest(tag, locale, mapping);
+  publishUnifiedManifest(tag, mapping);
 
   for (const [oldName, newName] of mapping) {
     if (oldName && oldName !== newName) {
@@ -251,6 +247,16 @@ function downloadReleaseFile(tag, name, dir) {
   return null;
 }
 
+export function writeLegacyManifestAliases(canonicalText, dir) {
+  const written = [];
+  for (const name of LEGACY_MANIFEST_NAMES) {
+    const dest = path.join(dir, name);
+    fs.writeFileSync(dest, canonicalText);
+    written.push(dest);
+  }
+  return written;
+}
+
 function pinLegacyLatest(tag) {
   if (!tag || !/^v\d/.test(tag)) {
     console.error("usage: node scripts/sync-release-assets.mjs --pin-legacy vX.Y.Z");
@@ -259,26 +265,19 @@ function pinLegacyLatest(tag) {
   runGh(["release", "view", tag, "--repo", REPO], { ignoreFail: true });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-pin-"));
   try {
-    const zhName = latestJsonFilename("zh-CN");
-    let source = downloadReleaseFile(tag, zhName, tmp);
+    const source = downloadReleaseFile(tag, "latest.json", tmp);
     if (!source) {
-      const fallback = downloadReleaseFile(tag, "latest.json", tmp);
-      if (fallback) {
-        const text = fs.readFileSync(fallback, "utf8");
-        if (text.includes("_zh-CN") || text.includes("zh-CN")) {
-          source = fallback;
-          console.log(`[sync] ${zhName} missing, pinning from existing latest.json`);
-        }
-      }
-    }
-    if (!source) {
-      console.error(`[sync] missing ${zhName} and no Chinese latest.json fallback`);
+      console.error("[sync] missing latest.json; cannot copy legacy aliases");
       process.exit(1);
     }
-    const legacy = path.join(tmp, "latest.json");
-    fs.copyFileSync(source, legacy);
-    runGh(["release", "upload", tag, legacy, "--repo", REPO, "--clobber"], { retries: 4 });
-    console.log(`[sync] pinned latest.json from ${path.basename(source)}`);
+    const pinned = injectAndroidAarch64(fs.readFileSync(source, "utf8"), tag);
+    fs.writeFileSync(source, pinned);
+    runGh(["release", "upload", tag, source, "--repo", REPO, "--clobber"], { retries: 4 });
+    const aliases = writeLegacyManifestAliases(pinned, tmp);
+    for (const file of aliases) {
+      runGh(["release", "upload", tag, file, "--repo", REPO, "--clobber"], { retries: 4 });
+      console.log(`[sync] copied latest.json -> ${path.basename(file)} (byte-identical alias)`);
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -289,19 +288,19 @@ function runSelfTest() {
   try {
     const bundle = path.join(tmp, "app/src-tauri/target/release/bundle/nsis");
     fs.mkdirSync(bundle, { recursive: true });
-    const locale = "Git.Keymaster_1.3.0_x64_en-US-setup.exe";
-    const extra = "Git.Keymaster_1.3.0_x64-setup.exe";
-    fs.writeFileSync(path.join(bundle, locale), "a");
+    const unified = "Git.Keymaster_1.3.0_x64-setup.exe";
+    const extra = "御钥师_1.3.0_x64-setup.exe";
+    fs.writeFileSync(path.join(bundle, unified), "a");
     fs.writeFileSync(path.join(bundle, extra), "b");
     const nested = path.join(tmp, "app/src-tauri/target/release/bundle/copy");
     fs.mkdirSync(nested, { recursive: true });
-    fs.writeFileSync(path.join(nested, locale), "dup");
+    fs.writeFileSync(path.join(nested, unified), "dup");
     const uploads = collectUniqueUploads(
-      [["Git.Keymaster_1.3.0_x64-setup.exe", locale]],
+      [["御钥师_1.3.0_x64-setup.exe", unified]],
       tmp,
     );
-    if (uploads.length !== 1 || path.basename(uploads[0]) !== locale) {
-      throw new Error(`expected one unique locale file, got ${JSON.stringify(uploads)}`);
+    if (uploads.length !== 1 || path.basename(uploads[0]) !== unified) {
+      throw new Error(`expected one unique installer, got ${JSON.stringify(uploads)}`);
     }
     if (listInstallerBundles(tmp).length < 2) {
       throw new Error("expected installer files under bundle/");
@@ -310,6 +309,22 @@ function runSelfTest() {
     const headings = [...notes.matchAll(/^### (.+)$/gm)].map((m) => m[1]);
     if (headings.join(",") !== "新增功能,优化功能,修复问题,下载建议") {
       throw new Error(`canonical notes headings: ${headings.join(",")}`);
+    }
+    const aliasDir = path.join(tmp, "aliases");
+    fs.mkdirSync(aliasDir, { recursive: true });
+    const body = '{"version":"1.5.1","platforms":{}}\n';
+    const aliases = writeLegacyManifestAliases(body, aliasDir);
+    if (aliases.length !== 2) {
+      throw new Error("expected two legacy aliases");
+    }
+    for (const file of aliases) {
+      if (fs.readFileSync(file, "utf8") !== body) {
+        throw new Error(`${path.basename(file)} must be byte-identical to latest.json`);
+      }
+    }
+    const injected = JSON.parse(injectAndroidAarch64(body, "v1.5.1"));
+    if (!injected.platforms[ANDROID_PLATFORM_KEY]?.url.endsWith("Git.Keymaster_1.5.1_arm64-v8a.apk")) {
+      throw new Error("pin/sync must inject android-aarch64 into latest.json");
     }
     console.log("[sync] self-test ok");
   } finally {
@@ -329,6 +344,6 @@ if (invoked) {
   } else if (arg === "--pin-legacy") {
     pinLegacyLatest(process.argv[3]);
   } else {
-    syncTag(arg, process.argv[3]);
+    syncTag(arg);
   }
 }

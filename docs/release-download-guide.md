@@ -1,12 +1,12 @@
 ### 下载建议
-- **怎么认语言**：所有安装包都以 `Git.Keymaster_` 开头，用文件名里的语言码区分。`zh-CN` 是中文界面，`en-US` 是英文界面，同一平台成对出现
+- **每平台一份**：所有安装包都以 `Git.Keymaster_` 开头，不要按 `zh-CN` / `en-US` 挑两套。界面语言在应用内切换；安装向导 / 系统语言只影响开始菜单、卸载名、程序坞短名
 - **签名文件**：同名 `.sig` 给应用内更新用，一般不用手动下载
-- **Windows（推荐安装向导）**：`Git.Keymaster_{{VERSION}}_x64_zh-CN-setup.exe` 或 `Git.Keymaster_{{VERSION}}_x64_en-US-setup.exe`
-- **Windows MSI**：`Git.Keymaster_{{VERSION}}_x64_zh-CN.msi` 或 `Git.Keymaster_{{VERSION}}_x64_en-US.msi`
-- **macOS（推荐）**：`Git.Keymaster_{{VERSION}}_universal_zh-CN.dmg` 或 `Git.Keymaster_{{VERSION}}_universal_en-US.dmg`
+- **Windows（推荐，可在向导里选语言）**：`Git.Keymaster_{{VERSION}}_x64-setup.exe`
+- **Windows MSI**：`Git.Keymaster_{{VERSION}}_x64.msi`（向导不做中英选择，装完后仍可在应用内改语言）
+- **macOS（推荐）**：`Git.Keymaster_{{VERSION}}_universal.dmg`
 - **macOS 更新包**：`*.app.tar.gz` 仅供应用内自动更新，不必手动下载
-- **Linux 自动更新（推荐）**：`Git.Keymaster_{{VERSION}}_amd64_zh-CN.AppImage` 或 `Git.Keymaster_{{VERSION}}_amd64_en-US.AppImage`，下载后赋予执行权限
-- **Debian / Ubuntu**：`Git.Keymaster_{{VERSION}}_amd64_zh-CN.deb` 或 `Git.Keymaster_{{VERSION}}_amd64_en-US.deb`
-- **Fedora / RHEL / openSUSE**：`Git.Keymaster_{{VERSION}}_x86_64_zh-CN.rpm` 或 `Git.Keymaster_{{VERSION}}_x86_64_en-US.rpm`
+- **Linux 自动更新（推荐）**：`Git.Keymaster_{{VERSION}}_amd64.AppImage`，下载后赋予执行权限
+- **Debian / Ubuntu**：`Git.Keymaster_{{VERSION}}_amd64.deb`
+- **Fedora / RHEL / openSUSE**：`Git.Keymaster_{{VERSION}}_x86_64.rpm`
 - **Linux 包管理器**：用 deb / rpm 安装后请用系统软件包更新；应用内自更新只支持 AppImage
-- **Android（侧载，仅 64 位 ARM 手机）**：`Git.Keymaster_{{VERSION}}_arm64-v8a_zh-CN.apk` 或 `Git.Keymaster_{{VERSION}}_arm64-v8a_en-US.apk`。装过旧正式包后，必须用同一把签名钥匙打的新包才能覆盖；手机上的 debug 包（包名带 `.debug`）互不影响。安卓没有应用内更新，换版本请重新下载 APK
+- **Android（侧载，仅 64 位 ARM 手机）**：`Git.Keymaster_{{VERSION}}_arm64-v8a.apk`。装过旧正式包后，必须用同一把签名钥匙打的新包才能覆盖；手机上的 debug 包（包名带 `.debug`）互不影响。第一期安卓请重新下载 APK
