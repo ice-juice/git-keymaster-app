@@ -21,6 +21,11 @@ export default defineConfig(({ mode }) => {
     server: {
       port: 5173,
       strictPort: true,
+      // 安卓/iOS 调试时 Tauri CLI 会注入局域网 IP；桌面端未设置则仍只绑 localhost
+      host: process.env.TAURI_DEV_HOST || false,
+      hmr: process.env.TAURI_DEV_HOST
+        ? { protocol: "ws", host: process.env.TAURI_DEV_HOST, port: 5174 }
+        : undefined,
       watch: {
         // Cargo 编译时会锁 target 下的 dll；Vite 监听这些文件会在 Windows 上 EBUSY 崩溃
         ignored: ['**/src-tauri/**'],

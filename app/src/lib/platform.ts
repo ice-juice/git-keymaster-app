@@ -1,71 +1,43 @@
-import { useEffect, useState } from "react";
+/**
+ * 平台判定的**兼容门面**。
+ *
+ * 单一真源已上移到 `src/platform/`：
+ * - `platform/resolve.ts` 负责判定 desktop | mobile（不看窗口宽度）；
+ * - `platform/capabilities.ts` 负责能力矩阵。
+ *
+ * 本文件只做转发 + 保留存量页面用惯的名字，避免一次性改动所有 import。
+ * 新代码请直接 import `../platform/resolve` 与 `../platform/capabilities`。
+ */
+import {
+  resolvePlatform,
+  usePlatform,
+  isMobilePlatform,
+  isAndroid,
+  isIOS,
+  type Platform,
+} from "../platform/resolve";
+import { can } from "../platform/capabilities";
+
+export { resolvePlatform, usePlatform, isMobilePlatform, isAndroid, isIOS };
+export type { Platform };
 
 /**
- * 平台与形态判定。
+ * 当前是否走紧凑（移动）布局。
  *
- * 刻意把「是不是手机」和「要不要用紧凑布局」分成两件事：
- * - `isMobilePlatform()` 决定**能力**（能不能开 ssh-agent、要不要显示窗口按钮）；
- * - `useIsCompact()` 决定**布局**（底部 Tab 还是左侧栏）。
- *
- * 这样在 Windows 上把 Vite 开发服务器窗口拉窄就能验收移动端布局，
- * 不必先装好 Android 模拟器。桌面窗口有 840px 最小宽度（tauri.conf.json），
- * 打包后的桌面端不会误触紧凑布局。
+ * 已改为「平台判定」的同义词——不再随窗口宽度变化。桌面永远为 false，
+ * 手机（或 `?platform=mobile`）永远为 true。保留此名字仅为兼容存量调用。
+ * @deprecated 新代码请用 `usePlatform() === "mobile"`。
  */
-
-const COMPACT_QUERY = "(max-width: 640px)";
-
-function ua(): string {
-  return typeof navigator === "undefined" ? "" : navigator.userAgent;
-}
-
-export function isAndroid(): boolean {
-  return /Android/i.test(ua());
-}
-
-export function isIOS(): boolean {
-  // iPadOS 13+ 的 Safari UA 里不再有 iPad，退化成 Macintosh + 触摸点。
-  const s = ua();
-  if (/iPhone|iPad|iPod/i.test(s)) return true;
-  return /Macintosh/i.test(s) && typeof navigator !== "undefined" && navigator.maxTouchPoints > 1;
-}
-
-export function isMobilePlatform(): boolean {
-  return isAndroid() || isIOS();
-}
-
-/** 当前视口是否为紧凑（手机竖屏）形态。手机平台恒为真。 */
 export function useIsCompact(): boolean {
-  const [compact, setCompact] = useState(() => {
-    if (isMobilePlatform()) return true;
-    if (typeof window === "undefined" || !window.matchMedia) return false;
-    return window.matchMedia(COMPACT_QUERY).matches;
-  });
-
-  useEffect(() => {
-    if (isMobilePlatform()) {
-      setCompact(true);
-      return;
-    }
-    if (typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia(COMPACT_QUERY);
-    const onChange = (e: MediaQueryListEvent) => setCompact(e.matches);
-    mq.addEventListener("change", onChange);
-    setCompact(mq.matches);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-
-  return compact;
+  return resolvePlatform() === "mobile";
 }
 
-/**
- * 移动端不提供的能力。用于隐藏入口，与后端 `AppError::Unsupported`
- * （code `UNSUPPORTED_PLATFORM`）互为里外两道防线。
- */
+/** 本机 Git / SSH 工具链能力（移动端无）。 */
 export function supportsLocalGitTools(): boolean {
-  return !isMobilePlatform();
+  return can("localGitTools");
 }
 
-/** 是否自绘窗口控制按钮（仅桌面；移动端由系统管理窗口）。 */
+/** 是否自绘窗口控制按钮（仅桌面）。 */
 export function supportsWindowControls(): boolean {
-  return !isMobilePlatform();
+  return can("windowControls");
 }

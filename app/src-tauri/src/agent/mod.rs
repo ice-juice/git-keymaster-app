@@ -627,6 +627,7 @@ fn delete_user_env_var(name: &str) {
 #[cfg(not(windows))]
 fn delete_user_env_var(_name: &str) {}
 
+#[cfg_attr(not(windows), allow(dead_code))]
 fn parse_tasklist_ssh_agent_pids(output: &str) -> Vec<u32> {
     let mut pids = Vec::new();
     for line in output.lines() {

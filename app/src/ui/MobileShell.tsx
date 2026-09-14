@@ -1,15 +1,12 @@
 import { type ReactNode } from "react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Cloud,
   Settings as SettingsIcon,
   Lock,
-  Timer,
+  ShieldCheck,
   UserRound,
-  Sun,
-  Moon,
-  Palette,
 } from "lucide-react";
 import { AppLogo } from "./AppLogo";
 import { useApp } from "../store";
@@ -26,42 +23,41 @@ import { APP_NAME } from "../lib/config";
 
 const TABS = [
   { to: "/", label: "总览", icon: LayoutDashboard, end: true },
-  { to: "/totp", label: "验证码", icon: Timer },
-  { to: "/accounts", label: "账号", icon: UserRound },
+  { to: "/totp", label: "2FA", icon: ShieldCheck },
+  { to: "/accounts", label: "账密", icon: UserRound },
   { to: "/sync", label: "同步", icon: Cloud },
   { to: "/settings", label: "设置", icon: SettingsIcon },
 ];
 
+const PAGE_TITLE: Record<string, string> = {
+  "/": "身份",
+  "/totp": "2FA",
+  "/accounts": "账密",
+  "/sync": "同步",
+  "/settings": "设置",
+};
+
 export function MobileShell({ children }: { children: ReactNode }) {
-  const { status, lock, writesLocked, startupNote, theme, toggleTheme } = useApp();
-  const unlocked = !!status?.unlocked;
-  const ThemeIcon = theme === "light" ? Sun : theme === "dark" ? Moon : Palette;
+  const { lock, writesLocked, startupNote } = useApp();
+  const { pathname } = useLocation();
+  const pageTitle = PAGE_TITLE[pathname] || APP_NAME;
 
   return (
     <div className="m-shell">
       <header className="m-topbar">
         <AppLogo size={22} />
-        <div className="m-topbar-title">{APP_NAME}</div>
-        <div className="m-topbar-spacer" />
-        <div className={"m-status" + (unlocked ? " on" : "")}>
-          <span className="led" />
-          {unlocked ? "已解锁" : "已锁定"}
+        <div className="m-topbar-copy">
+          <div className="m-topbar-brand">{APP_NAME}</div>
+          <div className="m-topbar-page">{pageTitle}</div>
         </div>
-        <button
-          type="button"
-          className="m-icon-btn"
-          aria-label="切换主题"
-          onClick={toggleTheme}
-        >
-          <ThemeIcon size={17} />
-        </button>
+        <div className="m-topbar-spacer" />
         <button
           type="button"
           className="m-icon-btn"
           aria-label="立即锁定"
           onClick={() => lock()}
         >
-          <Lock size={17} />
+          <Lock size={18} />
         </button>
       </header>
 

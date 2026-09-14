@@ -49,9 +49,40 @@ fn discover_existing_workspace() -> Option<PathBuf> {
         .find(|p| Vault::exists(p))
 }
 
+/// 移动端配置根和 JS `appDataDir()` 可能差一层 `files/`。
+/// 若沙箱里已经有 vault，但本机 config 还没记下路径，冷启动会误进初始化向导。
+#[cfg(mobile)]
+fn adopt_sandboxed_workspace_if_needed(state: &AppState) {
+    {
+        let cfg = recover_lock(&state.config);
+        if cfg
+            .workspace_path
+            .as_ref()
+            .is_some_and(|p| Vault::exists(&PathBuf::from(p)))
+        {
+            return;
+        }
+    }
+    let Some(found) = discover_existing_workspace() else {
+        return;
+    };
+    let mut cfg = recover_lock(&state.config);
+    if !cfg
+        .workspace_path
+        .as_ref()
+        .is_some_and(|p| Vault::exists(&PathBuf::from(p)))
+    {
+        cfg.workspace_path = Some(found.to_string_lossy().into_owned());
+        let _ = cfg.save();
+    }
+}
+
 /// 查询当前状态（前端启动时首先调用）。
 #[tauri::command]
 pub fn vault_status(state: State<AppState>) -> VaultStatus {
+    #[cfg(mobile)]
+    adopt_sandboxed_workspace_if_needed(&state);
+
     let cfg = recover_lock(&state.config);
     let vault = recover_lock(&state.vault);
     let initialized = cfg
@@ -115,6 +146,17 @@ pub fn vault_init(
 ) -> Result<InitResult> {
     crate::workspace_path::reject_if_invalid(&path)?;
     let root = PathBuf::from(&path);
+    if Vault::exists(&root) {
+        // 库已在，但本机 config 可能没记下路径（手机上 JS/Rust 数据目录曾分叉）。
+        // 先写回路径，前端再 refresh 就能进解锁，而不是停在向导里报错。
+        #[cfg(mobile)]
+        {
+            let mut cfg = recover_lock(&state.config);
+            cfg.workspace_path = Some(path.clone());
+            let _ = cfg.save();
+        }
+        return Err(AppError::AlreadyInitialized(path));
+    }
     let kdf: KdfParams = calibrate(DEFAULT_TARGET_MS);
     let (vault, recovery_key) = Vault::init(&root, &password, kdf)?;
     let workspace_id = vault.workspace_id().to_string();
