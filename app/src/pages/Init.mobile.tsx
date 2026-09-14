@@ -18,12 +18,15 @@ import {
 } from "lucide-react";
 import { useInitModel } from "../shared/hooks/useInitModel";
 import { PasswordFields, RestoreScope } from "./Init.shared";
+import { useTranslation } from "react-i18next";
 import { AppLogo } from "../ui/AppLogo";
-import { APP_NAME } from "../lib/config";
+import { useAppName } from "../lib/config";
 import { S3SetupGuide } from "../ui/S3SetupGuide";
 import { writeClipboard } from "../lib/clipboard";
 
 export function InitMobile() {
+  const { t } = useTranslation();
+  const APP_NAME = useAppName();
   const m = useInitModel("mobile");
   const [manualOpen, setManualOpen] = useState(false);
   const [activePreset, setActivePreset] = useState<"r2" | "s3" | "minio" | null>(null);
@@ -42,10 +45,10 @@ export function InitMobile() {
 
   // 计算当前向导标题
   const topTitle = !m.mode
-    ? "开始使用"
+    ? t("init.pageStart")
     : m.mode === "restore"
-      ? "从云端恢复"
-      : "创建工作空间";
+      ? t("init.pageRestore")
+      : t("init.mobileCreate");
 
   return (
     <div className="m-init-shell">
@@ -59,7 +62,7 @@ export function InitMobile() {
         <button
           type="button"
           className="m-icon-btn"
-          aria-label="切换主题风格"
+          aria-label={t("theme.toggle")}
           onClick={m.toggleTheme}
         >
           {m.theme === "light" ? <Sun size={18} /> : m.theme === "dark" ? <Moon size={18} /> : <Palette size={18} />}
@@ -113,9 +116,9 @@ export function InitMobile() {
         {!m.mode && (
           <div className="stack" style={{ gap: 12, paddingTop: 10 }}>
             <div style={{ padding: "0 4px 6px" }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>欢迎使用御钥师</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{t("init.welcome", { name: APP_NAME })}</div>
               <div className="muted" style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>
-                所有 Git 身份与加密私钥均保存在本地。请选择初始化方式：
+                {t("init.welcomeDesc")}
               </div>
             </div>
 
@@ -128,11 +131,11 @@ export function InitMobile() {
               <Cloud size={24} style={{ color: "var(--accent)", flexShrink: 0 }} />
               <div style={{ textAlign: "left", flex: 1 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <strong style={{ fontSize: 15, color: "var(--text)" }}>从云端恢复</strong>
-                  <span className="badge sm" style={{ background: "var(--accent)", color: "#fff" }}>推荐</span>
+                  <strong style={{ fontSize: 15, color: "var(--text)" }}>{t("init.restoreTitle")}</strong>
+                  <span className="badge sm" style={{ background: "var(--accent)", color: "#fff" }}>{t("init.recommended")}</span>
                 </div>
                 <small style={{ fontSize: 12.5, color: "var(--text-soft)", marginTop: 4, display: "block" }}>
-                  电脑端已有数据？手机扫码即可直接同步云配置，输入旧恢复密钥快速还原。
+                  {t("init.restoreDescMobilePick")}
                 </small>
               </div>
             </button>
@@ -145,9 +148,9 @@ export function InitMobile() {
             >
               <FolderPlus size={24} style={{ color: "var(--text-mute)", flexShrink: 0 }} />
               <div style={{ textAlign: "left", flex: 1 }}>
-                <strong style={{ fontSize: 15, color: "var(--text)" }}>创建新工作空间</strong>
+                <strong style={{ fontSize: 15, color: "var(--text)" }}>{t("init.createTitle")}</strong>
                 <small style={{ fontSize: 12.5, color: "var(--text-soft)", marginTop: 4, display: "block" }}>
-                  全新使用。为本机创建加密数据库，生成独立访问密码与离线恢复密钥。
+                  {t("init.createDescMobile")}
                 </small>
               </div>
             </button>
@@ -164,10 +167,10 @@ export function InitMobile() {
 
             {/* 推荐大卡片：扫描二维码 */}
             <div className="m-init-qr-card">
-              <div className="m-init-qr-badge">极速接入 · 推荐</div>
-              <div className="m-init-qr-title">扫描电脑上的配置二维码</div>
+              <div className="m-init-qr-badge">{t("init.mobileQrBadge")}</div>
+              <div className="m-init-qr-title">{t("init.mobileQrTitle")}</div>
               <div className="m-init-qr-desc">
-                电脑端打开【御钥师】→【设置】→【云同步】，点击【分享配置】出码，手机扫码即可秒级自动导入所有连接参数。
+                {t("init.mobileQrDesc")}
               </div>
 
               <button
@@ -462,7 +465,7 @@ export function InitMobile() {
                 onClick={() => m.refresh()}
                 style={{ width: "100%", minHeight: 46, fontSize: 15 }}
               >
-                进入御钥师主界面
+                {t("init.enterApp")}
               </button>
             </div>
           </div>

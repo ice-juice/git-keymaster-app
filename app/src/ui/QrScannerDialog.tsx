@@ -4,6 +4,7 @@ import { X, Zap, ZapOff, Image as ImageIcon, CameraOff, RefreshCw } from "lucide
 import jsQR from "jsqr";
 import { pickQrFromGallery } from "../lib/qrCapture";
 import { api } from "../lib/ipc";
+import { i18n, displayNameForLocale } from "../lib/i18n";
 
 export interface QrScannerDialogProps {
   open: boolean;
@@ -15,11 +16,14 @@ export interface QrScannerDialogProps {
 
 export const QrScannerDialog: FC<QrScannerDialogProps> = ({
   open,
-  title = "扫描二维码",
-  hint = "将二维码放入框内，即可自动扫描",
+  title,
+  hint,
   onScan,
   onClose,
 }) => {
+  const brand = displayNameForLocale(i18n.language);
+  const dialogTitle = title ?? i18n.t("qrscan.title");
+  const dialogHint = hint ?? i18n.t("qrscan.hint");
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -58,8 +62,8 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         setLoadingCamera(false);
         setCameraError(
           perm.permanentlyDenied
-            ? "相机权限已被拒绝。请到系统设置中允许御钥师使用相机，然后返回重试。"
-            : "需要相机权限才能扫码。请在接下来的系统弹窗中选择「允许」。",
+            ? i18n.t("qrscan.permDeniedSettings", { name: brand })
+            : i18n.t("qrscan.permNeeded"),
         );
         return;
       }
@@ -96,11 +100,13 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       const name = err?.name || "";
       if (name === "NotAllowedError" || name === "PermissionDeniedError") {
         setPermissionDenied(true);
-        setCameraError("相机权限被拒绝。请在手机「设置 → 应用权限」中允许御钥师使用相机。");
+        setCameraError(i18n.t("qrscan.permDeniedPhone", { name: brand }));
       } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
-        setCameraError("未检测到可用的后置摄像头。");
+        setCameraError(i18n.t("qrscan.noCamera"));
       } else {
-        setCameraError(`无法打开相机：${err?.message || "未知错误"}`);
+        setCameraError(
+          i18n.t("qrscan.openFailed", { error: err?.message || i18n.t("qrscan.unknownError") }),
+        );
       }
     }
   };
@@ -128,10 +134,10 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       if (texts && texts.length > 0) {
         handleSuccess(texts);
       } else if (texts) {
-        alert("所选图片中未识别到有效二维码，请更换清晰图片");
+        alert(i18n.t("qrscan.noQrInImage"));
       }
     } catch (err: any) {
-      alert(`读取相册图片失败：${err?.message || err}`);
+      alert(i18n.t("qrscan.galleryFailed", { error: err?.message || err }));
     }
   };
 
@@ -247,11 +253,11 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
             stopStream();
             onClose();
           }}
-          aria-label="关闭"
+          aria-label={i18n.t("qrscan.close")}
         >
           <X size={20} />
         </button>
-        <span className="qr-scanner-title">{title}</span>
+        <span className="qr-scanner-title">{dialogTitle}</span>
         <div style={{ width: 40 }} />
       </header>
 
@@ -277,7 +283,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
           <div className="qr-scanner-error-icon">
             <CameraOff size={36} />
           </div>
-          <div className="qr-scanner-error-title">无法打开摄像头</div>
+          <div className="qr-scanner-error-title">{i18n.t("qrscan.cannotOpen")}</div>
           <div className="qr-scanner-error-desc">{cameraError}</div>
           <div className="qr-scanner-error-actions">
             <button
@@ -285,7 +291,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
               className="btn ghost sm"
               onClick={startCamera}
             >
-              <RefreshCw size={14} /> 再次申请
+              <RefreshCw size={14} /> {i18n.t("qrscan.retry")}
             </button>
             {permissionDenied && (
               <button
@@ -293,7 +299,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
                 className="btn ghost sm"
                 onClick={() => api.openAppPermissionSettings().catch(() => {})}
               >
-                去系统设置
+                {i18n.t("qrscan.openSettings")}
               </button>
             )}
             <button
@@ -301,7 +307,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
               className="btn primary sm"
               onClick={handlePickGallery}
             >
-              <ImageIcon size={14} /> 从相册选图
+              <ImageIcon size={14} /> {i18n.t("qrscan.pickGallery")}
             </button>
           </div>
         </div>
@@ -310,7 +316,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       {/* 底部功能栏 */}
       <footer className="qr-scanner-foot">
         <div className="qr-scanner-hint">
-          {loadingCamera ? "正在启动相机…" : hint}
+          {loadingCamera ? i18n.t("qrscan.starting") : dialogHint}
         </div>
 
         <div className="qr-scanner-actions">
@@ -321,7 +327,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
               onClick={toggleTorch}
             >
               {torchOn ? <Zap size={22} /> : <ZapOff size={22} />}
-              <span>{torchOn ? "关灯" : "手电筒"}</span>
+              <span>{torchOn ? i18n.t("qrscan.torchOn") : i18n.t("qrscan.torchOff")}</span>
             </button>
           )}
 
@@ -331,7 +337,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
             onClick={handlePickGallery}
           >
             <ImageIcon size={22} />
-            <span>相册</span>
+            <span>{i18n.t("qrscan.gallery")}</span>
           </button>
         </div>
       </footer>
@@ -373,8 +379,8 @@ export function scanQrWithCamera(options?: {
     root.render(
       <QrScannerDialog
         open={true}
-        title={options?.title || "扫描二维码"}
-        hint={options?.hint || "将二维码放入框内，即可自动扫描"}
+        title={options?.title || i18n.t("qrscan.title")}
+        hint={options?.hint || i18n.t("qrscan.hint")}
         onScan={handleScan}
         onClose={handleClose}
       />,

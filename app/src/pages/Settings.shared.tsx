@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   Palette,
@@ -32,14 +33,16 @@ import { useApp } from "../store";
 import { THEME_OPTIONS } from "../lib/theme";
 import { UNLOCK_ANIM_STYLES } from "../lib/prefs";
 import { PageHead, Card, FieldLabel, Badge, ErrorDialog } from "../ui/common";
+import { LanguageCard } from "../ui/LanguageCard";
 
-function closeActionLabel(action: "tray" | "quit" | null | undefined): string {
-  if (action === "tray") return "自动最小化到托盘";
-  if (action === "quit") return "直接退出程序";
-  return "弹出二次确认";
+function closeActionLabel(action: "tray" | "quit" | null | undefined, t: (key: string) => string): string {
+  if (action === "tray") return t("settings.closeTray");
+  if (action === "quit") return t("settings.closeQuit");
+  return t("settings.closeAsk");
 }
 
 export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
+  const { t } = useTranslation();
   const [configured, setConfigured] = useState(false);
   const [login, setLogin] = useState("");
   const [token, setToken] = useState("");
@@ -66,7 +69,7 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
   }, []);
 
   async function save() {
-    if (!token.trim()) return setErr("请粘贴 GitHub PAT");
+    if (!token.trim()) return setErr(t("pat.needToken"));
     setErr("");
     setMsg("");
     setBusy(true);
@@ -76,7 +79,7 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
       setLogin(name);
       setConfigured(true);
       setToken("");
-      setMsg(`PAT 已保存，当前 GitHub 账号 ${name}`);
+      setMsg(t("pat.saved", { name }));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -91,7 +94,7 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
     try {
       const name = await api.testGithubPat();
       setLogin(name);
-      setMsg(`校验通过，GitHub 账号 ${name}`);
+      setMsg(t("pat.tested", { name }));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -107,7 +110,7 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
       await api.clearGithubPat();
       setConfigured(false);
       setLogin("");
-      setMsg("已清除 PAT");
+      setMsg(t("pat.cleared"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -120,21 +123,20 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
       <ErrorDialog message={err} onClose={() => setErr("")} />
       {msg && <div className="callout info">{msg}</div>}
       <div className="muted" style={{ fontSize: 12 }}>
-        用于自动把公钥添加到 GitHub，以及导入组织列表。请创建 classic token，勾选{" "}
-        <code>write:public_key</code> 或 <code>admin:public_key</code>。令牌只保存在加密库，这里不会回显。
+        {t("pat.hint")}
       </div>
       <div className="kv">
-        <span className="muted">当前状态</span>
+        <span className="muted">{t("pat.status")}</span>
         <span>
           {configured ? (
-            <Badge kind="good">已配置 {login ? `· ${login}` : ""}</Badge>
+            <Badge kind="good">{t("pat.configured")} {login ? `· ${login}` : ""}</Badge>
           ) : (
-            <Badge kind="warn">未配置</Badge>
+            <Badge kind="warn">{t("pat.unconfigured")}</Badge>
           )}
         </span>
       </div>
       <div className="field">
-        <FieldLabel name="粘贴新令牌" tip="在 GitHub Settings → Developer settings → Personal access tokens 生成。保存后立即校验一次。" />
+        <FieldLabel name={t("pat.newToken")} tip={t("pat.tokenTip")} />
         <input
           className="input mono"
           type="password"
@@ -146,17 +148,17 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
       </div>
       <div className="row" style={{ flexWrap: "wrap", marginTop: 4 }}>
         <button type="button" className="btn primary sm" disabled={busy || writesLocked || !token.trim()} onClick={save}>
-          保存并校验
+          {t("pat.saveTest")}
         </button>
         <button type="button" className="btn sm" disabled={busy || !configured} onClick={test}>
-          测试连接
+          {t("pat.test")}
         </button>
         <button type="button" className="btn ghost sm" disabled={busy || writesLocked || !configured} onClick={clear}>
-          清除
+          {t("pat.clear")}
         </button>
         <button type="button" className="btn ghost sm" onClick={() => api.openUrl("https://github.com/settings/tokens")}>
           <ExternalLink size={12} style={{ marginRight: 3 }} />
-          打开 GitHub 令牌页
+          {t("pat.openGithub")}
         </button>
       </div>
     </div>
@@ -164,6 +166,7 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
 }
 
 export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
+  const { t } = useTranslation();
   const [stage, setStage] = useState<"idle" | "confirm">("idle");
   const [phrase, setPhrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -193,22 +196,22 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
     <div className="stack">
       <ErrorDialog message={err} onClose={() => setErr("")} />
       <div className="callout danger">
-        ⚠️ 将清空工作空间数据、还原 ~/.ssh 入口、撤销本程序写入的用户环境变量与 Git/终端挂钩，并删除本机配置。云端数据不会删除。此操作不可撤销。
+        ⚠️ {t("factory.warn")}
       </div>
       {stage === "idle" ? (
         <div>
           <button type="button" className="btn danger sm" disabled={busy} onClick={() => setStage("confirm")}>
-            准备清空还原…
+            {t("factory.prepare")}
           </button>
         </div>
       ) : (
         <div className="stack" style={{ maxWidth: 360, marginTop: 4 }}>
           <div className="muted" style={{ fontSize: 12 }}>
-            请再次确认：在下方输入「清空」，然后执行。
+            {t("factory.reconfirm")}
           </div>
           <input
             className="input"
-            placeholder="输入 清空"
+            placeholder={t("factory.phrasePh")}
             value={phrase}
             onChange={(e) => setPhrase(e.target.value)}
           />
@@ -219,7 +222,7 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
               disabled={busy || phrase.trim() !== "清空"}
               onClick={run}
             >
-              {busy ? "正在还原…" : "确认清空并还原"}
+              {busy ? t("factory.running") : t("factory.confirm")}
             </button>
             <button
               type="button"
@@ -231,7 +234,7 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
                 setErr("");
               }}
             >
-              取消
+              {t("common.cancel")}
             </button>
           </div>
         </div>
@@ -249,8 +252,8 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
 
 const DEFAULT_UPDATE_REPO = "ice-juice/git-keymaster-app";
 
-function formatWhen(iso: string | null | undefined): string {
-  if (!iso) return "尚未检查";
+function formatWhen(iso: string | null | undefined, neverLabel: string): string {
+  if (!iso) return neverLabel;
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleString();
@@ -312,7 +315,8 @@ const EMPTY_PROXY: NetworkProxy = {
   applyToCloudSync: true,
 };
 
-function NetworkProxyCard() {
+export function NetworkProxyCard() {
+  const { t } = useTranslation();
   const [form, setForm] = useState<NetworkProxy>(EMPTY_PROXY);
   const [busy, setBusy] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -358,7 +362,7 @@ function NetworkProxyCard() {
     setBusy(true);
     try {
       await api.saveNetworkProxy(payload());
-      setMsg(payload().enabled ? "代理已保存并启用" : "代理已保存（当前关闭）");
+      setMsg(payload().enabled ? t("proxy.savedOn") : t("proxy.savedOff"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -374,7 +378,7 @@ function NetworkProxyCard() {
       await api.saveNetworkProxy(null);
       setForm(EMPTY_PROXY);
       setTest(null);
-      setMsg("已清除代理，恢复直连");
+      setMsg(t("proxy.cleared"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -389,7 +393,7 @@ function NetworkProxyCard() {
     try {
       const r = await api.testNetworkProxy({ ...payload(), enabled: true });
       setTest(r);
-      setMsg(r.httpsOk ? `GitHub HTTPS 通，耗时 ${r.httpsMs} ms` : "GitHub HTTPS 未通，请检查代理");
+      setMsg(r.httpsOk ? t("proxy.httpsPass", { ms: r.httpsMs }) : t("proxy.httpsFail"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -398,7 +402,7 @@ function NetworkProxyCard() {
   }
 
   return (
-    <Card title="网络代理">
+    <Card title={t("proxy.title")}>
       <div className="stack">
         <ErrorDialog message={err} onClose={() => setErr("")} />
         {msg && <div className="callout info">{msg}</div>}
@@ -406,10 +410,10 @@ function NetworkProxyCard() {
           <div className="between">
             <div>
               <FieldLabel
-                name="启用代理"
-                tip="只作用于本应用发起的请求（检查更新、GitHub API、Git HTTPS、SSH、云同步），不改系统代理。"
+                name={t("proxy.enable")}
+                tip={t("proxy.enableTip")}
               />
-              <div className="hint">部分地区访问 GitHub / GitLab 不稳定时打开。密码保存在本机配置文件。</div>
+              <div className="hint">{t("proxy.hint")}</div>
             </div>
             <button
               type="button"
@@ -421,7 +425,7 @@ function NetworkProxyCard() {
         </div>
 
         <div className="field">
-          <label className="field-label">协议</label>
+            <label className="field-label">{t("proxy.scheme")}</label>
           <div className="choice-row">
             {(["http", "https", "socks5"] as const).map((s) => (
               <button
@@ -438,7 +442,7 @@ function NetworkProxyCard() {
 
         <div className="row" style={{ flexWrap: "wrap" }}>
           <div className="field grow">
-            <label className="field-label">主机</label>
+            <label className="field-label">{t("proxy.host")}</label>
             <input
               className="input mono"
               value={form.host}
@@ -447,7 +451,7 @@ function NetworkProxyCard() {
             />
           </div>
           <div className="field" style={{ width: 110 }}>
-            <label className="field-label">端口</label>
+            <label className="field-label">{t("proxy.port")}</label>
             <input
               className="input mono"
               type="number"
@@ -461,11 +465,11 @@ function NetworkProxyCard() {
 
         <div className="row" style={{ flexWrap: "wrap" }}>
           <div className="field grow">
-            <label className="field-label">用户名（可选）</label>
+            <label className="field-label">{t("proxy.user")}</label>
             <input className="input" value={form.username ?? ""} onChange={(e) => patch({ username: e.target.value })} />
           </div>
           <div className="field grow">
-            <label className="field-label">密码（可选）</label>
+            <label className="field-label">{t("proxy.password")}</label>
             <input
               className="input"
               type="password"
@@ -478,7 +482,7 @@ function NetworkProxyCard() {
 
         <div className="field">
           <div className="between">
-            <FieldLabel name="Git HTTPS 走代理" tip="本应用执行 git clone 等 HTTPS 请求时写入 HTTP(S)_PROXY。" />
+            <FieldLabel name={t("proxy.gitHttps")} tip={t("proxy.gitHttpsTip")} />
             <button
               type="button"
               className={"switch" + (form.applyToGitHttps ? "" : " off")}
@@ -490,8 +494,8 @@ function NetworkProxyCard() {
         <div className="field">
           <div className="between">
             <FieldLabel
-              name="SSH 走代理"
-              tip="为本应用拉起的 ssh / git 注入 ProxyCommand。需要本机有 Git 的 connect 或 ncat。不修改 ~/.ssh/config。"
+              name={t("proxy.ssh")}
+              tip={t("proxy.sshTip")}
             />
             <button
               type="button"
@@ -503,7 +507,7 @@ function NetworkProxyCard() {
         </div>
         <div className="field">
           <div className="between">
-            <FieldLabel name="云同步走代理" tip="R2 / S3 备份默认跟随总开关。国内对象存储可关掉此项。" />
+            <FieldLabel name={t("proxy.cloud")} tip={t("proxy.cloudTip")} />
             <button
               type="button"
               className={"switch" + (form.applyToCloudSync ? "" : " off")}
@@ -515,7 +519,7 @@ function NetworkProxyCard() {
 
         {test && (
           <div className={"callout " + (test.httpsOk ? "good" : "warn")}>
-            <div>{test.httpsOk ? `GitHub HTTPS 成功（${test.httpsMs} ms）` : test.httpsError}</div>
+            <div>{test.httpsOk ? t("proxy.httpsOk", { ms: test.httpsMs }) : test.httpsError}</div>
             {test.sshNote && <div>{test.sshNote}</div>}
           </div>
         )}
@@ -523,13 +527,13 @@ function NetworkProxyCard() {
         <div className="row" style={{ flexWrap: "wrap", marginTop: 4 }}>
           <button type="button" className="btn primary sm" disabled={busy || testing} onClick={testNow}>
             <Globe size={13} style={{ marginRight: 3 }} />
-            {testing ? "正在测试…" : "测试连接"}
+            {testing ? t("proxy.testing") : t("proxy.test")}
           </button>
           <button type="button" className="btn sm" disabled={busy} onClick={save}>
-            保存
+            {t("common.save")}
           </button>
           <button type="button" className="btn ghost sm" disabled={busy} onClick={clearProxy}>
-            清除代理
+            {t("proxy.clear")}
           </button>
         </div>
       </div>
@@ -538,6 +542,7 @@ function NetworkProxyCard() {
 }
 
 export function AboutUpdateCard() {
+  const { t } = useTranslation();
   const [version, setVersion] = useState("");
   const [lastCheck, setLastCheck] = useState<string | null>(null);
   const [kind, setKind] = useState<UpdateSource["kind"]>("github");
@@ -591,7 +596,7 @@ export function AboutUpdateCard() {
     try {
       await api.saveUpdateSource(currentSource());
       await loadPrefs();
-      setMsg("更新源已保存");
+      setMsg(t("update.sourceSaved"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -610,7 +615,7 @@ export function AboutUpdateCard() {
       setRepo("");
       setManifestUrl("");
       setIncludePrerelease(false);
-      setMsg("已恢复为默认 GitHub 更新源");
+      setMsg(t("update.sourceDefault"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -624,7 +629,7 @@ export function AboutUpdateCard() {
     try {
       await api.setAutoCheckUpdate(enabled);
       setAutoCheck(enabled);
-      setMsg(enabled ? "已开启启动时自动检查更新" : "已关闭启动时自动检查更新");
+      setMsg(enabled ? t("update.autoOn") : t("update.autoOff"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -641,7 +646,7 @@ export function AboutUpdateCard() {
       setResult(r);
       setVersion(r.currentVersion);
       setLastCheck(await api.getLastUpdateCheck());
-      setMsg(r.available ? `发现新版本 ${r.latestVersion}` : "当前已是最新版本，或远端尚未发布更新清单");
+      setMsg(r.available ? t("update.found", { version: r.latestVersion }) : t("update.latest"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -655,7 +660,7 @@ export function AboutUpdateCard() {
     setInstalling(true);
     try {
       await api.downloadAndInstallUpdate();
-      setMsg("更新已安装，即将重启…");
+      setMsg(t("update.installedRestart"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -670,7 +675,7 @@ export function AboutUpdateCard() {
     setBusy(true);
     try {
       await api.skipUpdateVersion(ver);
-      setMsg(`已跳过版本 ${ver}，启动时不再提示`);
+      setMsg(t("update.skipped", { version: ver }));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -683,49 +688,49 @@ export function AboutUpdateCard() {
 
   return (
     <div className="stack-lg">
-      <Card title="应用与系统信息">
+      <Card title={t("update.appInfo")}>
         <div className="stack">
           <ErrorDialog message={err} onClose={() => setErr("")} />
           {msg && <div className="callout info">{msg}</div>}
           <div className="kv">
-            <span className="muted">当前版本</span>
+            <span className="muted">{t("update.version")}</span>
             <span className="mono">{version || "—"}</span>
           </div>
           <div className="kv">
-            <span className="muted">最近检查</span>
-            <span>{formatWhen(lastCheck)}</span>
+            <span className="muted">{t("update.lastCheck")}</span>
+            <span>{formatWhen(lastCheck, t("update.never"))}</span>
           </div>
           <div className="kv">
-            <span className="muted">运行平台</span>
-            <span className="mono">{result?.platform ?? "检查后显示"}</span>
+            <span className="muted">{t("update.platform")}</span>
+            <span className="mono">{result?.platform ?? t("update.platformAfter")}</span>
           </div>
           <div style={{ marginTop: 4 }}>
             <button type="button" className="btn primary sm" disabled={checking || busy} onClick={checkNow}>
               <RefreshCw size={13} className={checking ? "animate-spin" : ""} style={{ marginRight: 3 }} />
-              {checking ? "正在检查…" : "立即检查更新"}
+              {checking ? t("update.checking") : t("update.checkNow")}
             </button>
           </div>
 
           {result?.available && (
             <div className="callout info update-result">
               <div>
-                <strong>新版本 {result.latestVersion}</strong>
-                {result.pubDate ? ` · ${formatWhen(result.pubDate)}` : ""}
+                <strong>{t("update.newVersion", { version: result.latestVersion })}</strong>
+                {result.pubDate ? ` · ${formatWhen(result.pubDate, t("update.never"))}` : ""}
               </div>
               {result.notes && <UpdateNotes notes={result.notes} />}
               {showManualOnly && (
                 <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-                  当前安装方式不支持应用内更新（例如 Linux 非 AppImage），请使用手动下载。
+                  {t("update.manualOnly")}
                 </div>
               )}
               <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
                 {showInstall && (
                   <button type="button" className="btn primary sm" disabled={installing} onClick={install}>
-                    {installing ? "正在下载安装…" : "下载并安装"}
+                    {installing ? t("update.installing") : t("update.install")}
                   </button>
                 )}
                 <button type="button" className="btn sm" disabled={busy} onClick={skip}>
-                  跳过此版本
+                  {t("update.skip")}
                 </button>
                 {result.downloadUrl && (
                   <button
@@ -733,7 +738,7 @@ export function AboutUpdateCard() {
                     className="btn ghost sm"
                     onClick={() => api.openUrl(result.downloadUrl!)}
                   >
-                    手动下载
+                    {t("update.manual")}
                   </button>
                 )}
               </div>
@@ -742,13 +747,13 @@ export function AboutUpdateCard() {
         </div>
       </Card>
 
-      <Card title="更新偏好与数据源">
+      <Card title={t("update.prefs")}>
         <div className="stack">
           <div className="field">
             <div className="between">
               <div>
-                <FieldLabel name="自动检查更新" tip="解锁后约 5 秒静默检查一次。发现新版本且未被跳过时，右下角提示。" />
-                <div className="hint">关闭后仍可手动检查。</div>
+                <FieldLabel name={t("update.autoCheck")} tip={t("update.autoTip")} />
+                <div className="hint">{t("update.autoHint")}</div>
               </div>
               <button
                 type="button"
@@ -760,21 +765,21 @@ export function AboutUpdateCard() {
           </div>
 
           <div className="field" style={{ marginTop: 4 }}>
-            <FieldLabel name="更新源配置" tip="默认使用内置 GitHub 仓库，并按本安装包语言拉取 latest-zh-CN.json 或 latest-en-US.json。也可改成其它仓库，或填写一份静态清单的 HTTPS 地址（内网镜像 / 其它 Git 平台）。无论何种源，安装包都必须通过内置公钥校验。" />
+            <FieldLabel name={t("update.sourceLabel")} tip={t("update.sourceTip")} />
             <div className="choice-row">
               <button
                 type="button"
                 className={"choice" + (kind === "github" ? " on" : "")}
                 onClick={() => setKind("github")}
               >
-                GitHub 官方仓库
+                {t("update.githubOfficial")}
               </button>
               <button
                 type="button"
                 className={"choice" + (kind === "manifest" ? " on" : "")}
                 onClick={() => setKind("manifest")}
               >
-                自定义清单 URL
+                {t("update.customManifest")}
               </button>
             </div>
           </div>
@@ -782,18 +787,18 @@ export function AboutUpdateCard() {
           {kind === "github" ? (
             <>
               <div className="field">
-                <label className="field-label">仓库 owner/repo</label>
+                <label className="field-label">{t("update.repo")}</label>
                 <input
                   className="input mono"
                   placeholder={DEFAULT_UPDATE_REPO}
                   value={repo}
                   onChange={(e) => setRepo(e.target.value)}
                 />
-                <div className="hint">留空则使用出厂默认仓库 {DEFAULT_UPDATE_REPO}</div>
+                <div className="hint">{t("update.repoHint", { repo: DEFAULT_UPDATE_REPO })}</div>
               </div>
               <div className="field">
                 <div className="between">
-                  <FieldLabel name="包含预发布版本" tip="开启后走 GitHub Releases API，可能包含 pre-release。" />
+                  <FieldLabel name={t("update.prerelease")} tip={t("update.prereleaseTip")} />
                   <button
                     type="button"
                     className={"switch" + (includePrerelease ? "" : " off")}
@@ -805,23 +810,23 @@ export function AboutUpdateCard() {
             </>
           ) : (
             <div className="field">
-              <label className="field-label">清单 URL</label>
+              <label className="field-label">{t("update.manifestUrl")}</label>
               <input
                 className="input mono"
                 placeholder="https://mirror.example.com/latest.json"
                 value={manifestUrl}
                 onChange={(e) => setManifestUrl(e.target.value)}
               />
-              <div className="hint">必须是 HTTPS。支持 {"{{target}}"} / {"{{arch}}"} / {"{{current_version}}"} 占位符。</div>
+              <div className="hint">{t("update.manifestHint")}</div>
             </div>
           )}
 
           <div className="row" style={{ flexWrap: "wrap", marginTop: 4 }}>
             <button type="button" className="btn primary sm" disabled={busy} onClick={saveSource}>
-              保存更新源
+              {t("update.saveSource")}
             </button>
             <button type="button" className="btn ghost sm" disabled={busy} onClick={restoreDefault}>
-              恢复默认
+              {t("update.restoreDefault")}
             </button>
           </div>
         </div>
@@ -854,10 +859,10 @@ function scrollToSettingAnchor(anchor: string) {
   el?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-function levelBadge(level: SecurityLevel): { kind: string; label: string } {
-  if (level === "risk") return { kind: "danger", label: "有风险" };
-  if (level === "caution") return { kind: "warn", label: "需留意" };
-  return { kind: "good", label: "安全" };
+function levelBadge(level: SecurityLevel, t: (key: string) => string): { kind: string; label: string } {
+  if (level === "risk") return { kind: "danger", label: t("security.risk") };
+  if (level === "caution") return { kind: "warn", label: t("security.caution") };
+  return { kind: "good", label: t("security.safe") };
 }
 
 function findingCallout(severity: SecurityFinding["severity"]): string {
@@ -873,6 +878,7 @@ export function SecurityChecklistCard({
   refreshNonce: number;
   onJump: (anchor: string) => void;
 }) {
+  const { t } = useTranslation();
   const [list, setList] = useState<SecurityChecklist | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -896,15 +902,15 @@ export function SecurityChecklistCard({
 
   const todos = list?.items.filter((i) => i.severity !== "ok") ?? [];
   const oks = list?.items.filter((i) => i.severity === "ok") ?? [];
-  const badge = list ? levelBadge(list.level) : null;
+  const badge = list ? levelBadge(list.level, t) : null;
 
   return (
     <Card
-      title="安全自查"
+      title={t("security.checklist")}
       actions={
         <button type="button" className="btn ghost sm" disabled={busy} onClick={load}>
           <RefreshCw size={13} className={busy ? "animate-spin" : ""} style={{ marginRight: 3 }} />
-          {busy ? "正在检查…" : "刷新"}
+                          {busy ? t("security.refreshing") : t("common.refresh")}
         </button>
       }
     >
@@ -912,12 +918,12 @@ export function SecurityChecklistCard({
         <ErrorDialog message={err} onClose={() => setErr("")} />
         {badge && (
           <div className="kv">
-            <span className="muted">当前状态</span>
+            <span className="muted">{t("security.status")}</span>
             <span>
               <Badge kind={badge.kind}>{badge.label}</Badge>
               {list?.checkedAt && (
                 <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>
-                  {formatWhen(list.checkedAt)}
+                  {formatWhen(list.checkedAt, t("update.never"))}
                 </span>
               )}
             </span>
@@ -925,18 +931,14 @@ export function SecurityChecklistCard({
         )}
 
         <div className="callout info" style={{ fontSize: 12 }}>
-          <div>这份清单只读本机配置与工作空间路径，全程在本机计算，不上报、零遥测。</div>
-          <div style={{ marginTop: 6 }}>
-            系统不会告诉本应用谁在监听剪贴板、谁在截屏或录屏，因此无法指认监听者或截屏调用方。
-          </div>
-          <div style={{ marginTop: 6 }}>
-            剪贴板排除是给系统历史、云剪贴板和守规矩的管理器看的协作式约定，恶意程序可以无视。它不能防木马，也不会让截图变黑。
-          </div>
+          <div>{t("security.intro1")}</div>
+          <div style={{ marginTop: 6 }}>{t("security.intro2")}</div>
+          <div style={{ marginTop: 6 }}>{t("security.intro3")}</div>
         </div>
 
         {todos.length === 0 && list && (
           <div className="muted" style={{ fontSize: 12 }}>
-            当前没有待处理项。下面折叠的是已通过的检查。
+            {t("security.noTodos")}
           </div>
         )}
 
@@ -945,7 +947,7 @@ export function SecurityChecklistCard({
             <div className="between" style={{ alignItems: "flex-start", gap: 8 }}>
               <strong>{item.title}</strong>
               <Badge kind={item.severity === "warn" ? "danger" : "warn"}>
-                {item.severity === "warn" ? "建议处理" : "留意"}
+                {item.severity === "warn" ? t("security.handle") : t("security.watch")}
               </Badge>
             </div>
             <div style={{ marginTop: 6 }}>{item.detail}</div>
@@ -960,7 +962,7 @@ export function SecurityChecklistCard({
             {item.settingsAnchor && (
               <div style={{ marginTop: 8 }}>
                 <button type="button" className="btn sm" onClick={() => onJump(item.settingsAnchor!)}>
-                  前往对应设置
+                  {t("security.goto")}
                 </button>
               </div>
             )}
@@ -970,7 +972,7 @@ export function SecurityChecklistCard({
         {oks.length > 0 && (
           <div>
             <button type="button" className="btn ghost sm" onClick={() => setShowOk((v) => !v)}>
-              {showOk ? "收起已通过的检查" : `已通过的检查（${oks.length}）`}
+              {showOk ? t("security.hideOk") : t("security.showOk", { count: oks.length })}
             </button>
             {showOk && (
               <div className="stack" style={{ marginTop: 8 }}>
@@ -978,7 +980,7 @@ export function SecurityChecklistCard({
                   <div key={item.id} className="callout good">
                     <div className="between">
                       <strong>{item.title}</strong>
-                      <Badge kind="good">通过</Badge>
+                      <Badge kind="good">{t("security.passed")}</Badge>
                     </div>
                     <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
                       {item.detail}
@@ -1000,6 +1002,7 @@ export function SecurityChecklistCard({
 }
 
 export function SettingsView() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const {
     status,
@@ -1127,16 +1130,16 @@ export function SettingsView() {
   }
 
   const NAV_ITEMS: { id: SettingsTab; label: string; icon: typeof Palette; danger?: boolean }[] = [
-    { id: "general", label: "通用与外观", icon: Palette },
-    { id: "security", label: "安全与凭据", icon: ShieldCheck },
-    { id: "workspace", label: "工作空间与服务", icon: FolderKanban },
-    { id: "about", label: "关于与更新", icon: Rocket },
-    { id: "danger", label: "高危与还原", icon: AlertTriangle, danger: true },
+    { id: "general", label: t("settings.nav.general"), icon: Palette },
+    { id: "security", label: t("settings.nav.security"), icon: ShieldCheck },
+    { id: "workspace", label: t("settings.nav.workspace"), icon: FolderKanban },
+    { id: "about", label: t("settings.nav.about"), icon: Rocket },
+    { id: "danger", label: t("settings.nav.danger"), icon: AlertTriangle, danger: true },
   ];
 
   return (
     <div className="stack-lg">
-      <PageHead title="设置" desc="工作空间安全、应用偏好与账户配置" />
+      <PageHead title={t("settings.title")} desc={t("settings.desc")} />
 
       <ErrorDialog message={err} onClose={() => setErr("")} />
       {msg && <div className="callout info">{msg}</div>}
@@ -1174,7 +1177,9 @@ export function SettingsView() {
           {/* TAB 1: 通用与外观 */}
           {activeTab === "general" && (
             <>
-              <Card title="界面主题与色彩风格">
+              <LanguageCard />
+
+              <Card title={t("settings.themeCard")}>
                 <div className="stack">
                   <div className="choice-row">
                     {THEME_OPTIONS.map((opt) => {
@@ -1188,7 +1193,7 @@ export function SettingsView() {
                           onClick={() => setTheme(opt.id)}
                         >
                           <div className="row" style={{ justifyContent: "space-between", marginBottom: 3 }}>
-                            <strong>{opt.name}</strong>
+                            <strong>{t(`theme.options.${opt.id}.name`)}</strong>
                             <span
                               style={{
                                 display: "inline-block",
@@ -1200,7 +1205,7 @@ export function SettingsView() {
                               }}
                             />
                           </div>
-                          <div className="muted sm">{opt.desc}</div>
+                          <div className="muted sm">{t(`theme.options.${opt.id}.desc`)}</div>
                         </button>
                       );
                     })}
@@ -1208,7 +1213,7 @@ export function SettingsView() {
                 </div>
               </Card>
 
-              <Card title="解锁开门动画">
+              <Card title={t("settings.animCard")}>
                 <div className="field">
                   <div className="between">
                     <div>
@@ -1308,7 +1313,7 @@ export function SettingsView() {
                 </div>
               </Card>
 
-              <Card title="系统与窗口行为">
+              <Card title={t("settings.windowCard")}>
                 <div className="stack">
                   <div className="field">
                     <div className="between">
@@ -1337,7 +1342,7 @@ export function SettingsView() {
                   <div className="field">
                     <FieldLabel name="关闭主窗口动作" tip="点击主界面右上方关闭按钮时的响应规则。" />
                     <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
-                      当前设置：<strong>{closeActionLabel(status?.closeAction)}</strong>。可在确认框勾选「记住我的选择」。从托盘重新打开时，按免验证天数决定是否重新解锁。
+                      {t("settings.closeCurrent", { action: closeActionLabel(status?.closeAction, t) })}
                     </div>
                     {status?.closeAction && (
                       <div>

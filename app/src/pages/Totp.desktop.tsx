@@ -1,27 +1,29 @@
 import { Plus, Scan, ShieldCheck } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { PageHead, Empty } from "../ui/common";
 import { useTotpModel } from "../shared/hooks/useTotpModel";
 import { TotpDialogs, TotpEntries, TotpFilters, TotpViewSwitcher } from "./Totp.shared";
 
 export function TotpDesktop() {
+  const { t } = useTranslation();
   const m = useTotpModel();
 
   return (
     <div className="stack-lg">
       <PageHead
-        title="2FA / TOTP"
-        desc="默认掩码保护，点击眼睛查看验证码。支持卡片/列表切换。"
+        title={t("pages.totpTitle")}
+        desc={t("pages.totpDesc")}
         actions={
           <>
             <TotpViewSwitcher view={m.view} setViewMode={m.setViewMode} />
             <button type="button" className="btn sm" disabled={m.busy} onClick={m.scanScreen}>
-              <Scan size={13} /> 扫描屏幕
+              <Scan size={13} /> {t("pages.scanScreen")}
             </button>
             <button type="button" className="btn sm" onClick={m.importImage}>
-              导入图片
+              {t("pages.importImage")}
             </button>
             <button type="button" className="btn primary sm" disabled={m.writesLocked} onClick={() => m.setEditor({})}>
-              <Plus size={13} /> 添加
+              <Plus size={13} /> {t("pages.add")}
             </button>
           </>
         }

@@ -1,4 +1,5 @@
 import { Check, Copy, Edit3, KeyRound, Shield } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Badge, Empty } from "../ui/common";
 import { useOverviewModel } from "../shared/hooks/useOverviewModel";
 import { OverviewIdentityDialogs } from "./Overview.modals";
@@ -20,6 +21,7 @@ function getAvatarBg(name: string): string {
 }
 
 export function OverviewMobile() {
+  const { t } = useTranslation();
   const m = useOverviewModel();
 
   return (
@@ -29,23 +31,23 @@ export function OverviewMobile() {
         <div className="stat-card">
           <div className="stat-card-title">
             <Shield size={14} style={{ color: "var(--accent)" }} />
-            <span>身份总数</span>
+            <span>{t("pages.idCount")}</span>
           </div>
           <div className="stat-card-body">
             <div className="stat-card-val">{m.stats.totalIdentities}</div>
-            <div className="stat-card-sub">已登记身份</div>
+            <div className="stat-card-sub">{t("pages.idRegistered")}</div>
           </div>
         </div>
 
         <div className="stat-card">
           <div className="stat-card-title">
             <KeyRound size={14} style={{ color: "var(--amber)" }} />
-            <span>已入库密钥</span>
+            <span>{t("pages.keyCount")}</span>
           </div>
           <div className="stat-card-body">
             <div className="stat-card-val">{m.stats.totalKeys}</div>
             <div className="stat-card-sub" style={{ color: "var(--green)" }}>
-              全部加密保护
+              {t("pages.allEncrypted")}
             </div>
           </div>
         </div>
@@ -53,7 +55,7 @@ export function OverviewMobile() {
 
       {m.identities.length === 0 ? (
         <div className="card" style={{ padding: "30px 10px" }}>
-          <Empty icon="🧑‍💻" text="还没有 Git 身份。请在电脑上创建后同步到手机。" />
+          <Empty icon="🧑‍💻" text={t("pages.noIdentities")} />
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>

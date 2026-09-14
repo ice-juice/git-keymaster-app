@@ -1,26 +1,28 @@
 import { Plus, ChevronsDown, ChevronsUp, ShieldCheck } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { PageHead } from "../ui/common";
 import { useAccountsModel } from "../shared/hooks/useAccountsModel";
 import { AccountsDialogs, AccountsFilters, AccountsList } from "./Accounts.shared";
 
 export function AccountsDesktop() {
+  const { t } = useTranslation();
   const m = useAccountsModel();
 
   return (
     <div className="stack-lg">
       <PageHead
-        title="隐私账号"
-        desc="同平台多账号聚合。点击平台栏折叠；密码与关联 2FA 默认掩码。"
+        title={t("pages.accountsTitle")}
+        desc={t("pages.accountsDesc")}
         actions={
           <>
             <button type="button" className="btn sm" onClick={m.expandAll}>
-              <ChevronsDown size={13} /> 全部展开
+              <ChevronsDown size={13} /> {t("pages.expandAll")}
             </button>
             <button type="button" className="btn sm" onClick={m.collapseAll}>
-              <ChevronsUp size={13} /> 全部折叠
+              <ChevronsUp size={13} /> {t("pages.collapseAll")}
             </button>
             <button type="button" className="btn primary sm" disabled={m.writesLocked} onClick={() => m.setEditor({})}>
-              <Plus size={13} /> 添加账号
+              <Plus size={13} /> {t("pages.addAccount")}
             </button>
           </>
         }

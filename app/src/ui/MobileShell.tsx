@@ -8,9 +8,10 @@ import {
   ShieldCheck,
   UserRound,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { AppLogo } from "./AppLogo";
 import { useApp } from "../store";
-import { APP_NAME } from "../lib/config";
+import { useAppName } from "../lib/config";
 
 /**
  * 移动端外壳：顶部精简标题 + 内容区 + 底部 Tab。
@@ -21,25 +22,28 @@ import { APP_NAME } from "../lib/config";
  * - SSH 配置 / Agent / 仓库 / 克隆四个桌面专属页面不进导航。
  */
 
-const TABS = [
-  { to: "/", label: "总览", icon: LayoutDashboard, end: true },
-  { to: "/totp", label: "2FA", icon: ShieldCheck },
-  { to: "/accounts", label: "账密", icon: UserRound },
-  { to: "/sync", label: "同步", icon: Cloud },
-  { to: "/settings", label: "设置", icon: SettingsIcon },
-];
-
-const PAGE_TITLE: Record<string, string> = {
-  "/": "身份",
-  "/totp": "2FA",
-  "/accounts": "账密",
-  "/sync": "同步",
-  "/settings": "设置",
-};
-
 export function MobileShell({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { lock, writesLocked, startupNote } = useApp();
   const { pathname } = useLocation();
+  const APP_NAME = useAppName();
+
+  const TABS = [
+    { to: "/", label: t("mobileNav.overview"), icon: LayoutDashboard, end: true },
+    { to: "/totp", label: t("mobileNav.totp"), icon: ShieldCheck },
+    { to: "/accounts", label: t("mobileNav.accounts"), icon: UserRound },
+    { to: "/sync", label: t("mobileNav.sync"), icon: Cloud },
+    { to: "/settings", label: t("mobileNav.settings"), icon: SettingsIcon },
+  ];
+
+  const PAGE_TITLE: Record<string, string> = {
+    "/": t("page.overview"),
+    "/totp": t("page.totp"),
+    "/accounts": t("page.accounts"),
+    "/sync": t("page.sync"),
+    "/settings": t("page.settings"),
+  };
+
   const pageTitle = PAGE_TITLE[pathname] || APP_NAME;
 
   return (
@@ -54,7 +58,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
         <button
           type="button"
           className="m-icon-btn"
-          aria-label="立即锁定"
+          aria-label={t("nav.lockNow")}
           onClick={() => lock()}
         >
           <Lock size={18} />
@@ -64,25 +68,25 @@ export function MobileShell({ children }: { children: ReactNode }) {
       <main className="m-content">
         {writesLocked && (
           <div className="startup-lock-bar" role="status">
-            <strong>同步中</strong>
-            <span>{startupNote || "正在从云端同步，可浏览，暂不可修改。"}</span>
+            <strong>{t("startup.syncing")}</strong>
+            <span>{startupNote || t("startup.syncingNote")}</span>
           </div>
         )}
         {children}
       </main>
 
       <nav className="m-tabbar">
-        {TABS.map((t) => {
-          const Icon = t.icon;
+        {TABS.map((tab) => {
+          const Icon = tab.icon;
           return (
             <NavLink
-              key={t.to}
-              to={t.to}
-              end={t.end}
+              key={tab.to}
+              to={tab.to}
+              end={tab.end}
               className={({ isActive }) => "m-tab" + (isActive ? " active" : "")}
             >
               <Icon size={20} />
-              <span>{t.label}</span>
+              <span>{tab.label}</span>
             </NavLink>
           );
         })}

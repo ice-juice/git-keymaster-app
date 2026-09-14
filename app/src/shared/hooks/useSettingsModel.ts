@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import {
   api,
   errMessage,
@@ -24,16 +25,16 @@ export function scrollToSettingAnchor(anchor: string) {
   el?.scrollIntoView({ behavior: "smooth", block: "center" });
 }
 
-export function closeActionLabel(action: "tray" | "quit" | null | undefined): string {
-  if (action === "tray") return "自动最小化到托盘";
-  if (action === "quit") return "直接退出程序";
-  return "弹出二次确认";
+export function closeActionLabel(action: "tray" | "quit" | null | undefined, t: (key: string) => string): string {
+  if (action === "tray") return t("settings.closeTray");
+  if (action === "quit") return t("settings.closeQuit");
+  return t("settings.closeAsk");
 }
 
-export function levelBadge(level: SecurityLevel): { kind: string; label: string } {
-  if (level === "risk") return { kind: "danger", label: "有风险" };
-  if (level === "caution") return { kind: "warn", label: "需留意" };
-  return { kind: "good", label: "安全" };
+export function levelBadge(level: SecurityLevel, t: (key: string) => string): { kind: string; label: string } {
+  if (level === "risk") return { kind: "danger", label: t("security.risk") };
+  if (level === "caution") return { kind: "warn", label: t("security.caution") };
+  return { kind: "good", label: t("security.safe") };
 }
 
 export function findingCallout(severity: SecurityFinding["severity"]): string {
@@ -52,6 +53,7 @@ export function formatExpiry(iso: string): string {
 }
 
 export function useSettingsModel() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const {
     status,
@@ -118,12 +120,12 @@ export function useSettingsModel() {
   async function changePassword() {
     setErr("");
     setMsg("");
-    if (newPw.length < 8) return setErr("新密码至少 8 位");
-    if (newPw !== newPw2) return setErr("两次输入的新密码不一致");
+    if (newPw.length < 8) return setErr(t("settings.pwMin"));
+    if (newPw !== newPw2) return setErr(t("settings.pwMismatch"));
     setBusy(true);
     try {
       await api.changePassword(oldPw, newPw);
-      setMsg("访问密码已更新");
+      setMsg(t("settings.pwUpdated"));
       setOldPw("");
       setNewPw("");
       setNewPw2("");
@@ -154,7 +156,7 @@ export function useSettingsModel() {
     setBusy(true);
     try {
       await api.setLaunchAtLogin(enabled);
-      setMsg(enabled ? "已打开开机自启动" : "已关闭开机自启动");
+      setMsg(enabled ? t("settings.launchOn") : t("settings.launchOff"));
       await refresh();
     } catch (e) {
       setErr(errMessage(e));
@@ -166,11 +168,11 @@ export function useSettingsModel() {
   async function saveGrace() {
     setErr("");
     const n = Number(graceDays);
-    if (!Number.isFinite(n) || n < 0 || n > 30) return setErr("免验证天数请填写 0 到 30");
+    if (!Number.isFinite(n) || n < 0 || n > 30) return setErr(t("settings.graceRange"));
     setBusy(true);
     try {
       await api.setGraceDays(Math.floor(n));
-      setMsg(n === 0 ? "已关闭免验证，下次启动需要访问密码" : `已设置 ${Math.floor(n)} 天内开机免验证`);
+      setMsg(n === 0 ? t("settings.graceOff") : t("settings.graceOn", { days: Math.floor(n) }));
       await refresh();
     } catch (e) {
       setErr(errMessage(e));
@@ -184,7 +186,7 @@ export function useSettingsModel() {
     setBusy(true);
     try {
       await api.setRevealGraceMinutes(Number(target));
-      setMsg("已保存免密查看时效");
+      setMsg(t("settings.revealSaved"));
       setChecklistNonce((n) => n + 1);
     } catch (e) {
       setErr(errMessage(e));
@@ -198,7 +200,7 @@ export function useSettingsModel() {
     setBusy(true);
     try {
       await api.setClipboardClearSeconds(Number(target));
-      setMsg("已保存剪贴板清空时间");
+      setMsg(t("settings.clipSaved"));
       setChecklistNonce((n) => n + 1);
     } catch (e) {
       setErr(errMessage(e));
@@ -212,7 +214,7 @@ export function useSettingsModel() {
     setBusy(true);
     try {
       await api.setAccountHistoryLimit(Number(target));
-      setMsg("已保存历史条数上限");
+      setMsg(t("settings.histSaved"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -228,7 +230,7 @@ export function useSettingsModel() {
       await api.biometricEnable(password);
       setBioPw("");
       setBio(await api.biometricStatus());
-      setMsg("已开启指纹解锁");
+      setMsg(t("settings.bioOn"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -244,7 +246,7 @@ export function useSettingsModel() {
         if (bio?.enabled) await api.biometricDisable();
         await api.setBiometricMethod("password");
         setBio(await api.biometricStatus());
-        setMsg("已改为访问密码解锁");
+        setMsg(t("settings.bioPassword"));
         return;
       }
       await api.setBiometricMethod("fingerprint");
@@ -263,7 +265,7 @@ export function useSettingsModel() {
       await api.biometricDisable();
       setBio(await api.biometricStatus());
       await api.setBiometricMethod("password");
-      setMsg("已关闭指纹解锁");
+      setMsg(t("settings.bioOff"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -300,7 +302,7 @@ export function useSettingsModel() {
     setBusy(true);
     try {
       await api.clearClosePreference();
-      setMsg("已恢复为每次关闭都询问");
+      setMsg(t("settings.closeReset"));
       await refresh();
     } catch (e) {
       setErr(errMessage(e));

@@ -15,6 +15,7 @@ import {
   QrCode,
   Camera,
 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
@@ -42,6 +43,7 @@ const AUTO_PRESETS: { label: string; minutes: number }[] = [
 ];
 
 export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
+  const { t } = useTranslation();
   const { writesLocked } = useApp();
   const compact = variant === "mobile";
   const [activeTab, setActiveTab] = useState<"cloud" | "backup">("cloud");
@@ -521,8 +523,8 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
         />
       )}
       <PageHead
-        title="云端同步与备份"
-        desc="启动时自动拉取并检查一次；之后按定时规则与本地编辑推送。进入本页不会重复探测云端。"
+        title={t("pages.syncTitle")}
+        desc={t("pages.syncDesc")}
         actions={
           compact ? (
             <div className="m-seg">
@@ -532,7 +534,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 onClick={() => setActiveTab("cloud")}
               >
                 <Cloud size={14} />
-                云端
+                {t("pages.cloud")}
               </button>
               <button
                 type="button"

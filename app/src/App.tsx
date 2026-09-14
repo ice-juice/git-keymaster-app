@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { HashRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/ipc";
@@ -40,6 +41,7 @@ function AppShell({ compact }: { compact: boolean }) {
 }
 
 export default function App() {
+  const { t } = useTranslation();
   const {
     status,
     loading,
@@ -128,7 +130,7 @@ export default function App() {
   if (loading) {
     screen = (
       <div className="center-stage">
-        <div className="muted">加载中…</div>
+        <div className="muted">{t("common.loading")}</div>
       </div>
     );
   } else if (!status?.initialized) {

@@ -1,16 +1,18 @@
 import { RefreshCw, Plus, Copy, Check, Activity, Edit3, AlertCircle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { PageHead, Empty, Badge } from "../ui/common";
 import { getAvatarBg, useOverviewModel } from "../shared/hooks/useOverviewModel";
 import { OverviewIdentityDialogs } from "./Overview.modals";
 
 export function OverviewDesktop() {
+  const { t } = useTranslation();
   const m = useOverviewModel();
 
   return (
     <div className="stack-lg">
       <PageHead
-        title="身份总览"
-        desc="所有 Git 身份的密钥、配置、Agent 与连通状态"
+        title={t("pages.overviewTitle")}
+        desc={t("pages.overviewDesc")}
         actions={
           <>
             <button
@@ -21,7 +23,7 @@ export function OverviewDesktop() {
               title="重新检测配置、Agent与所有身份的SSH连通性"
             >
               <RefreshCw size={13} className={m.loadingAll ? "animate-spin" : ""} />
-              <span>{m.loadingAll ? "体检中…" : "一键体检"}</span>
+              <span>{m.loadingAll ? t("pages.healthChecking") : t("pages.healthCheck")}</span>
             </button>
             <button
               type="button"
@@ -31,7 +33,7 @@ export function OverviewDesktop() {
               onClick={m.goNewIdentity}
             >
               <Plus size={14} />
-              <span>新建身份</span>
+              <span>{t("pages.newIdentity")}</span>
             </button>
           </>
         }

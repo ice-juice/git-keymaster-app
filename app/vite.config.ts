@@ -26,6 +26,9 @@ export default defineConfig(({ mode }) => {
       hmr: process.env.TAURI_DEV_HOST
         ? { protocol: "ws", host: process.env.TAURI_DEV_HOST, port: 5174 }
         : undefined,
+      fs: {
+        allow: ['..'],
+      },
       watch: {
         // Cargo 编译时会锁 target 下的 dll；Vite 监听这些文件会在 Windows 上 EBUSY 崩溃
         ignored: ['**/src-tauri/**'],

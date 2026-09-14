@@ -1,11 +1,14 @@
 import { Camera, Cloud, Eye, EyeOff, FolderPlus, Moon, Palette, Sun } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { writeClipboard } from "../lib/clipboard";
-import { APP_LANG, APP_NAME } from "../lib/config";
+import { useAppName } from "../lib/config";
 import { AppLogo } from "../ui/AppLogo";
 import { S3SetupGuide, S3GuideButton } from "../ui/S3SetupGuide";
 import { useInitModel } from "../shared/hooks/useInitModel";
 
 export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
+  const { t } = useTranslation();
+  const APP_NAME = useAppName();
   const m = useInitModel(variant);
   const {
     mode,
@@ -76,18 +79,12 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
               className="muted"
               style={{ padding: "6px 8px 10px", fontSize: 12, fontWeight: 600, color: "var(--sidebar-text)" }}
             >
-              {mode === "restore"
-                ? APP_LANG === "en"
-                  ? "Cloud Restore"
-                  : "从云端恢复"
-                : APP_LANG === "en"
-                  ? "Workspace Init"
-                  : "工作空间初始化"}
+              {mode === "restore" ? t("init.sidebarRestore") : t("init.sidebarCreate")}
             </div>
           )}
           {mode && (
             <>
-              <div className="nav-group">向导步骤</div>
+              <div className="nav-group">{t("init.wizardSteps")}</div>
               <div className="stack" style={{ gap: 3 }}>
                 {steps.map((s, i) => (
                   <div
@@ -124,13 +121,15 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
               type="button"
               className="nav-item"
               onClick={toggleTheme}
-              title="点击切换界面皮肤风格"
+              title={t("theme.toggle")}
             >
               <span className="ic">
                 {theme === "light" ? <Sun size={14} /> : theme === "dark" ? <Moon size={14} /> : <Palette size={14} />}
               </span>
               <span style={{ fontSize: 11.5, color: "var(--text-soft)" }}>
-                皮肤：{theme === "light" ? "浅色" : theme === "dark" ? "深色" : "黛蓝"}
+                {t("theme.skin", {
+                  name: theme === "light" ? t("theme.light") : theme === "dark" ? t("theme.dark") : t("theme.navy"),
+                })}
               </span>
             </button>
           </div>
@@ -156,13 +155,13 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
               <div className="init-mobile-copy">
                 <div className="init-mobile-brand">{APP_NAME}</div>
                 <div className="init-mobile-page">
-                  {mode ? (mode === "restore" ? "从云端恢复" : "创建保险库") : "开始使用"}
+                  {mode ? (mode === "restore" ? t("init.pageRestore") : t("init.pageCreate")) : t("init.pageStart")}
                 </div>
               </div>
               <button
                 type="button"
                 className="m-icon-btn"
-                aria-label="切换主题"
+                aria-label={t("theme.toggle")}
                 onClick={toggleTheme}
               >
                 {theme === "light" ? <Sun size={18} /> : theme === "dark" ? <Moon size={18} /> : <Palette size={18} />}
@@ -213,19 +212,15 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                   <button type="button" className="mode-pick" onClick={() => chooseMode("create")}>
                     <FolderPlus size={18} />
                     <span>
-                      <strong>创建新工作空间</strong>
-                      <small>首次使用。生成本机访问密码与恢复密钥。</small>
+                      <strong>{t("init.createTitle")}</strong>
+                      <small>{t("init.createDesc")}</small>
                     </span>
                   </button>
                   <button type="button" className="mode-pick" onClick={() => chooseMode("restore")}>
                     <Cloud size={18} />
                     <span>
-                      <strong>从云端恢复</strong>
-                      <small>
-                        {compact
-                          ? "电脑须已接入云并成功推送。手机扫码写入云配置后，还要输入恢复密钥才能解开。"
-                          : "已有另一台设备。填写云存储并导入那台设备的恢复密钥。"}
-                      </small>
+                      <strong>{t("init.restoreTitle")}</strong>
+                      <small>{compact ? t("init.restoreDescMobile") : t("init.restoreDesc")}</small>
                     </span>
                   </button>
                 </div>
@@ -235,27 +230,27 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                 <div className="stack" style={{ gap: 10 }}>
                   {mode === "create" && alreadyCreated && (
                     <div className="callout warn">
-                      已在「{createdPath}」创建过工作空间。更换目录会创建新空间，原目录不会自动删除。
+                      {t("init.alreadyCreated", { path: createdPath })}
                     </div>
                   )}
                   {mode === "restore" && (
-                    <div className="callout info">请选择一个尚未初始化的空目录作为本机工作空间。</div>
+                    <div className="callout info">{t("init.pickEmpty")}</div>
                   )}
                   <div className="field">
-                    <label className="field-label">工作空间目录</label>
+                    <label className="field-label">{t("init.wsDir")}</label>
                     <div className="path-pick">
                       <input
                         className="input mono"
-                        placeholder="点击「浏览」选择，或直接粘贴路径"
+                        placeholder={t("init.wsDirPh")}
                         value={path}
                         onChange={(e) => setPath(e.target.value)}
                         onKeyDown={(e) => e.key === "Enter" && checkPath()}
                       />
                       <button type="button" className="btn" onClick={pickDir}>
-                        浏览…
+                        {t("init.browse")}
                       </button>
                     </div>
-                    <div className="hint">请用本地独立目录，尽量只含英文、数字和连字符，例如 D:\git-keymaster-ws。不要放进 OneDrive / 坚果云，也不要用空格或中文路径（Git / OpenSSH 容易出错）。</div>
+                    <div className="hint">{t("init.pathHint")}</div>
                   </div>
                   {warning && <div className="callout warn">⚠️ {warning}</div>}
                 </div>
@@ -266,28 +261,28 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                   {warning && <div className="callout warn">⚠️ {warning}</div>}
                   {alreadyCreated && !switchingPath && (
                     <div className="callout info">
-                      工作空间已创建。在此修改密码只会更新访问密码，恢复密钥不变。
+                      {t("init.createdKeepKey")}
                     </div>
                   )}
                   {switchingPath && (
                     <div className="callout warn">
-                      ⚠️ 将在新目录创建另一个工作空间，并生成新的恢复密钥。
+                      ⚠️ {t("init.newDirWarn")}
                     </div>
                   )}
                   <PasswordFields pw={pw} pw2={pw2} setPw={setPw} setPw2={setPw2} strength={strength} onEnter={doInit} />
-                  <div className="callout info">🔑 访问密码仅保存在本地进行加密校验，请牢记。</div>
+                  <div className="callout info">🔑 {t("init.passwordLocal")}</div>
                 </div>
               )}
 
               {mode === "create" && step === 2 && (
                 <div className="stack" style={{ gap: 10 }}>
                   <div className="callout danger">
-                    ⚠️ 这是唯一一次完整显示恢复密钥。请立刻复制并妥善离线保存！
+                    ⚠️ {t("init.recoveryOnce")}
                   </div>
                   <div className="reckey">{recovery}</div>
                   <div className="row">
                     <button type="button" className="btn primary sm" onClick={() => writeClipboard(recovery, true)}>
-                      复制恢复密钥
+                      {t("init.copyRecovery")}
                     </button>
                   </div>
                 </div>
@@ -295,10 +290,10 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
 
               {mode === "create" && step === 3 && (
                 <div className="stack" style={{ gap: 10 }}>
-                  <div className="muted">请把刚才保存的恢复密钥完整填入下方（支持粘贴）：</div>
+                  <div className="muted">{t("init.pasteRecovery")}</div>
                   <textarea
                     className="input mono"
-                    placeholder="粘贴或输入恢复密钥（如 GAM1-...）"
+                    placeholder={t("init.recoveryPh")}
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}
                     style={{ minHeight: 76 }}
@@ -309,27 +304,25 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
               {mode === "create" && step === 4 && (
                 <div className="stack" style={{ textAlign: "center", padding: "16px 0", gap: 6 }}>
                   <div style={{ fontSize: 36, marginBottom: 2 }}>🎉</div>
-                  <div className="title-lg" style={{ fontSize: 16 }}>加密工作空间已就绪</div>
-                  <div className="muted">你可以开始导入现有 SSH 密钥，或者新建多平台 Git 身份。</div>
+                  <div className="title-lg" style={{ fontSize: 16 }}>{t("init.readyTitle")}</div>
+                  <div className="muted">{t("init.readyDesc")}</div>
                 </div>
               )}
 
               {mode === "restore" && step === 1 && (
                 <div className="stack" style={{ gap: 10 }}>
                   <div className="callout info sm">
-                    {compact
-                      ? "电脑须已接入云并成功推送。扫码只带入云存储配置，不含恢复密钥；扫完后仍要输入恢复密钥才能解开保险库。"
-                      : "填写必须和旧设备完全一样。还没有这些信息？点「小白引导」按步骤到云控制台建桶、拿密钥。"}
+                    {compact ? t("init.restoreCloudHintMobile") : t("init.restoreCloudHint")}
                   </div>
                   {compact && (
                     <button type="button" className="btn primary" disabled={busy} onClick={scanS3Qr}>
                       <Camera size={16} />
-                      {busy ? "正在识别…" : "扫描电脑上的二维码"}
+                      {busy ? t("init.scanning") : t("init.scanComputerQr")}
                     </button>
                   )}
                   <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
                     <S3GuideButton onClick={() => setGuideOpen(true)} />
-                    <span className="muted" style={{ fontSize: 11, alignSelf: "center" }}>快速预设</span>
+                    <span className="muted" style={{ fontSize: 11, alignSelf: "center" }}>{t("init.quickPreset")}</span>
                     <button type="button" className="btn ghost sm" onClick={() => { setGuideTab("r2"); setS3((p) => ({ ...p, endpoint: "https://<account_id>.r2.cloudflarestorage.com", region: "auto", prefix: p.prefix || "gam-sync/" })); }}>
                       Cloudflare R2
                     </button>
@@ -342,19 +335,19 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div className="field">
-                      <label className="field-label">存储端点</label>
+                      <label className="field-label">{t("init.endpoint")}</label>
                       <input className="input" placeholder="https://<account_id>.r2.cloudflarestorage.com" value={s3.endpoint} onChange={(e) => setS3({ ...s3, endpoint: e.target.value })} />
                     </div>
                     <div className="field">
-                      <label className="field-label">存储桶</label>
+                      <label className="field-label">{t("init.bucket")}</label>
                       <input className="input" placeholder="my-git-vault-backup" value={s3.bucket} onChange={(e) => setS3({ ...s3, bucket: e.target.value })} />
                     </div>
                     <div className="field">
-                      <label className="field-label">区域</label>
+                      <label className="field-label">{t("init.region")}</label>
                       <input className="input" placeholder="auto 或 us-east-1" value={s3.region} onChange={(e) => setS3({ ...s3, region: e.target.value })} />
                     </div>
                     <div className="field">
-                      <label className="field-label">路径前缀</label>
+                      <label className="field-label">{t("init.prefix")}</label>
                       <input className="input" placeholder="gam-sync/" value={s3.prefix} onChange={(e) => setS3({ ...s3, prefix: e.target.value })} />
                     </div>
                     <div className="field">
@@ -386,14 +379,14 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                   <div className="row">
                     {compact && (
                       <button type="button" className="btn ghost sm" disabled={busy} onClick={scanS3Qr}>
-                        <Camera size={13} /> 扫码
+                        <Camera size={13} /> {t("init.scan")}
                       </button>
                     )}
-                    <button type="button" className="btn ghost sm" disabled={busy} onClick={importS3File}>
-                      导入配置文件
+                      <button type="button" className="btn ghost sm" disabled={busy} onClick={importS3File}>
+                      {t("init.importFile")}
                     </button>
                     <button type="button" className="btn ghost sm" disabled={busy} onClick={testS3}>
-                      {busy ? "正在探测…" : "测试连通性"}
+                      {busy ? t("init.testing") : t("init.testConn")}
                     </button>
                   </div>
                 </div>
@@ -402,13 +395,11 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
               {mode === "restore" && step === 2 && (
                 <div className="stack" style={{ gap: 10 }}>
                   <div className="callout warn">
-                    {compact
-                      ? "扫码只写入了云配置。请输入旧设备的恢复密钥才能解开保险库；二维码里没有恢复密钥。"
-                      : "请输入旧设备初始化时保存的恢复密钥（GAM1-…）。填错无法解密云端数据。"}
+                    {compact ? t("init.restoreKeyWarnMobile") : t("init.restoreKeyWarn")}
                   </div>
                   <textarea
                     className="input mono"
-                    placeholder="粘贴恢复密钥（如 GAM1-...）"
+                    placeholder={t("init.restoreKeyPh")}
                     value={restoreKey}
                     onChange={(e) => {
                       setRestoreKey(e.target.value);
@@ -418,7 +409,7 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                   />
                   <div>
                     <button type="button" className="btn ghost sm" disabled={busy} onClick={doPreview}>
-                      {busy ? "正在验证…" : "验证恢复密钥并预览"}
+                      {busy ? t("init.verifying") : t("init.verifyPreview")}
                     </button>
                   </div>
                   {preview && preview.hasManifest && (
@@ -485,44 +476,44 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                 disabled={!mode || (mode === "create" && step >= 4) || (mode === "restore" && step >= 4)}
                 onClick={goBack}
               >
-                {mode && step === 0 ? "返回" : "上一步"}
+                {mode && step === 0 ? t("common.back") : t("init.prev")}
               </button>
 
               <div>
                 {mode && step === 0 && !compact && (
                   <button type="button" className="btn primary" onClick={checkPath}>
-                    下一步
+                    {t("common.next")}
                   </button>
                 )}
                 {mode === "create" && step === 1 && (
                   <button type="button" className="btn primary" disabled={busy} onClick={doInit}>
                     {busy
-                      ? "处理中…"
+                      ? t("common.busy")
                       : switchingPath
-                        ? "在新目录创建工作空间"
+                        ? t("init.createInNewDir")
                         : alreadyCreated
-                          ? "保存并继续"
-                          : "创建工作空间"}
+                          ? t("init.saveContinue")
+                          : t("init.createWs")}
                   </button>
                 )}
                 {mode === "create" && step === 2 && (
                   <button type="button" className="btn primary" onClick={() => setStep(3)}>
-                    我已安全保存，继续
+                    {t("init.savedContinue")}
                   </button>
                 )}
                 {mode === "create" && step === 3 && (
                   <button type="button" className="btn primary" onClick={verifyConfirm}>
-                    校验并完成
+                    {t("init.verifyFinish")}
                   </button>
                 )}
                 {mode === "create" && step === 4 && (
                   <button type="button" className="btn primary" onClick={() => refresh()}>
-                    进入主界面
+                    {t("init.enterApp")}
                   </button>
                 )}
                 {mode === "restore" && step === 1 && (
                   <button type="button" className="btn primary" onClick={goRestoreCloud}>
-                    下一步
+                    {t("common.next")}
                   </button>
                 )}
                 {mode === "restore" && step === 2 && (
@@ -535,17 +526,17 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                       setStep(3);
                     }}
                   >
-                    确认预览，继续
+                    {t("init.confirmPreview")}
                   </button>
                 )}
                 {mode === "restore" && step === 3 && (
                   <button type="button" className="btn primary" disabled={busy} onClick={doRestore}>
-                    {busy ? "正在解密并还原…" : "恢复到本机"}
+                    {busy ? t("init.restoring") : t("init.restoreLocal")}
                   </button>
                 )}
                 {mode === "restore" && step === 4 && (
                   <button type="button" className="btn primary" onClick={() => refresh()}>
-                    进入主界面
+                    {t("init.enterApp")}
                   </button>
                 )}
               </div>
@@ -578,15 +569,16 @@ export function PasswordFields({
   strength: string;
   onEnter: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <>
       <div className="field">
-        <label className="field-label">访问密码</label>
+        <label className="field-label">{t("init.password")}</label>
         <input className="input" type="password" value={pw} autoFocus onChange={(e) => setPw(e.target.value)} />
-        <div className="hint">密码强度：{strength}（至少 8 位，包含字母、数字或符号更佳）</div>
+        <div className="hint">{t("init.strength", { level: strength })}</div>
       </div>
       <div className="field">
-        <label className="field-label">确认访问密码</label>
+        <label className="field-label">{t("init.passwordConfirm")}</label>
         <input
           className="input"
           type="password"
@@ -608,10 +600,11 @@ export function RestoreScope({
   setIncludeRepos: (v: boolean) => void;
   repoCount: number;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="card" style={{ padding: "12px 14px" }}>
       <div className="field-label" style={{ marginBottom: 10, fontWeight: 600 }}>
-        自定义恢复范围
+        {t("init.scopeTitle")}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <label
@@ -636,11 +629,11 @@ export function RestoreScope({
           />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 500, fontSize: 13, display: "flex", alignItems: "center", gap: 8 }}>
-              <span>身份、密钥、SSH 配置</span>
-              <span className="badge muted sm">必须恢复</span>
+              <span>{t("init.scopeCore")}</span>
+              <span className="badge muted sm">{t("init.scopeMust")}</span>
             </div>
             <div className="muted sm" style={{ marginTop: 3, fontSize: 12 }}>
-              包含全局身份信息、私钥加密副本以及本地 SSH Bridge 引导配置。
+              {t("init.scopeCoreHint")}
             </div>
           </div>
         </label>
@@ -666,12 +659,12 @@ export function RestoreScope({
           />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 500, fontSize: 13, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <span>仓库登记</span>
-              {repoCount > 0 && <span className="badge sm">云端 {repoCount} 条</span>}
-              <span className="muted sm" style={{ fontWeight: 400 }}>（默认不恢复）</span>
+              <span>{t("init.scopeRepos")}</span>
+              {repoCount > 0 && <span className="badge sm">{t("init.scopeRepoCount", { count: repoCount })}</span>}
+              <span className="muted sm" style={{ fontWeight: 400 }}>{t("init.scopeReposOptional")}</span>
             </div>
             <div className="muted sm" style={{ marginTop: 3, fontSize: 12, lineHeight: 1.4 }}>
-              其他机器上的本地目录路径在本机通常无效。不勾选可保持本机仓库列表干净；恢复后也可随时通过「扫描入库」重新识别本机代码库。
+              {t("init.scopeReposHint")}
             </div>
           </div>
         </label>

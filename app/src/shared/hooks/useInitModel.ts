@@ -1,10 +1,43 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, errCode, errMessage, type CloudRestorePreview, type S3Config } from "../../lib/ipc";
 import { importS3ConfigFromPicker } from "../../lib/s3ConfigPick";
 import { firstS3ConfigJson, scanQrWithCamera } from "../../lib/qrCapture";
 import { useApp } from "../../store";
 import type { S3GuideProvider } from "../../ui/S3SetupGuide";
+
+type Translate = (key: string) => string;
+
+export function createSteps(t: Translate) {
+  return [
+    t("init.steps.selectWs"),
+    t("init.steps.setPassword"),
+    t("init.steps.saveRecovery"),
+    t("init.steps.verifyRecovery"),
+    t("init.steps.done"),
+  ];
+}
+export function restoreSteps(t: Translate) {
+  return [
+    t("init.steps.selectWs"),
+    t("init.steps.cloud"),
+    t("init.steps.recovery"),
+    t("init.steps.newPassword"),
+    t("init.steps.done"),
+  ];
+}
+export function createStepsMobile(t: Translate) {
+  return [
+    t("init.steps.setPassword"),
+    t("init.steps.saveRecovery"),
+    t("init.steps.verifyRecovery"),
+    t("init.steps.done"),
+  ];
+}
+export function restoreStepsMobile(t: Translate) {
+  return [t("init.steps.cloud"), t("init.steps.recovery"), t("init.steps.newPassword"), t("init.steps.done")];
+}
 
 export const CREATE_STEPS = ["选择工作空间", "设置访问密码", "保存恢复密钥", "回填校验", "完成"];
 export const RESTORE_STEPS = ["选择工作空间", "云存储", "恢复密钥", "新访问密码", "完成"];
@@ -28,18 +61,24 @@ export function emptyS3(): S3Config {
   };
 }
 
-export function pwStrength(pw: string): string {
-  if (pw.length < 8) return "弱";
+export function pwStrengthKey(pw: string): "weak" | "medium" | "strong" {
+  if (pw.length < 8) return "weak";
   let score = 0;
   if (/[a-z]/.test(pw)) score++;
   if (/[A-Z]/.test(pw)) score++;
   if (/[0-9]/.test(pw)) score++;
   if (/[^a-zA-Z0-9]/.test(pw)) score++;
   if (pw.length >= 12) score++;
-  return score >= 4 ? "强" : score >= 3 ? "中" : "弱";
+  return score >= 4 ? "strong" : score >= 3 ? "medium" : "weak";
+}
+
+export function pwStrength(pw: string): string {
+  const key = pwStrengthKey(pw);
+  return key === "strong" ? "强" : key === "medium" ? "中" : "弱";
 }
 
 export function useInitModel(variant: "desktop" | "mobile") {
+  const { t } = useTranslation();
   const { refresh, theme, toggleTheme } = useApp();
   const [mode, setMode] = useState<Mode | null>(null);
   const [step, setStep] = useState(0);
@@ -65,9 +104,9 @@ export function useInitModel(variant: "desktop" | "mobile") {
 
   const compact = variant === "mobile";
   const steps = mode === "restore"
-    ? (compact ? RESTORE_STEPS_MOBILE : RESTORE_STEPS)
-    : (compact ? CREATE_STEPS_MOBILE : CREATE_STEPS);
-  const strength = pwStrength(pw);
+    ? (compact ? restoreStepsMobile(t as Translate) : restoreSteps(t as Translate))
+    : (compact ? createStepsMobile(t as Translate) : createSteps(t as Translate));
+  const strength = t(`init.${pwStrengthKey(pw)}`);
   const alreadyCreated = !!createdPath;
   const switchingPath = alreadyCreated && !samePath(path, createdPath);
 
@@ -106,7 +145,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
     const current = path.trim();
     if (current) return current;
     if (!compact) {
-      setErr("请选择或填写工作空间目录");
+      setErr(t("init.needPath"));
       return null;
     }
     try {
@@ -127,7 +166,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "选择工作空间目录",
+        title: t("init.pickDir"),
         defaultPath: path.trim() || undefined,
       });
       if (typeof selected !== "string" || !selected) return;
@@ -142,7 +181,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
 
   async function checkPath() {
     resetErr();
-    if (!path.trim()) return setErr("请选择或填写工作空间目录");
+    if (!path.trim()) return setErr(t("init.needPath"));
     try {
       const r = await api.checkWorkspacePath(path);
       setWarning(r.warning);
@@ -242,7 +281,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
     setTestResult(null);
     try {
       const texts = await scanQrWithCamera({
-        title: "扫描电脑上的云配置二维码",
+        title: t("init.scanQrTitle"),
         hint: "对准电脑端【设置 → 云同步 → 分享配置】生成的二维码",
       });
       if (!texts) return;
@@ -353,33 +392,39 @@ export function useInitModel(variant: "desktop" | "mobile") {
   }
 
   const title =
-    !mode ? "选择初始化方式"
+    !mode ? t("init.chooseTitle")
     : mode === "restore"
-      ? ["选择加密工作空间目录", "填写云存储连接", "输入旧设备恢复密钥", "设置本机访问密码", "已从云端恢复"][step]
+      ? [
+          t("init.titles.selectDir"),
+          t("init.titles.fillCloud"),
+          t("init.titles.oldRecovery"),
+          t("init.titles.setLocalPassword"),
+          t("init.titles.restored"),
+        ][step]
       : [
-          "选择加密工作空间目录",
-          "设置日常访问密码",
-          "妥善保存恢复密钥",
-          "回填校验恢复密钥",
-          "工作空间已就绪",
+          t("init.titles.selectDir"),
+          t("init.titles.setDailyPassword"),
+          t("init.titles.saveKey"),
+          t("init.titles.verifyKey"),
+          t("init.titles.ready"),
         ][step];
 
   const desc =
-    !mode ? "全新使用请创建工作空间；另一台设备已有数据时，用那台设备的恢复密钥从云端还原。"
+    !mode ? t("init.chooseDesc")
     : mode === "restore"
       ? [
-          "还原后的身份与密钥会加密写入这个本地目录。请选择尚未初始化的空目录。",
-          "填写与旧设备完全相同的 R2 / S3 连接信息（含路径前缀）。",
-          "输入旧设备初始化时保存的恢复密钥，用于解开云端数据。",
-          "为本机设置日常访问密码，可以与旧设备不同。旧恢复密钥仍然有效。",
-          "已用同一把主密钥重建工作空间，之后两台设备可以继续云同步。",
+          t("init.descs.restore0"),
+          t("init.descs.restore1"),
+          t("init.descs.restore2"),
+          t("init.descs.restore3"),
+          t("init.descs.restore4"),
         ][step]
       : [
-          "所有密钥和配置文件均加密存储在你的本地目录中，绝不明文上传。",
-          "密码用于本机日常解锁；请牢记，一旦遗忘只能使用恢复密钥重置。",
-          "恢复密钥仅显示一次，是换机或忘记密码时唯一的救命稻草，请离线保存。",
-          "请把刚才保存的恢复密钥完整填入下方，确认你已真正抄录备份。",
-          "加密工作空间已初始化完成，你可以直接进入应用。",
+          t("init.descs.create0"),
+          t("init.descs.create1"),
+          t("init.descs.create2"),
+          t("init.descs.create3"),
+          t("init.descs.create4"),
         ][step];
 
   return {

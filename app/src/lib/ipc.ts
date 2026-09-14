@@ -393,6 +393,8 @@ export interface UpdateCheckResult {
   downloadUrl: string | null;
   platform: string;
   selfUpdateSupported: boolean;
+  sideloadUpdateSupported: boolean;
+  storeUpdateSupported: boolean;
 }
 
 export interface UpdateProgress {
@@ -581,6 +583,10 @@ export const api = {
   downloadAndInstallUpdate: () => invoke<void>("download_and_install_update"),
   skipUpdateVersion: (version: string) => invoke<void>("skip_update_version", { version }),
   getLastUpdateCheck: () => invoke<string | null>("get_last_update_check"),
+
+  getUiLocale: () => invoke<"system" | "zh" | "en">("get_ui_locale"),
+  setUiLocale: (locale: "system" | "zh" | "en") =>
+    invoke<"system" | "zh" | "en">("set_ui_locale", { locale }),
 
   getNetworkProxy: () => invoke<NetworkProxy | null>("get_network_proxy"),
   saveNetworkProxy: (proxy: NetworkProxy | null) => invoke<void>("save_network_proxy", { proxy }),

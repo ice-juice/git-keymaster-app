@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { AlertTriangle, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { api } from "../lib/ipc";
 
 type CloseAction = "tray" | "quit" | "cancel";
 
 export function CloseConfirmHost() {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [remember, setRemember] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -44,8 +46,8 @@ export function CloseConfirmHost() {
     <div className="close-overlay" role="dialog" aria-labelledby="close-dialog-title">
       <div className="close-dialog">
         <div className="close-dialog-titlebar">
-          <span id="close-dialog-title">提示</span>
-          <button type="button" className="close-dialog-x" onClick={() => choose("cancel")} disabled={busy} aria-label="关闭">
+          <span id="close-dialog-title">{t("closeDialog.title")}</span>
+          <button type="button" className="close-dialog-x" onClick={() => choose("cancel")} disabled={busy} aria-label={t("common.close")}>
             <X size={14} />
           </button>
         </div>
@@ -55,18 +57,18 @@ export function CloseConfirmHost() {
             <AlertTriangle size={34} strokeWidth={2.2} />
           </div>
           <div className="close-dialog-content">
-            <div className="close-dialog-q">您点击了关闭按钮，您确定:</div>
+            <div className="close-dialog-q">{t("closeDialog.question")}</div>
             <button type="button" className="close-dialog-opt preferred" disabled={busy} onClick={() => choose("tray")}>
               <span className="close-dialog-arrow">→</span>
-              最小化到托盘
+              {t("closeDialog.tray")}
             </button>
             <button type="button" className="close-dialog-opt" disabled={busy} onClick={() => choose("quit")}>
               <span className="close-dialog-arrow">→</span>
-              退出程序
+              {t("closeDialog.quit")}
             </button>
             <button type="button" className="close-dialog-opt" disabled={busy} onClick={() => choose("cancel")}>
               <span className="close-dialog-arrow">→</span>
-              取消
+              {t("closeDialog.cancel")}
             </button>
           </div>
         </div>
@@ -74,7 +76,7 @@ export function CloseConfirmHost() {
         <div className="close-dialog-footer">
           <label className="close-dialog-remember">
             <input type="checkbox" checked={remember} disabled={busy} onChange={(e) => setRemember(e.target.checked)} />
-            记住我的选择
+            {t("closeDialog.remember")}
           </label>
         </div>
       </div>
