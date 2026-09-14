@@ -81,18 +81,33 @@ function loadCanonicalNotes(version) {
   }).replace(/\s+$/, "\n");
 }
 
-function runGh(args, { ignoreFail = false } = {}) {
-  const result = spawnSync("gh", args, { stdio: "inherit" });
-  if (result.error) {
-    if (ignoreFail) {
-      return result.status ?? 1;
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function runGh(args, { ignoreFail = false, retries = 0 } = {}) {
+  let lastStatus = 1;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const result = spawnSync("gh", args, { stdio: "inherit" });
+    if (result.error) {
+      if (ignoreFail) {
+        return 1;
+      }
+      throw result.error;
     }
-    throw result.error;
+    lastStatus = result.status ?? 1;
+    if (lastStatus === 0 || ignoreFail) {
+      return lastStatus;
+    }
+    if (attempt < retries) {
+      const wait = 2000 * (attempt + 1);
+      console.error(
+        `[sync] gh ${args.slice(0, 2).join(" ")} exit ${lastStatus}; retry ${attempt + 1}/${retries} in ${wait}ms`,
+      );
+      sleepMs(wait);
+    }
   }
-  if ((result.status ?? 1) !== 0 && !ignoreFail) {
-    process.exit(result.status ?? 1);
-  }
-  return result.status ?? 1;
+  process.exit(lastStatus);
 }
 
 function fixPublishedNotes(tag) {
@@ -107,7 +122,7 @@ function fixPublishedNotes(tag) {
     const data = JSON.parse(fs.readFileSync(latestPath, "utf8"));
     data.notes = loadCanonicalNotes(tag.replace(/^v/, ""));
     fs.writeFileSync(latestPath, `${JSON.stringify(data, null, 2)}\n`);
-    runGh(["release", "upload", tag, latestPath, "--repo", REPO, "--clobber"]);
+      runGh(["release", "upload", tag, latestPath, "--repo", REPO, "--clobber"], { retries: 4 });
     console.log(`[sync] restored notes headings for ${tag}`);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -148,7 +163,7 @@ function syncTag(tag) {
     for (const file of uploads) {
       console.log(`[upload] ${path.basename(file)}`);
     }
-    runGh(["release", "upload", tag, ...uploads, "--repo", REPO, "--clobber"]);
+    runGh(["release", "upload", tag, ...uploads, "--repo", REPO, "--clobber"], { retries: 4 });
   }
 
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-latest-"));
@@ -163,7 +178,7 @@ function syncTag(tag) {
       const data = JSON.parse(text);
       data.notes = loadCanonicalNotes(tag.replace(/^v/, ""));
       fs.writeFileSync(latestPath, `${JSON.stringify(data, null, 2)}\n`);
-      runGh(["release", "upload", tag, latestPath, "--repo", REPO, "--clobber"]);
+      runGh(["release", "upload", tag, latestPath, "--repo", REPO, "--clobber"], { retries: 4 });
     }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
