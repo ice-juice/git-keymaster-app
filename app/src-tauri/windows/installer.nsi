@@ -1,6 +1,6 @@
 ; Forked from Tauri 2.11.3 installer.nsi.
-; Only the default folder name is changed to ASCII GitKeymaster.
-; Shortcuts, Add/Remove Programs and updater identity still use productName (御钥师).
+; 安装目录、卸载项身份固定为 ASCII GitKeymaster。
+; 开始菜单 / ARP 显示名仍跟 productName（御钥师 / Git Keymaster）走。
 Unicode true
 ManifestDPIAware true
 ; Add in `dpiAwareness` `PerMonitorV2` to manifest for Windows 10 1607+ (note this should not affect lower versions since they should be able to ignore this and pick up `dpiAware` `true` set by `ManifestDPIAware true`)
@@ -67,12 +67,35 @@ ${StrLoc}
 !define WEBVIEW2BOOTSTRAPPERPATH "{{webview2_bootstrapper_path}}"
 !define WEBVIEW2INSTALLERPATH "{{webview2_installer_path}}"
 !define MINIMUMWEBVIEW2VERSION "{{minimum_webview2_version}}"
-!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCTNAME}"
+; 卸载项身份跟安装目录走（ASCII GitKeymaster），不要用显示名。
+; 中文包 productName 是「御钥师」、英文包是 Git Keymaster；若 UNINSTKEY 跟显示名走，
+; 自动更新下到另一种语言后会再写一套卸载项，开始菜单里并排出两个程序。
+!define INSTALLIDENTITY "GitKeymaster"
+!define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${INSTALLIDENTITY}"
 !define MANUKEY "Software\${MANUFACTURER}"
-!define MANUPRODUCTKEY "${MANUKEY}\${PRODUCTNAME}"
+!define MANUPRODUCTKEY "${MANUKEY}\${INSTALLIDENTITY}"
+!define LEGACY_DISPLAY_ZH "御钥师"
+!define LEGACY_DISPLAY_EN "Git Keymaster"
+!define LEGACY_UNINSTKEY_ZH "Software\Microsoft\Windows\CurrentVersion\Uninstall\${LEGACY_DISPLAY_ZH}"
+!define LEGACY_UNINSTKEY_EN "Software\Microsoft\Windows\CurrentVersion\Uninstall\${LEGACY_DISPLAY_EN}"
+!define LEGACY_MANUPRODUCTKEY_ZH "${MANUKEY}\${LEGACY_DISPLAY_ZH}"
+!define LEGACY_MANUPRODUCTKEY_EN "${MANUKEY}\${LEGACY_DISPLAY_EN}"
 !define UNINSTALLERSIGNCOMMAND "{{uninstaller_sign_cmd}}"
 !define ESTIMATEDSIZE "{{estimated_size}}"
 !define STARTMENUFOLDER "{{start_menu_folder}}"
+
+!macro RemoveShortcutIfOurs _lnk
+  !insertmacro IsShortcutTarget "${_lnk}" "$INSTDIR\${MAINBINARYNAME}.exe"
+  Pop $0
+  ${If} $0 <> 1
+    !insertmacro IsShortcutTarget "${_lnk}" "$INSTDIR\git-account-manager.exe"
+    Pop $0
+  ${EndIf}
+  ${If} $0 = 1
+    !insertmacro UnpinShortcut "${_lnk}"
+    Delete "${_lnk}"
+  ${EndIf}
+!macroend
 
 !macro PreferExistingAppDir _dir
   ${If} ${FileExists} "${_dir}\${MAINBINARYNAME}.exe"
@@ -229,6 +252,14 @@ Function PageReinstall
  ; Check if there is an existing installation, if not, abort the reinstall page
  ReadRegStr $R0 SHCTX "${UNINSTKEY}" ""
  ReadRegStr $R1 SHCTX "${UNINSTKEY}" "UninstallString"
+ ${If} "$R0$R1" == ""
+   ReadRegStr $R0 SHCTX "${LEGACY_UNINSTKEY_ZH}" ""
+   ReadRegStr $R1 SHCTX "${LEGACY_UNINSTKEY_ZH}" "UninstallString"
+ ${EndIf}
+ ${If} "$R0$R1" == ""
+   ReadRegStr $R0 SHCTX "${LEGACY_UNINSTKEY_EN}" ""
+   ReadRegStr $R1 SHCTX "${LEGACY_UNINSTKEY_EN}" "UninstallString"
+ ${EndIf}
  ${IfThen} "$R0$R1" == "" ${|} Abort ${|}
 
  ; Compare this installar version with the existing installation
@@ -239,6 +270,12 @@ Function PageReinstall
  ReadRegStr $R0 HKLM "$R6" "DisplayVersion"
  ${Else}
  ReadRegStr $R0 SHCTX "${UNINSTKEY}" "DisplayVersion"
+ ${If} $R0 == ""
+   ReadRegStr $R0 SHCTX "${LEGACY_UNINSTKEY_ZH}" "DisplayVersion"
+ ${EndIf}
+ ${If} $R0 == ""
+   ReadRegStr $R0 SHCTX "${LEGACY_UNINSTKEY_EN}" "DisplayVersion"
+ ${EndIf}
  ${EndIf}
  ${IfThen} $R0 == "" ${|} StrCpy $R4 "$(unknown)" ${|}
 
@@ -724,6 +761,12 @@ Section Install
  WriteRegDWORD SHCTX "${UNINSTKEY}" "NoModify" "1"
  WriteRegDWORD SHCTX "${UNINSTKEY}" "NoRepair" "1"
 
+ ; 清掉旧版按显示名分叉的卸载项，避免「御钥师」和 Git Keymaster 同时出现。
+ DeleteRegKey SHCTX "${LEGACY_UNINSTKEY_ZH}"
+ DeleteRegKey SHCTX "${LEGACY_UNINSTKEY_EN}"
+ DeleteRegKey SHCTX "${LEGACY_MANUPRODUCTKEY_ZH}"
+ DeleteRegKey SHCTX "${LEGACY_MANUPRODUCTKEY_EN}"
+
  ${GetSize} "$INSTDIR" "/M=uninstall.exe /S=0K /G=0" $0 $1 $2
  IntOp $0 $0 + ${ESTIMATEDSIZE}
  IntFmt $0 "0x%08X" $0
@@ -746,6 +789,8 @@ Section Install
  ${OrIf} ${Silent}
  Call CreateOrUpdateDesktopShortcut
  ${EndIf}
+
+ Call RemoveCrossLanguageShortcuts
 
  !ifmacrodef NSIS_HOOK_POSTINSTALL
  !insertmacro NSIS_HOOK_POSTINSTALL
@@ -910,35 +955,42 @@ Section Uninstall
  ${EndIf}
 SectionEnd
 
-Function RestorePreviousInstallLocation
- ; 1) 注册表里上次装过的路径（含 1.3.1 默认的 御钥师）
- ReadRegStr $4 SHCTX "${MANUPRODUCTKEY}" ""
- ${If} $4 != ""
-   ${If} ${FileExists} "$4\${MAINBINARYNAME}.exe"
-   ${OrIf} ${FileExists} "$4\git-account-manager.exe"
-     StrCpy $INSTDIR $4
-     Return
-   ${EndIf}
- ${EndIf}
- ReadRegStr $4 SHCTX "${UNINSTKEY}" "InstallLocation"
- ${If} $4 != ""
-   StrCpy $5 $4 1
-   ${If} $5 == '"'
-     StrLen $6 $4
-     IntOp $6 $6 - 2
-     StrCpy $4 $4 $6 1
-   ${EndIf}
-   ${If} ${FileExists} "$4\${MAINBINARYNAME}.exe"
-   ${OrIf} ${FileExists} "$4\git-account-manager.exe"
-     StrCpy $INSTDIR $4
-     Return
-   ${EndIf}
- ${EndIf}
+!macro TryRegInstallDir _key
+  ReadRegStr $4 SHCTX "${_key}" ""
+  ${If} $4 == ""
+    ReadRegStr $4 SHCTX "${_key}" "InstallLocation"
+  ${EndIf}
+  ${If} $4 != ""
+    StrCpy $5 $4 1
+    ${If} $5 == '"'
+      StrLen $6 $4
+      IntOp $6 $6 - 2
+      StrCpy $4 $4 $6 1
+    ${EndIf}
+    ${If} ${FileExists} "$4\${MAINBINARYNAME}.exe"
+    ${OrIf} ${FileExists} "$4\git-account-manager.exe"
+      StrCpy $INSTDIR $4
+      Return
+    ${EndIf}
+  ${EndIf}
+!macroend
 
- ; 2) 旧默认目录：有程序就覆盖那里，不要另装到 GitKeymaster
+Function RestorePreviousInstallLocation
+ ; 1) 稳定身份 + 旧版按显示名分叉的注册表
+ !insertmacro TryRegInstallDir "${MANUPRODUCTKEY}"
+ !insertmacro TryRegInstallDir "${UNINSTKEY}"
+ !insertmacro TryRegInstallDir "${LEGACY_MANUPRODUCTKEY_ZH}"
+ !insertmacro TryRegInstallDir "${LEGACY_MANUPRODUCTKEY_EN}"
+ !insertmacro TryRegInstallDir "${LEGACY_UNINSTKEY_ZH}"
+ !insertmacro TryRegInstallDir "${LEGACY_UNINSTKEY_EN}"
+
+ ; 2) 旧默认目录：有程序就覆盖那里，不要另装一份
+ !insertmacro PreferExistingAppDir "$LOCALAPPDATA\${INSTALLDIRNAME}"
  !insertmacro PreferExistingAppDir "$LOCALAPPDATA\御钥师"
  !insertmacro PreferExistingAppDir "$LOCALAPPDATA\Git Keymaster"
  !insertmacro PreferExistingAppDir "$LOCALAPPDATA\Git.Keymaster"
+ !insertmacro PreferExistingAppDir "$PROGRAMFILES64\${INSTALLDIRNAME}"
+ !insertmacro PreferExistingAppDir "$PROGRAMFILES\${INSTALLDIRNAME}"
  !insertmacro PreferExistingAppDir "$PROGRAMFILES64\御钥师"
  !insertmacro PreferExistingAppDir "$PROGRAMFILES\御钥师"
  !insertmacro PreferExistingAppDir "$PROGRAMFILES64\Git Keymaster"
@@ -956,6 +1008,21 @@ Function SkipIfPassive
 FunctionEnd
 Function un.SkipIfPassive
  ${IfThen} $PassiveMode = 1 ${|} Abort ${|}
+FunctionEnd
+
+Function RemoveCrossLanguageShortcuts
+  ; 另一种语言留下的快捷方式会让开始菜单并排出两个名字。
+  ${If} "${PRODUCTNAME}" == "${LEGACY_DISPLAY_EN}"
+    !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\${LEGACY_DISPLAY_ZH}.lnk"
+    !insertmacro RemoveShortcutIfOurs "$DESKTOP\${LEGACY_DISPLAY_ZH}.lnk"
+    !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\${LEGACY_DISPLAY_ZH}\${LEGACY_DISPLAY_ZH}.lnk"
+    RMDir "$SMPROGRAMS\${LEGACY_DISPLAY_ZH}"
+  ${Else}
+    !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\${LEGACY_DISPLAY_EN}.lnk"
+    !insertmacro RemoveShortcutIfOurs "$DESKTOP\${LEGACY_DISPLAY_EN}.lnk"
+    !insertmacro RemoveShortcutIfOurs "$SMPROGRAMS\${LEGACY_DISPLAY_EN}\${LEGACY_DISPLAY_EN}.lnk"
+    RMDir "$SMPROGRAMS\${LEGACY_DISPLAY_EN}"
+  ${EndIf}
 FunctionEnd
 
 Function CreateOrUpdateStartMenuShortcut

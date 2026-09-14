@@ -124,6 +124,39 @@ function rewriteFilenames(text, mapping) {
   return out;
 }
 
+export function latestJsonFilename(locale) {
+  if (locale === "en-US") {
+    return "latest-en-US.json";
+  }
+  if (locale === "zh-CN") {
+    return "latest-zh-CN.json";
+  }
+  throw new Error(`unsupported locale: ${locale}`);
+}
+
+/** 同一语言、不同平台的 latest.json 按 platforms 合并；后写入的同名平台覆盖。 */
+export function mergeLatestJson(existingText, incomingText) {
+  const incoming = JSON.parse(incomingText);
+  let existing = {};
+  if (existingText && String(existingText).trim()) {
+    existing = JSON.parse(existingText);
+  }
+  const platforms = {
+    ...(existing.platforms && typeof existing.platforms === "object" ? existing.platforms : {}),
+    ...(incoming.platforms && typeof incoming.platforms === "object" ? incoming.platforms : {}),
+  };
+  return `${JSON.stringify(
+    {
+      version: incoming.version || existing.version,
+      notes: incoming.notes || existing.notes,
+      pub_date: incoming.pub_date || existing.pub_date,
+      platforms,
+    },
+    null,
+    2,
+  )}\n`;
+}
+
 export function rewriteLatestJson(text, mapping) {
   try {
     const data = JSON.parse(text);
@@ -278,6 +311,28 @@ function runSelfTest() {
   }
   if (!parsed.notes.includes("Git.Keymaster_1.2.0_x64_zh-CN-setup.exe")) {
     throw new Error("latest.json notes filename was not rewritten");
+  }
+  if (latestJsonFilename("zh-CN") !== "latest-zh-CN.json" || latestJsonFilename("en-US") !== "latest-en-US.json") {
+    throw new Error("locale manifest names");
+  }
+  const merged = JSON.parse(
+    mergeLatestJson(
+      JSON.stringify({
+        version: "1.0.0",
+        platforms: { "windows-x86_64": { url: "zh.exe" }, "linux-x86_64": { url: "old.AppImage" } },
+      }),
+      JSON.stringify({
+        version: "1.5.0",
+        notes: "n",
+        platforms: { "linux-x86_64": { url: "new.AppImage" } },
+      }),
+    ),
+  );
+  if (merged.version !== "1.5.0" || merged.platforms["windows-x86_64"].url !== "zh.exe") {
+    throw new Error("merge should keep other platforms");
+  }
+  if (merged.platforms["linux-x86_64"].url !== "new.AppImage") {
+    throw new Error("merge should replace same platform");
   }
   console.log("[rename] self-test ok");
 }

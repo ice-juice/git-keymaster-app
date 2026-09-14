@@ -6,6 +6,9 @@ export const ZH_DISPLAY_NAME = "御钥师";
 export const EN_DISPLAY_NAME = "Git Keymaster";
 export const MAIN_BINARY = "git-keymaster";
 export const WIN_INSTALL_DIR = "GitKeymaster";
+/// Windows 卸载项 / 安装路径注册表的稳定身份。必须是 ASCII，不能跟「御钥师」/ Git Keymaster 走，
+/// 否则中英文安装包会写成两套卸载键，自动更新后开始菜单里并排出两个程序。
+export const WIN_UNINSTALL_ID = WIN_INSTALL_DIR;
 export const INSTALLER_STEM = "Git.Keymaster";
 
 export function isEnglishLang(lang) {

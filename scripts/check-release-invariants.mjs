@@ -13,8 +13,10 @@ import {
   displayNameFor,
   EN_DISPLAY_NAME,
   INSTALLER_STEM,
+  isEnglishLang,
   MAIN_BINARY,
   WIN_INSTALL_DIR,
+  WIN_UNINSTALL_ID,
   ZH_DISPLAY_NAME,
 } from "./brand.mjs";
 
@@ -75,6 +77,43 @@ function checkCommittedDefaults() {
   if (!nsi.includes(`!define INSTALLDIRNAME "${WIN_INSTALL_DIR}"`)) {
     fail(`installer.nsi 的默认安装目录必须是 ASCII「${WIN_INSTALL_DIR}」，不要用显示名当路径`);
   }
+  if (nsi.includes("Uninstall\\${PRODUCTNAME}") || nsi.includes("Uninstall\\${PRODUCTNAME}\"")) {
+    fail("installer.nsi 的 UNINSTKEY 不能跟 PRODUCTNAME 走，否则中英文包装完会并排出两个卸载项");
+  }
+  if (!nsi.includes(`!define INSTALLIDENTITY "${WIN_UNINSTALL_ID}"`)) {
+    fail(`installer.nsi 的卸载项身份必须是 ASCII「${WIN_UNINSTALL_ID}」`);
+  }
+  if (!nsi.includes("LEGACY_UNINSTKEY_ZH") || !nsi.includes("LEGACY_UNINSTKEY_EN")) {
+    fail("installer.nsi 必须在安装时清掉旧中英文卸载键");
+  }
+  if (!nsi.includes("RemoveCrossLanguageShortcuts")) {
+    fail("installer.nsi 必须清掉另一种语言留下的开始菜单 / 桌面快捷方式");
+  }
+
+  const source = read("app/src-tauri/src/update/source.rs");
+  if (!source.includes("latest-zh-CN.json") || !source.includes("latest-en-US.json")) {
+    fail("更新器必须按编译语言拉 latest-zh-CN.json / latest-en-US.json");
+  }
+  if (!source.includes("GAM_APP_LANG")) {
+    fail("更新器清单文件名必须读编译期 GAM_APP_LANG");
+  }
+
+  const tauriConf = JSON.parse(read("app/src-tauri/tauri.conf.json"));
+  const endpoints = tauriConf.plugins?.updater?.endpoints || [];
+  if (!endpoints.some((url) => String(url).endsWith("/latest-zh-CN.json"))) {
+    fail("仓库默认 tauri.conf.json 更新地址必须是 latest-zh-CN.json（中文包）");
+  }
+  if (endpoints.some((url) => String(url).endsWith("/latest.json"))) {
+    fail("仓库默认更新地址不能再指向会中英文抢写的 latest.json");
+  }
+
+  const sync = read("scripts/sync-release-assets.mjs");
+  if (!sync.includes("mergeLatestJson") || !sync.includes("latest-zh-CN.json") || !sync.includes("latest-en-US.json")) {
+    fail("sync-release-assets.mjs 必须按语言合并上传 latest-zh-CN.json / latest-en-US.json");
+  }
+  if (!sync.includes("--pin-legacy")) {
+    fail("sync-release-assets.mjs 必须提供 --pin-legacy，把兼容用 latest.json 钉到中文清单");
+  }
 
   const androidManifest = "app/src-tauri/gen/android/app/src/main/AndroidManifest.xml";
   if (fs.existsSync(path.join(rootDir, androidManifest))) {
@@ -113,6 +152,9 @@ function checkPrepareLangSource() {
   }
   if (!src.includes("app_name") || !src.includes("main_activity_title")) {
     fail("prepare-lang.mjs 必须用 displayName 写 Android strings.xml 的 app_name / main_activity_title");
+  }
+  if (!src.includes("gam-lang.txt")) {
+    fail("prepare-lang.mjs 必须写 gam-lang.txt，供 Rust 更新器按语言拉 latest-zh-CN / latest-en-US");
   }
 }
 
@@ -158,6 +200,9 @@ function checkRenameStem() {
   if (!src.includes("INSTALLER_STEM")) {
     fail(`安装包文件名主干必须使用 brand.mjs 的 INSTALLER_STEM（${INSTALLER_STEM}）`);
   }
+  if (!src.includes("latestJsonFilename") || !src.includes("mergeLatestJson")) {
+    fail("rename-release-assets.mjs 必须按语言拆分并合并 latest-zh-CN.json / latest-en-US.json");
+  }
   if (!src.includes("androidApkFilename") || !src.includes("arm64-v8a")) {
     fail("rename-release-assets.mjs 必须能把安卓 APK 改成 Git.Keymaster_{版本}_arm64-v8a_{locale}.apk");
   }
@@ -167,6 +212,12 @@ function checkRenameStem() {
   const yml = read(".github/workflows/release.yml");
   if (!yml.includes("tauri android build --apk --target aarch64 --split-per-abi")) {
     fail("安卓正式包必须加 --split-per-abi，否则产出的是 universal APK，改名会找不到文件");
+  }
+  if (!yml.includes('sync-release-assets.mjs "${{ steps.meta.outputs.tag }}" ${{ matrix.lang == \'en\' && \'en-US\' || \'zh-CN\' }}')) {
+    fail("release.yml 同步 Release 资产时必须带 zh-CN / en-US，禁止中英文抢写同一份 latest.json");
+  }
+  if (!yml.includes("--pin-legacy")) {
+    fail("release.yml 必须在全部桌面任务结束后把兼容用 latest.json 钉到中文清单");
   }
 }
 
@@ -223,6 +274,15 @@ if (invoked) {
         fail("usage: node scripts/check-release-invariants.mjs --prepared zh|en");
       }
       assertPreparedFiles(lang);
+      const langFile = path.join(rootDir, "app", "src-tauri", "gam-lang.txt");
+      if (!fs.existsSync(langFile)) {
+        fail("prepare-lang 之后必须写出 app/src-tauri/gam-lang.txt");
+      }
+      expectEq(
+        fs.readFileSync(langFile, "utf-8").trim(),
+        isEnglishLang(lang) ? "en" : "zh",
+        "gam-lang.txt",
+      );
       console.log(`[invariants] prepared ${lang} displayName=${displayNameFor(lang)}`);
     } else if (!arg) {
       checkSourceInvariants();

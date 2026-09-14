@@ -760,7 +760,7 @@ export function AboutUpdateCard() {
           </div>
 
           <div className="field" style={{ marginTop: 4 }}>
-            <FieldLabel name="更新源配置" tip="默认使用内置 GitHub 仓库。也可改成其它仓库，或填写一份静态 latest.json 的 HTTPS 地址（内网镜像 / 其它 Git 平台）。无论何种源，安装包都必须通过内置公钥校验。" />
+            <FieldLabel name="更新源配置" tip="默认使用内置 GitHub 仓库，并按本安装包语言拉取 latest-zh-CN.json 或 latest-en-US.json。也可改成其它仓库，或填写一份静态清单的 HTTPS 地址（内网镜像 / 其它 Git 平台）。无论何种源，安装包都必须通过内置公钥校验。" />
             <div className="choice-row">
               <button
                 type="button"

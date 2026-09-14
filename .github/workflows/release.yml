@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       create_release:
-        description: Create a draft GitHub Release and latest.json
+        description: Create a draft GitHub Release and locale updater manifests
         type: boolean
         default: false
   push:
@@ -254,7 +254,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/sync-release-assets.mjs "${{ steps.meta.outputs.tag }}"
+        run: node scripts/sync-release-assets.mjs "${{ steps.meta.outputs.tag }}" ${{ matrix.lang == 'en' && 'en-US' || 'zh-CN' }}
 
       - name: Upload installers
         if: ${{ !cancelled() }}
@@ -264,6 +264,20 @@ jobs:
           path: |
             app/src-tauri/target/release/bundle/**
             app/src-tauri/target/universal-apple-darwin/release/bundle/**
+
+  pin-updater-json:
+    name: pin latest.json
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin latest.json to Chinese manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/sync-release-assets.mjs --pin-legacy "${GITHUB_REF_NAME}"
 
   build-android:
     name: android (${{ matrix.lang }})

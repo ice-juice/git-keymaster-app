@@ -45,7 +45,10 @@ pub fn resolve_endpoints_with(src: &UpdateSource, ctx: &EndpointCtx) -> Result<V
                 .filter(|s| !s.is_empty())
                 .unwrap_or(DEFAULT_UPDATE_REPO);
             validate_github_repo(repo)?;
-            let url = format!("https://github.com/{repo}/releases/latest/download/latest.json");
+            let url = format!(
+                "https://github.com/{repo}/releases/latest/download/{}",
+                updater_manifest_name()
+            );
             Ok(vec![parse_https_url(&url)?])
         }
         "manifest" => {
@@ -62,10 +65,20 @@ pub fn resolve_endpoints_with(src: &UpdateSource, ctx: &EndpointCtx) -> Result<V
     }
 }
 
+/// 当前安装包界面语言对应的更新清单。中英文包不能共用 latest.json，
+/// 否则后上传的语言会盖掉另一边，中文用户会装上英文包。
+pub fn updater_manifest_name() -> &'static str {
+    match option_env!("GAM_APP_LANG").unwrap_or("zh") {
+        "en" | "en-US" | "en-us" => "latest-en-US.json",
+        _ => "latest-zh-CN.json",
+    }
+}
+
 pub fn github_latest_json_url(repo: &str) -> Result<Url> {
     validate_github_repo(repo)?;
     parse_https_url(&format!(
-        "https://github.com/{repo}/releases/latest/download/latest.json"
+        "https://github.com/{repo}/releases/latest/download/{}",
+        updater_manifest_name()
     ))
 }
 
@@ -76,7 +89,8 @@ pub fn github_tag_json_url(repo: &str, tag: &str) -> Result<Url> {
         return Err(AppError::Invalid("无效的 Release 标签".into()));
     }
     parse_https_url(&format!(
-        "https://github.com/{repo}/releases/download/{tag}/latest.json"
+        "https://github.com/{repo}/releases/download/{tag}/{}",
+        updater_manifest_name()
     ))
 }
 
@@ -142,7 +156,7 @@ mod tests {
         let urls = resolve_endpoints_with(&src, &ctx()).unwrap();
         assert_eq!(
             urls[0].as_str(),
-            "https://github.com/ice-juice/git-keymaster-app/releases/latest/download/latest.json"
+            "https://github.com/ice-juice/git-keymaster-app/releases/latest/download/latest-zh-CN.json"
         );
     }
 
@@ -157,7 +171,7 @@ mod tests {
         let urls = resolve_endpoints_with(&src, &ctx()).unwrap();
         assert_eq!(
             urls[0].as_str(),
-            "https://github.com/acme/mirror/releases/latest/download/latest.json"
+            "https://github.com/acme/mirror/releases/latest/download/latest-zh-CN.json"
         );
     }
 
@@ -229,5 +243,15 @@ mod tests {
         let src = effective_source(&cfg);
         assert_eq!(src.kind, "github");
         assert_eq!(src.repo.as_deref(), Some(DEFAULT_UPDATE_REPO));
+    }
+
+    #[test]
+    fn compiled_lang_picks_matching_manifest() {
+        let name = updater_manifest_name();
+        assert!(
+            name == "latest-zh-CN.json" || name == "latest-en-US.json",
+            "unexpected manifest {name}"
+        );
+        assert_ne!(name, "latest.json");
     }
 }

@@ -92,5 +92,12 @@ if (fs.existsSync(envPath)) {
   fs.unlinkSync(envPath);
 }
 
+// 给 Rust 更新器用：中文包装 latest-zh-CN.json，英文包装 latest-en-US.json。
+fs.writeFileSync(
+  path.join(rootDir, "app", "src-tauri", "gam-lang.txt"),
+  `${lang === "en" ? "en" : "zh"}\n`,
+  "utf-8",
+);
+
 assertPreparedFiles(lang);
 console.log(`[prepare-lang] ${lang} locale=${locale} productName=${tauriConf.productName} title=${tauriConf.app.windows[0].title}`);

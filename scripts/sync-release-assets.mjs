@@ -1,8 +1,9 @@
 /**
  * 把带语言后缀的安装包同步到 GitHub Release，并删掉未加后缀的旧文件名。
  * 用法：
- *   node scripts/sync-release-assets.mjs vX.Y.Z
+ *   node scripts/sync-release-assets.mjs vX.Y.Z zh-CN|en-US
  *   node scripts/sync-release-assets.mjs --fix-notes vX.Y.Z
+ *   node scripts/sync-release-assets.mjs --pin-legacy vX.Y.Z
  *   node scripts/sync-release-assets.mjs --require-bundles
  *   node scripts/sync-release-assets.mjs --test
  */
@@ -12,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildReleaseNotes } from "./build-release-notes.mjs";
-import { rewriteLatestJson } from "./rename-release-assets.mjs";
+import { latestJsonFilename, mergeLatestJson, rewriteLatestJson } from "./rename-release-assets.mjs";
 
 const REPO = "ice-juice/git-keymaster-app";
 const BUNDLE_ROOTS = [
@@ -46,7 +47,6 @@ export function walkFiles(dir, out = []) {
 
 export function collectUniqueUploads(mapping, cwd = process.cwd()) {
   const names = new Set(mapping.map(([, to]) => to));
-  names.add("latest.json");
   const byBasename = new Map();
   for (const root of BUNDLE_ROOTS) {
     for (const file of walkFiles(path.join(cwd, root))) {
@@ -56,15 +56,21 @@ export function collectUniqueUploads(mapping, cwd = process.cwd()) {
       }
     }
   }
-  if (!byBasename.has("latest.json")) {
-    for (const file of walkFiles(path.join(cwd, "app/src-tauri/target"))) {
-      if (path.basename(file) === "latest.json") {
-        byBasename.set("latest.json", file);
-        break;
-      }
+  return [...byBasename.values()];
+}
+
+export function findLocalLatestJson(cwd = process.cwd()) {
+  const candidates = [
+    path.join(cwd, "latest.json"),
+    path.join(cwd, "app", "src-tauri", "target", "release", "latest.json"),
+    path.join(cwd, "app", "src-tauri", "target", "universal-apple-darwin", "release", "latest.json"),
+  ];
+  for (const file of walkFiles(path.join(cwd, "app/src-tauri/target"))) {
+    if (path.basename(file) === "latest.json") {
+      candidates.push(file);
     }
   }
-  return [...byBasename.values()];
+  return candidates.find((file) => fs.existsSync(file)) ?? null;
 }
 
 export function listInstallerBundles(cwd = process.cwd()) {
@@ -110,20 +116,33 @@ function runGh(args, { ignoreFail = false, retries = 0 } = {}) {
   process.exit(lastStatus);
 }
 
+function rewriteNotesFile(file, notes) {
+  const data = JSON.parse(fs.readFileSync(file, "utf8"));
+  data.notes = notes;
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`);
+}
+
 function fixPublishedNotes(tag) {
   if (!tag || !/^v\d/.test(tag)) {
     console.error("usage: node scripts/sync-release-assets.mjs --fix-notes vX.Y.Z");
     process.exit(1);
   }
+  const notes = loadCanonicalNotes(tag.replace(/^v/, ""));
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-latest-"));
   try {
-    runGh(["release", "download", tag, "--repo", REPO, "--pattern", "latest.json", "--dir", tmp, "--clobber"]);
-    const latestPath = path.join(tmp, "latest.json");
-    const data = JSON.parse(fs.readFileSync(latestPath, "utf8"));
-    data.notes = loadCanonicalNotes(tag.replace(/^v/, ""));
-    fs.writeFileSync(latestPath, `${JSON.stringify(data, null, 2)}\n`);
+    for (const name of ["latest.json", "latest-zh-CN.json", "latest-en-US.json"]) {
+      const downloaded = runGh(
+        ["release", "download", tag, "--repo", REPO, "--pattern", name, "--dir", tmp, "--clobber"],
+        { ignoreFail: true },
+      );
+      const latestPath = path.join(tmp, name);
+      if (downloaded !== 0 || !fs.existsSync(latestPath)) {
+        continue;
+      }
+      rewriteNotesFile(latestPath, notes);
       runGh(["release", "upload", tag, latestPath, "--repo", REPO, "--clobber"], { retries: 4 });
-    console.log(`[sync] restored notes headings for ${tag}`);
+      console.log(`[sync] restored notes headings for ${tag} ${name}`);
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -140,10 +159,52 @@ function requireBundles() {
   }
 }
 
-function syncTag(tag) {
+function publishLocaleManifest(tag, locale, mapping) {
+  const localPath = findLocalLatestJson();
+  if (!localPath) {
+    console.log("no local latest.json to merge");
+    return;
+  }
+  const incoming = rewriteLatestJson(fs.readFileSync(localPath, "utf8"), mapping);
+  const incomingData = JSON.parse(incoming);
+  incomingData.notes = loadCanonicalNotes(tag.replace(/^v/, ""));
+  const incomingText = `${JSON.stringify(incomingData, null, 2)}\n`;
+
+  const localeName = latestJsonFilename(locale);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-latest-"));
+  try {
+    const existingPath = path.join(tmp, localeName);
+    runGh(
+      ["release", "download", tag, "--repo", REPO, "--pattern", localeName, "--dir", tmp, "--clobber"],
+      { ignoreFail: true },
+    );
+    const existingText = fs.existsSync(existingPath) ? fs.readFileSync(existingPath, "utf8") : "";
+    const merged = mergeLatestJson(existingText, incomingText);
+    const outPath = path.join(tmp, localeName);
+    fs.writeFileSync(outPath, merged);
+    runGh(["release", "upload", tag, outPath, "--repo", REPO, "--clobber"], { retries: 4 });
+    console.log(`[sync] merged ${localeName}`);
+
+    // 旧客户端只认 latest.json。用中文清单做兼容副本，避免再被英文任务盖掉。
+    if (locale === "zh-CN") {
+      const legacy = path.join(tmp, "latest.json");
+      fs.writeFileSync(legacy, merged);
+      runGh(["release", "upload", tag, legacy, "--repo", REPO, "--clobber"], { retries: 4 });
+      console.log("[sync] copied latest-zh-CN.json -> latest.json for old clients");
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function syncTag(tag, locale) {
   if (!tag || tag === "v__VERSION__") {
     console.log("skip release asset sync (no real tag)");
     return;
+  }
+  if (!locale || !["zh-CN", "en-US"].includes(locale)) {
+    console.error("usage: node scripts/sync-release-assets.mjs vX.Y.Z zh-CN|en-US");
+    process.exit(1);
   }
 
   const mappingPath = path.join(process.cwd(), "renamed-release-assets.json");
@@ -166,28 +227,38 @@ function syncTag(tag) {
     runGh(["release", "upload", tag, ...uploads, "--repo", REPO, "--clobber"], { retries: 4 });
   }
 
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-latest-"));
-  try {
-    const downloaded = runGh(
-      ["release", "download", tag, "--repo", REPO, "--pattern", "latest.json", "--dir", tmp, "--clobber"],
-      { ignoreFail: true },
-    );
-    const latestPath = path.join(tmp, "latest.json");
-    if (downloaded === 0 && fs.existsSync(latestPath)) {
-      const text = rewriteLatestJson(fs.readFileSync(latestPath, "utf8"), mapping);
-      const data = JSON.parse(text);
-      data.notes = loadCanonicalNotes(tag.replace(/^v/, ""));
-      fs.writeFileSync(latestPath, `${JSON.stringify(data, null, 2)}\n`);
-      runGh(["release", "upload", tag, latestPath, "--repo", REPO, "--clobber"], { retries: 4 });
-    }
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+  publishLocaleManifest(tag, locale, mapping);
 
   for (const [oldName, newName] of mapping) {
     if (oldName && oldName !== newName) {
       runGh(["release", "delete-asset", tag, oldName, "--repo", REPO, "--yes"], { ignoreFail: true });
     }
+  }
+}
+
+function pinLegacyLatest(tag) {
+  if (!tag || !/^v\d/.test(tag)) {
+    console.error("usage: node scripts/sync-release-assets.mjs --pin-legacy vX.Y.Z");
+    process.exit(1);
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-pin-"));
+  try {
+    const zhName = latestJsonFilename("zh-CN");
+    const downloaded = runGh(
+      ["release", "download", tag, "--repo", REPO, "--pattern", zhName, "--dir", tmp, "--clobber"],
+      { ignoreFail: true },
+    );
+    const zhPath = path.join(tmp, zhName);
+    if (downloaded !== 0 || !fs.existsSync(zhPath)) {
+      console.error(`[sync] missing ${zhName}, cannot pin latest.json`);
+      process.exit(1);
+    }
+    const legacy = path.join(tmp, "latest.json");
+    fs.copyFileSync(zhPath, legacy);
+    runGh(["release", "upload", tag, legacy, "--repo", REPO, "--clobber"], { retries: 4 });
+    console.log(`[sync] pinned latest.json to ${zhName}`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -233,7 +304,9 @@ if (invoked) {
     requireBundles();
   } else if (arg === "--fix-notes") {
     fixPublishedNotes(process.argv[3]);
+  } else if (arg === "--pin-legacy") {
+    pinLegacyLatest(process.argv[3]);
   } else {
-    syncTag(arg);
+    syncTag(arg, process.argv[3]);
   }
 }
