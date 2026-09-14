@@ -30,6 +30,11 @@ function plistString(xml, key) {
   return m ? m[1] : null;
 }
 
+function androidString(xml, name) {
+  const m = xml.match(new RegExp(`<string name="${name}">"([^"]*)"</string>`));
+  return m ? m[1] : null;
+}
+
 function fail(message) {
   throw new Error(message);
 }
@@ -50,6 +55,17 @@ export function assertPreparedFiles(lang) {
   const plist = read("app/src-tauri/Info.plist");
   expectEq(plistString(plist, "CFBundleDisplayName"), expected, "Info.plist CFBundleDisplayName");
   expectEq(plistString(plist, "CFBundleName"), expected, "Info.plist CFBundleName");
+
+  const androidStringsPath = "app/src-tauri/gen/android/app/src/main/res/values/strings.xml";
+  if (fs.existsSync(path.join(rootDir, androidStringsPath))) {
+    const android = read(androidStringsPath);
+    expectEq(androidString(android, "app_name"), expected, "Android strings.xml app_name");
+    expectEq(
+      androidString(android, "main_activity_title"),
+      expected,
+      "Android strings.xml main_activity_title",
+    );
+  }
 }
 
 function checkCommittedDefaults() {
@@ -58,6 +74,17 @@ function checkCommittedDefaults() {
   const nsi = read("app/src-tauri/windows/installer.nsi");
   if (!nsi.includes(`!define INSTALLDIRNAME "${WIN_INSTALL_DIR}"`)) {
     fail(`installer.nsi 的默认安装目录必须是 ASCII「${WIN_INSTALL_DIR}」，不要用显示名当路径`);
+  }
+
+  const androidManifest = "app/src-tauri/gen/android/app/src/main/AndroidManifest.xml";
+  if (fs.existsSync(path.join(rootDir, androidManifest))) {
+    const manifest = read(androidManifest);
+    if (!manifest.includes('android:allowBackup="false"')) {
+      fail("AndroidManifest 必须 allowBackup=false，保险库不能进 Google 备份");
+    }
+    if (manifest.includes("Git Keymaster") || manifest.includes("GitKeymaster")) {
+      fail("AndroidManifest 用户可见名称不能写死 Git Keymaster / GitKeymaster");
+    }
   }
 }
 
@@ -83,6 +110,9 @@ function checkPrepareLangSource() {
   }
   if (!src.includes("unlinkSync") && !src.includes("rmSync")) {
     fail("prepare-lang.mjs 必须删掉残留的 app/.env，避免 VITE_APP_LANG=en 留在本地开发");
+  }
+  if (!src.includes("app_name") || !src.includes("main_activity_title")) {
+    fail("prepare-lang.mjs 必须用 displayName 写 Android strings.xml 的 app_name / main_activity_title");
   }
 }
 
@@ -128,6 +158,23 @@ function checkRenameStem() {
   if (!src.includes("INSTALLER_STEM")) {
     fail(`安装包文件名主干必须使用 brand.mjs 的 INSTALLER_STEM（${INSTALLER_STEM}）`);
   }
+  if (!src.includes("androidApkFilename") || !src.includes("arm64-v8a")) {
+    fail("rename-release-assets.mjs 必须能把安卓 APK 改成 Git.Keymaster_{版本}_arm64-v8a_{locale}.apk");
+  }
+}
+
+function checkAndroidSigningSource() {
+  const gradle = read("app/src-tauri/gen/android/app/build.gradle.kts");
+  if (!gradle.includes("keystore.properties") || !gradle.includes("signingConfigs")) {
+    fail("Android release 必须在存在 keystore.properties 时配置 signingConfigs");
+  }
+  if (!gradle.includes("keystorePropertiesFile.exists()")) {
+    fail("Android 签名必须在缺少 keystore.properties 时跳过，不能挡住本地 debug");
+  }
+  const ignore = read("app/src-tauri/gen/android/.gitignore");
+  if (!ignore.includes("keystore.properties") || !ignore.includes("*.jks")) {
+    fail("gen/android/.gitignore 必须忽略 keystore.properties 和 *.jks");
+  }
 }
 
 export function checkSourceInvariants() {
@@ -135,6 +182,7 @@ export function checkSourceInvariants() {
   checkPrepareLangSource();
   checkUiSource();
   checkRenameStem();
+  checkAndroidSigningSource();
 }
 
 function runSelfTest() {

@@ -56,6 +56,32 @@ tauriConf.bundle.windows.wix = {
   language: locale,
 };
 
+const androidStringsPath = path.join(
+  rootDir,
+  "app",
+  "src-tauri",
+  "gen",
+  "android",
+  "app",
+  "src",
+  "main",
+  "res",
+  "values",
+  "strings.xml",
+);
+if (fs.existsSync(androidStringsPath)) {
+  let android = fs.readFileSync(androidStringsPath, "utf-8");
+  android = android.replace(
+    /(<string name="app_name">")([^"]*)("<\/string>)/,
+    `$1${displayName}$3`,
+  );
+  android = android.replace(
+    /(<string name="main_activity_title">")([^"]*)("<\/string>)/,
+    `$1${displayName}$3`,
+  );
+  fs.writeFileSync(androidStringsPath, android, "utf-8");
+}
+
 fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2), "utf-8");
 
 // 只写 production，避免 `tauri dev`（development）吃到英文包残留的 VITE_APP_LANG。

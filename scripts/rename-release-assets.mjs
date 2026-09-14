@@ -1,6 +1,8 @@
 /**
  * 把 Tauri 安装包改成「Git.Keymaster_{版本}_{架构}_{locale}」成对文件名。
- * 用法：node scripts/rename-release-assets.mjs zh-CN|en-US
+ * 用法：
+ *   node scripts/rename-release-assets.mjs zh-CN|en-US
+ *   node scripts/rename-release-assets.mjs --android zh-CN|en-US
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -27,7 +29,18 @@ const COMPOUND_SUFFIXES = [
   ".AppImage",
   ".exe.sig",
   ".exe",
+  ".apk",
 ];
+
+export function androidApkFilename(version, locale) {
+  if (!LOCALES.includes(locale)) {
+    throw new Error(`unsupported locale: ${locale}`);
+  }
+  if (!version || !/^\d+\.\d+\.\d+/.test(version)) {
+    throw new Error(`invalid android version: ${version}`);
+  }
+  return `${BRAND}_${version}_arm64-v8a_${locale}.apk`;
+}
 
 export function stampLocaleFilename(name, locale) {
   if (!LOCALES.includes(locale)) {
@@ -167,8 +180,19 @@ function runSelfTest() {
     ["御钥师_1.3.0_universal.dmg", "zh-CN", "Git.Keymaster_1.3.0_universal_zh-CN.dmg"],
     ["御钥师_1.3.0_x64-setup.exe", "zh-CN", "Git.Keymaster_1.3.0_x64_zh-CN-setup.exe"],
     ["Git Keymaster_1.3.0_universal.dmg", "en-US", "Git.Keymaster_1.3.0_universal_en-US.dmg"],
+    ["app-arm64-release.apk", "zh-CN", "app-arm64-release_zh-CN.apk"],
     ["latest.json", "zh-CN", "latest.json"],
   ];
+  const apkCases = [
+    ["1.5.0", "zh-CN", "Git.Keymaster_1.5.0_arm64-v8a_zh-CN.apk"],
+    ["1.5.0", "en-US", "Git.Keymaster_1.5.0_arm64-v8a_en-US.apk"],
+  ];
+  for (const [version, locale, expected] of apkCases) {
+    const got = androidApkFilename(version, locale);
+    if (got !== expected) {
+      throw new Error(`android apk ${version} / ${locale} => ${got}, expected ${expected}`);
+    }
+  }
   for (const [input, locale, expected] of cases) {
     const got = stampLocaleFilename(input, locale);
     if (got !== expected) {
@@ -199,11 +223,50 @@ function runSelfTest() {
   console.log("[rename] self-test ok");
 }
 
+function renameAndroidApk(locale) {
+  const cwd = process.cwd();
+  const version = JSON.parse(fs.readFileSync(path.join(cwd, "app", "src-tauri", "tauri.conf.json"), "utf8")).version;
+  const dir = path.join(
+    cwd,
+    "app",
+    "src-tauri",
+    "gen",
+    "android",
+    "app",
+    "build",
+    "outputs",
+    "apk",
+    "arm64",
+    "release",
+  );
+  const src = path.join(dir, "app-arm64-release.apk");
+  if (!fs.existsSync(src)) {
+    throw new Error(`missing signed APK: ${src}`);
+  }
+  const destName = androidApkFilename(version, locale);
+  const dest = path.join(dir, destName);
+  if (fs.existsSync(dest) && dest !== src) {
+    fs.unlinkSync(dest);
+  }
+  fs.copyFileSync(src, dest);
+  const mapping = [["app-arm64-release.apk", destName]];
+  fs.writeFileSync(path.join(cwd, "renamed-release-assets.json"), JSON.stringify(mapping, null, 2), "utf-8");
+  console.log(`[rename] app-arm64-release.apk -> ${destName}`);
+  return dest;
+}
+
 const invoked = process.argv[1] && path.basename(process.argv[1]) === "rename-release-assets.mjs";
 if (invoked) {
   const arg = process.argv[2];
   if (arg === "--test") {
     runSelfTest();
+  } else if (arg === "--android") {
+    const locale = process.argv[3];
+    if (!LOCALES.includes(locale)) {
+      console.error("usage: node scripts/rename-release-assets.mjs --android zh-CN|en-US");
+      process.exit(1);
+    }
+    renameAndroidApk(locale);
   } else if (LOCALES.includes(arg)) {
     const cwd = process.cwd();
     const roots = [
@@ -214,7 +277,7 @@ if (invoked) {
     fs.writeFileSync(path.join(cwd, "renamed-release-assets.json"), JSON.stringify(mapping, null, 2), "utf-8");
     patchLatestJsonFiles(cwd, mapping);
   } else {
-    console.error("usage: node scripts/rename-release-assets.mjs zh-CN|en-US|--test");
+    console.error("usage: node scripts/rename-release-assets.mjs zh-CN|en-US|--android zh-CN|en-US|--test");
     process.exit(1);
   }
 }
