@@ -40,11 +40,9 @@ fn per_file_limit(state: &AppState) -> u64 {
 }
 
 fn original_name_from_path(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+    path.trim()
+        .rsplit(['/', '\\'])
+        .find(|s| !s.is_empty())
         .unwrap_or("file")
         .to_string()
 }
