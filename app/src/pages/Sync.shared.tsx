@@ -77,6 +77,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   const [guideTab, setGuideTab] = useState<S3GuideProvider>("r2");
   const [shareQr, setShareQr] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [exportS3AccessPw, setExportS3AccessPw] = useState("");
   const [err, setErr] = useState("");
   const [pendingConfirm, setPendingConfirm] = useState<
     | { kind: "push" }
@@ -91,6 +92,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   // 本地离线备份导出
   const [exportPw, setExportPw] = useState("");
   const [exportPw2, setExportPw2] = useState("");
+  const [exportAccessPw, setExportAccessPw] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState<BackupSummary | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
@@ -222,13 +224,18 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   }
 
   async function exportS3File() {
+    if (!exportS3AccessPw.trim()) {
+      setSyncNotice(t("syncPage.exportAccessPwMissing"));
+      return;
+    }
     try {
       const selected = await save({
         defaultPath: `gam-s3-${s3Config.bucket || "config"}.json`,
         filters: [{ name: t("syncPage.cfgFilter"), extensions: ["json"] }],
       });
       if (!selected) return;
-      await api.exportS3Config(selected, s3Config);
+      await api.exportS3Config(selected, s3Config, exportS3AccessPw);
+      setExportS3AccessPw("");
       setSyncNotice(t("syncPage.exportCfgOk"));
     } catch (e) {
       setSyncNotice(t("syncPage.exportCfgFail", { error: errMessage(e) }));
@@ -391,12 +398,16 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   async function handleExportBackup() {
     setExportErr(null);
     setExportResult(null);
-    if (!exportPw || exportPw.length < 6) {
+    if (!exportPw || exportPw.length < 8) {
       setExportErr(t("syncPage.backupPwShort"));
       return;
     }
     if (exportPw !== exportPw2) {
       setExportErr(t("syncPage.backupPwMismatch"));
+      return;
+    }
+    if (!exportAccessPw) {
+      setExportErr(t("syncPage.exportAccessPwMissing"));
       return;
     }
 
@@ -410,10 +421,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
 
     setExporting(true);
     try {
-      const res = await api.exportVaultBackup(selected, exportPw);
+      const res = await api.exportVaultBackup(selected, exportPw, exportAccessPw);
       setExportResult(res);
       setExportPw("");
       setExportPw2("");
+      setExportAccessPw("");
     } catch (e) {
       setExportErr(errMessage(e));
     } finally {
@@ -987,6 +999,19 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               </div>
             )}
 
+            <div style={{ marginBottom: 10 }}>
+              <label className="field-label">{t("syncPage.exportAccessPw")}</label>
+              <input
+                className="input"
+                type="password"
+                autoComplete="current-password"
+                placeholder={t("syncPage.exportAccessPwPh")}
+                value={exportS3AccessPw}
+                onChange={(e) => setExportS3AccessPw(e.target.value)}
+              />
+              <div className="hint">{t("syncPage.exportCfgAccessPwHint")}</div>
+            </div>
+
             {compact ? (
               <div className="m-s3-actions">
                 <div className="m-s3-actions-main">
@@ -1207,6 +1232,20 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   onChange={(e) => setExportPw2(e.target.value)}
                 />
               </div>
+            </div>
+
+            <div className="mb-3">
+              <label className="field-label">{t("syncPage.exportAccessPw")}</label>
+              <input
+                type="password"
+                className="input"
+                placeholder={t("syncPage.exportAccessPwPh")}
+                value={exportAccessPw}
+                onChange={(e) => setExportAccessPw(e.target.value)}
+              />
+              <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                {t("syncPage.exportAccessPwHint")}
+              </p>
             </div>
 
             {exportErr && (

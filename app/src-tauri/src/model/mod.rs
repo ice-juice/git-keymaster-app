@@ -117,7 +117,8 @@ pub struct VaultData {
     pub deleted_repos: HashMap<String, String>,
 }
 
-/// 机密集合（data/secrets.enc）——只在 Rust 侧内存出现，绝不跨 IPC。
+/// 机密集合（data/secrets.enc）——容器本身不跨 IPC。
+/// 云同步 Secret Key / 代理密码经设置页 IPC 在已解锁时回填，锁定后清出内存。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Secrets {
@@ -132,6 +133,12 @@ pub struct Secrets {
     /// accountId -> 密码与历史。
     #[serde(default, serialize_with = "serde_maps::ordered_account_secret_map")]
     pub account_secrets: HashMap<String, AccountSecret>,
+    /// S3/R2 Secret Access Key。不进本机 config.json：锁定/退出动不到那份明文。
+    #[serde(default)]
+    pub cloud_sync_secret_access_key: Option<String>,
+    /// 网络代理密码。同样只进保险库信封。
+    #[serde(default)]
+    pub network_proxy_password: Option<String>,
 }
 
 /// 一个 TOTP 条目（元数据；种子单独存 Secrets）。
@@ -724,6 +731,25 @@ pub fn merge_secrets_with_meta(
     }
     if local.github_pat.is_none() {
         local.github_pat = remote.github_pat.clone();
+    }
+    // 桶钥匙和代理密码是本机连接凭据：本地已有则不让对端旧值盖掉。
+    if local
+        .cloud_sync_secret_access_key
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        local.cloud_sync_secret_access_key = remote.cloud_sync_secret_access_key.clone();
+    }
+    if local
+        .network_proxy_password
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        local.network_proxy_password = remote.network_proxy_password.clone();
     }
     for (k, v) in remote.totp_seeds.clone() {
         if !usable_seed(&v) {

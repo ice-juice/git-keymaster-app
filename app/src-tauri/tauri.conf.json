@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "御钥师",
   "mainBinaryName": "git-keymaster",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "identifier": "com.jeck.gitkeymaster",
   "build": {
     "frontendDist": "../dist",
@@ -24,7 +24,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; worker-src 'none'; base-uri 'self'; form-action 'none'",
+      "devCsp": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'none'"
     }
   },
   "bundle": {

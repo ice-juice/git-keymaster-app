@@ -17,6 +17,14 @@ use std::time::{Duration, Instant};
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// 流式下载单个对象的字节上限。
+///
+/// blob 分片上限是 8MiB，元数据容器远小于此，留足余量即可。
+const MAX_STREAM_BYTES: u64 = 512 * 1024 * 1024;
+
+/// 一次性读进内存的对象字节上限。清单与 `*.enc` 容器都远小于此。
+const MAX_INMEM_BYTES: u64 = 64 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct S3Config {
@@ -29,7 +37,9 @@ pub struct S3Config {
     pub region: String,
     /// Access Key ID
     pub access_key_id: String,
-    /// Secret Access Key
+    /// Secret Access Key。只活在已解锁的内存里；写 config.json 前必须剥掉。
+    /// 旧版会从磁盘反序列化出来，供首次解锁迁进保险库。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub secret_access_key: String,
     /// 对象存储路径前缀，默认 "gam-sync/"
     #[serde(default = "default_prefix")]
@@ -42,6 +52,16 @@ fn default_region() -> String {
 
 fn default_prefix() -> String {
     "gam-sync/".into()
+}
+
+impl S3Config {
+    /// 锁定后内存里的 Secret Key 会被清掉，此时不能去打云端。
+    pub fn has_usable_secret(&self) -> bool {
+        !self.endpoint.trim().is_empty()
+            && !self.bucket.trim().is_empty()
+            && !self.access_key_id.trim().is_empty()
+            && !self.secret_access_key.trim().is_empty()
+    }
 }
 
 #[derive(Clone)]
@@ -62,7 +82,11 @@ impl S3Client {
             .connect_timeout(std::time::Duration::from_secs(8))
             .timeout(std::time::Duration::from_secs(20))
             .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .pool_max_idle_per_host(4);
+            .pool_max_idle_per_host(4)
+            // 不跟随重定向：被黑或恶意的兼容端点可以用 30x 把带 SigV4 签名的请求
+            // 拐到别处，同 Host 重定向时 reqwest 还会保留 Authorization 头。
+            // 正常的 S3 / R2 / MinIO 数据面不需要重定向。
+            .redirect(reqwest::redirect::Policy::none());
         if let Some(p) = proxy {
             builder = net::apply_reqwest_blocking(builder, p)?;
         }
@@ -175,10 +199,20 @@ impl S3Client {
         }
         let tmp = dest.with_extension("part");
         let mut out = std::fs::File::create(&tmp)?;
-        std::io::copy(&mut resp, &mut out)
+        // 截到上限为止，不能无条件 copy 到底：响应体多长是对端（可能已被攻破，
+        // 也可能只是配错了 bucket）说了算，没有护栏就等于给了它一个写满用户磁盘的开关。
+        // 多读 1 字节用来区分「正好到上限」和「还没完」。
+        let copied = std::io::copy(&mut resp.by_ref().take(MAX_STREAM_BYTES + 1), &mut out)
             .map_err(|e| AppError::Invalid(format!("写入下载文件失败: {e}")))?;
         out.flush()?;
         drop(out);
+        if copied > MAX_STREAM_BYTES {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(AppError::Invalid(format!(
+                "云端对象超过 {} MiB 上限，已中止下载",
+                MAX_STREAM_BYTES / 1024 / 1024
+            )));
+        }
         if let Err(e) = std::fs::rename(&tmp, dest) {
             std::fs::copy(&tmp, dest).map_err(|copy_err| {
                 AppError::Io(format!("保存下载文件失败：{e} / {copy_err}"))
@@ -264,10 +298,20 @@ impl S3Client {
             )));
         }
 
-        let bytes = resp
-            .bytes()
-            .map_err(|e| AppError::Invalid(format!("读取响应失败: {e}")))?
-            .to_vec();
+        // `resp.bytes()` 会按对端给的长度一路分配下去。清单和 `*.enc` 容器都是
+        // 小文件，给一个上限，免得一个恶意或配错的端点把内存吃干。
+        let mut bytes = Vec::new();
+        let mut resp = resp;
+        resp.by_ref()
+            .take(MAX_INMEM_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| AppError::Invalid(format!("读取响应失败: {e}")))?;
+        if bytes.len() as u64 > MAX_INMEM_BYTES {
+            return Err(AppError::Invalid(format!(
+                "云端对象超过 {} MiB 上限",
+                MAX_INMEM_BYTES / 1024 / 1024
+            )));
+        }
 
         Ok(Some(bytes))
     }
@@ -341,6 +385,17 @@ impl S3Client {
             .host_str()
             .ok_or_else(|| AppError::Invalid("存储端点缺少 Host".into()))?
             .to_string();
+
+        // 必须是 HTTPS。对象内容本身是端到端加密的，但 SigV4 的
+        // Authorization 头、access key id 和对象名 HMAC 都在明文 HTTP 上裸奔，
+        // 同网段的人可以直接抄走凭据去读写整个 bucket。
+        // 本机回环例外，方便自建 MinIO 调试——那段流量不出网卡。
+        let loopback = matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]");
+        if parsed.scheme() != "https" && !loopback {
+            return Err(AppError::Invalid(
+                "存储端点必须使用 HTTPS，否则访问密钥会以明文在网络上传输".into(),
+            ));
+        }
 
         let host_header = if let Some(port) = parsed.port() {
             format!("{}:{}", host, port)

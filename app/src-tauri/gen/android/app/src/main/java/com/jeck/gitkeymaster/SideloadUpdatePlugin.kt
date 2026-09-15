@@ -22,7 +22,8 @@ class InstallApkArgs {
 }
 
 /**
- * 侧载更新：校验当前安装与 APK 为同一签名后，用 FileProvider 调起系统安装器。
+ * 侧载更新第三道：Rust 已对 APK 字节做过 minisign（与桌面同一把公钥）。
+ * 这里再比已装包与 APK 的 Android 证书，挡住「同发布者旧包」之外的换包。
  * 不覆盖签名不一致的包；debug（.debug 后缀）不得覆盖正式包。
  */
 @TauriPlugin

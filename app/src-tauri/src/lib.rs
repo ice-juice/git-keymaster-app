@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod app_config;
+pub mod autolock;
 pub mod identity;
 pub mod autostart;
 pub mod biometric;
@@ -104,6 +105,10 @@ pub fn run() {
             commands::vault::vault_try_grace_unlock,
             commands::vault::set_launch_at_login,
             commands::vault::set_grace_days,
+            commands::vault::report_activity,
+            commands::vault::get_auto_lock_settings,
+            commands::vault::set_auto_lock_minutes,
+            commands::vault::set_lock_on_sleep,
             commands::vault::set_mobile_background_run,
             commands::vault::factory_reset,
             commands::biometric::biometric_status,
@@ -285,6 +290,7 @@ pub fn run() {
             }
             crate::update::scheduler::start(app.handle().clone());
             crate::sync::scheduler::start(app.handle().clone());
+            crate::autolock::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -325,6 +331,8 @@ pub fn run() {
         .run(|_app, event| {
             // 应用退出时释放单实例锁（各退出路径最终都会触发 Exit）
             if let tauri::RunEvent::Exit = event {
+                // 退出时前端的清空定时器已经随 WebView 一起消失，这里补最后一刀。
+                crate::clipboard::clear_on_teardown();
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 crate::single_instance::release_lock();
             }

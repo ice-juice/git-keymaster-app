@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { INSTALLER_STEM as BRAND } from "./brand.mjs";
+import { signFileWithTauri } from "./sign-update-manifest.mjs";
 
 export const LEGACY_MANIFEST_NAMES = ["latest-zh-CN.json", "latest-en-US.json"];
 export const ANDROID_PLATFORM_KEY = "android-aarch64";
@@ -33,6 +34,7 @@ const COMPOUND_SUFFIXES = [
   ".AppImage",
   ".exe.sig",
   ".exe",
+  ".apk.sig",
   ".apk",
 ];
 
@@ -56,8 +58,8 @@ export function androidReleaseDownloadUrl(tag, version) {
   return `https://github.com/${RELEASE_REPO}/releases/download/v${normalized}/${androidApkFilename(version)}`;
 }
 
-/** 给 latest.json 写入 android-aarch64，不碰桌面 platforms。 */
-export function injectAndroidAarch64(text, tag, version) {
+/** 给 latest.json 写入 android-aarch64，不碰桌面 platforms。平台变了就丢掉旧 manifestSignature。 */
+export function injectAndroidAarch64(text, tag, version, signature) {
   const data = text && String(text).trim() ? JSON.parse(text) : {};
   const ver = String(version || data.version || String(tag || "").replace(/^v/, "")).replace(/^v/, "");
   if (!ver || !/^\d+\.\d+\.\d+/.test(ver)) {
@@ -66,8 +68,11 @@ export function injectAndroidAarch64(text, tag, version) {
   const platforms =
     data.platforms && typeof data.platforms === "object" ? { ...data.platforms } : {};
   const existing = platforms[ANDROID_PLATFORM_KEY];
+  const existingSig = existing && typeof existing.signature === "string" ? existing.signature : "";
+  const nextSig =
+    typeof signature === "string" && signature.trim() ? signature.replace(/\s+$/, "") : existingSig;
   platforms[ANDROID_PLATFORM_KEY] = {
-    signature: existing && typeof existing.signature === "string" ? existing.signature : "",
+    signature: nextSig,
     url: androidReleaseDownloadUrl(tag || androidReleaseTag(ver), ver),
   };
   return `${JSON.stringify(
@@ -187,6 +192,7 @@ export function mergeLatestJson(existingText, incomingText) {
     ...(existing.platforms && typeof existing.platforms === "object" ? existing.platforms : {}),
     ...(incoming.platforms && typeof incoming.platforms === "object" ? incoming.platforms : {}),
   };
+  // platforms 变了，旧 manifestSignature 不再覆盖这份内容，由发版脚本重新签。
   return `${JSON.stringify(
     {
       version: incoming.version || existing.version,
@@ -407,6 +413,10 @@ function runSelfTest() {
   if (!mergedAndroid.platforms[ANDROID_PLATFORM_KEY].url.endsWith("_arm64-v8a.apk")) {
     throw new Error("merge should add android-aarch64");
   }
+  const withSig = JSON.parse(injectAndroidAarch64("{}", "v1.5.1", "1.5.1", "apk-minisign"));
+  if (withSig.platforms[ANDROID_PLATFORM_KEY].signature !== "apk-minisign") {
+    throw new Error("injectAndroidAarch64 must write APK minisign");
+  }
   console.log("[rename] self-test ok");
 }
 
@@ -423,14 +433,15 @@ function renameAndroidApk() {
     fs.unlinkSync(dest);
   }
   fs.copyFileSync(src, dest);
+  const apkSig = signFileWithTauri(dest);
   const mapping = [[path.basename(src), destName]];
   fs.writeFileSync(path.join(cwd, "renamed-release-assets.json"), JSON.stringify(mapping, null, 2), "utf-8");
   const tag = androidReleaseTag(version);
   const latestPath = path.join(cwd, "latest.json");
   const existing = fs.existsSync(latestPath) ? fs.readFileSync(latestPath, "utf8") : "";
-  fs.writeFileSync(latestPath, injectAndroidAarch64(existing, tag, version), "utf8");
+  fs.writeFileSync(latestPath, injectAndroidAarch64(existing, tag, version, apkSig), "utf8");
   console.log(`[rename] ${path.relative(apkRoot, src)} -> arm64/release/${destName}`);
-  console.log(`[rename] wrote ${ANDROID_PLATFORM_KEY} into latest.json`);
+  console.log(`[rename] signed APK and wrote ${ANDROID_PLATFORM_KEY} into latest.json`);
   return dest;
 }
 

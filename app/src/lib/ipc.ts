@@ -24,6 +24,13 @@ export interface VaultStatus {
   startupNote?: string | null;
 }
 
+export interface AutoLockSettings {
+  autoLockMinutes: number;
+  lockOnSleep: boolean;
+  /** 本平台能否判定锁屏。false 时只有休眠会触发锁定。 */
+  screenLockDetectable: boolean;
+}
+
 export interface BiometricStatus {
   available: boolean;
   strong: boolean;
@@ -459,6 +466,10 @@ export const api = {
   vaultTryGraceUnlock: () => invoke<boolean>("vault_try_grace_unlock"),
   setLaunchAtLogin: (enabled: boolean) => invoke<void>("set_launch_at_login", { enabled }),
   setGraceDays: (days: number) => invoke<void>("set_grace_days", { days }),
+  reportActivity: () => invoke<void>("report_activity"),
+  getAutoLockSettings: () => invoke<AutoLockSettings>("get_auto_lock_settings"),
+  setAutoLockMinutes: (minutes: number) => invoke<number>("set_auto_lock_minutes", { minutes }),
+  setLockOnSleep: (enabled: boolean) => invoke<void>("set_lock_on_sleep", { enabled }),
   setMobileBackgroundRun: (enabled: boolean) =>
     invoke<void>("set_mobile_background_run", { enabled }),
   mobileLeaveApp: (keepAlive: boolean) => invoke<void>("mobile_leave_app", { keepAlive }),
@@ -547,8 +558,8 @@ export const api = {
   uploadPublicKey: (keyId: string, title: string) => invoke<void>("upload_public_key", { keyId, title }),
 
   // backup (M6)
-  exportVaultBackup: (destPath: string, password: string) =>
-    invoke<BackupSummary>("export_vault_backup", { destPath, password }),
+  exportVaultBackup: (destPath: string, password: string, accessPassword: string) =>
+    invoke<BackupSummary>("export_vault_backup", { destPath, password, accessPassword }),
   inspectVaultBackup: (srcPath: string, password: string) =>
     invoke<BackupSummary>("inspect_vault_backup", { srcPath, password }),
   importVaultBackup: (srcPath: string, password: string, merge: boolean) =>
@@ -558,8 +569,8 @@ export const api = {
   getCloudSyncConfig: () => invoke<S3Config | null>("get_cloud_sync_config"),
   saveCloudSyncConfig: (syncConfig: S3Config | null) =>
     invoke<void>("save_cloud_sync_config", { syncConfig }),
-  exportS3Config: (destPath: string, syncConfig: S3Config) =>
-    invoke<void>("export_s3_config", { destPath, syncConfig }),
+  exportS3Config: (destPath: string, syncConfig: S3Config, accessPassword: string) =>
+    invoke<void>("export_s3_config", { destPath, syncConfig, accessPassword }),
   importS3Config: (srcPath: string) => invoke<S3Config>("import_s3_config", { srcPath }),
   importS3ConfigText: (raw: string) => invoke<S3Config>("import_s3_config_text", { raw }),
   testCloudSyncConfig: (syncConfig: S3Config) =>

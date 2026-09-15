@@ -80,6 +80,39 @@ pub const OPEN_RETRY_MS: u64 = 20;
 static HAS_WRITE: AtomicBool = AtomicBool::new(false);
 static LAST_SEQ: AtomicU32 = AtomicU32::new(0);
 static LAST_HASH: Mutex<Option<[u8; 32]>> = Mutex::new(None);
+/// 自动清空的代次。每次新写入自增，旧定时器醒来发现代次变了就放弃。
+static CLEAR_GEN: AtomicU32 = AtomicU32::new(0);
+
+/// 在后端挂一个定时清空。
+///
+/// 这件事原先只由前端 `window.setTimeout` 负责，进程一退出（或 WebView 一刷新）
+/// 定时器就跟着消失，机密会无限期留在剪贴板里——而自查清单还在告诉用户
+/// 「复制后会限时清空」。后端计时不受界面生命周期影响。
+pub fn arm_auto_clear(seconds: u32) {
+    if seconds == 0 {
+        return;
+    }
+    let gen = CLEAR_GEN.fetch_add(1, Ordering::SeqCst) + 1;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(u64::from(seconds)));
+        // 期间又复制过别的东西，那次写入会自带新的定时器。
+        if CLEAR_GEN.load(Ordering::SeqCst) != gen {
+            return;
+        }
+        if let Err(e) = clear_if_ours() {
+            log::warn!("定时清空剪贴板失败：{e}");
+        }
+    });
+}
+
+/// 锁定与退出时立刻清空本程序写入的内容，不等定时器。
+pub fn clear_on_teardown() {
+    if !HAS_WRITE.load(Ordering::SeqCst) && LAST_HASH.lock().is_ok_and(|h| h.is_none()) {
+        return;
+    }
+    CLEAR_GEN.fetch_add(1, Ordering::SeqCst);
+    let _ = clear_if_ours();
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WriteOutcome {

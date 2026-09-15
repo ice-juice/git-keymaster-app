@@ -59,6 +59,11 @@ pub async fn check(
 
     match manifest::fetch_manifest(src, proxy).await {
         Ok(Some(doc)) => {
+            let wm = crate::update::watermark::load();
+            let trust = manifest::accept_manifest(src, &doc, &wm)?;
+            if matches!(trust, manifest::ManifestTrust::Signed) {
+                let _ = manifest::record_verified_manifest(trust, &doc.version, false);
+            }
             let latest = doc.version.clone();
             let newer = manifest::is_newer(&current_version, &latest);
             let asset_url = if cfg!(target_os = "android") {
@@ -106,12 +111,16 @@ pub async fn download_and_install(
     let doc = manifest::fetch_manifest(src, proxy)
         .await?
         .ok_or_else(|| AppError::Invalid("远端尚未发布更新清单".into()))?;
+    let wm = crate::update::watermark::load();
+    let trust = manifest::accept_manifest(src, &doc, &wm)?;
     if !manifest::is_newer(&current_version, &doc.version) {
         return Err(AppError::Invalid("不允许安装更低或相同版本".into()));
     }
     let asset = platform_asset(&doc, ANDROID_PLATFORM_KEY)
         .ok_or_else(|| AppError::Invalid("更新清单没有 android-aarch64 安装包".into()))?;
+    manifest::require_android_minisign(asset)?;
     let url = parse_https_download(&asset.url)?;
+    let apk_signature = asset.signature.clone();
 
     let dest = apk_cache_path(app)?;
     let _ = app.emit(
@@ -119,7 +128,10 @@ pub async fn download_and_install(
         json!({ "phase": "started", "downloaded": 0, "total": null }),
     );
     download_apk(&url, &dest, proxy, app).await?;
+    verify_downloaded_apk(&dest, &apk_signature)?;
     let _ = app.emit("update-progress", json!({ "phase": "finished" }));
+    // 包字节已验签；官方无签过渡期也只在这一刻抬地板，避免无签假 version 在检查时污染。
+    let _ = manifest::record_verified_manifest(trust, &doc.version, true);
 
     let path = dest.to_string_lossy().to_string();
     let app = app.clone();
@@ -175,6 +187,15 @@ fn parse_https_download(raw: &str) -> Result<Url> {
 }
 
 #[cfg(target_os = "android")]
+fn verify_downloaded_apk(path: &std::path::Path, signature: &str) -> Result<()> {
+    let bytes = std::fs::read(path)?;
+    let pubkey = crate::update::minisign::bundled_updater_pubkey()?;
+    crate::update::minisign::verify_bytes(&bytes, signature, &pubkey).map_err(|_| {
+        AppError::Invalid("APK minisign 校验失败，已拒绝安装".into())
+    })
+}
+
+#[cfg(target_os = "android")]
 fn apk_cache_path(app: &AppHandle) -> Result<PathBuf> {
     let dir = app
         .path()
@@ -191,7 +212,9 @@ async fn download_apk(
     proxy: Option<&NetworkProxy>,
     app: &AppHandle,
 ) -> Result<()> {
-    let mut builder = reqwest::Client::builder().timeout(std::time::Duration::from_secs(120));
+    let mut builder = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .https_only(true);
     if let Some(p) = proxy {
         builder = net::apply_reqwest_async(builder, p)?;
     }
@@ -250,5 +273,19 @@ mod tests {
     fn apk_url_must_be_https() {
         assert!(parse_https_download("http://example.com/a.apk").is_err());
         assert!(parse_https_download("https://example.com/a.apk").is_ok());
+    }
+
+    #[test]
+    fn apk_minisign_empty_or_wrong_is_rejected() {
+        assert!(manifest::require_android_minisign(&manifest::PlatformAsset {
+            url: "https://example.com/a.apk".into(),
+            signature: String::new(),
+        })
+        .is_err());
+        let key = crate::update::minisign::TestKey::generate();
+        let apk = b"fake-apk-bytes";
+        let sig = key.sign(apk);
+        crate::update::minisign::verify_bytes(apk, &sig, &key.pubkey_b64).unwrap();
+        assert!(crate::update::minisign::verify_bytes(b"other", &sig, &key.pubkey_b64).is_err());
     }
 }

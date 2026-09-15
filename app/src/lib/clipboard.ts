@@ -39,10 +39,17 @@ async function copyTextWeb(text: string): Promise<boolean> {
   }
 }
 
-/** 走系统剪贴板，避免 WebView 弹出 localhost 权限框。机密路径传 `secret: true`。 */
+/**
+ * 走系统剪贴板，避免 WebView 弹出 localhost 权限框。机密路径传 `secret: true`。
+ *
+ * **机密路径禁止先用 WebView 写一遍**。`copyTextSync` 是普通剪贴板写入，不带排除格式；
+ * Windows 剪贴板历史/云剪贴板在那一刻就已经把内容抓走了，后面原生路径再打排除标记
+ * 也追不回来——等于把排除功能自己旁路掉。原生写入是 Win32 直调，本就不需要用户手势。
+ */
 export async function writeClipboard(text: string, secret = false): Promise<ClipboardWriteResult> {
-  const syncOk = copyTextSync(text);
   if (isTauri()) {
+    // 只有非机密内容（公钥等）才保留同步预写，用来兜住手势过期导致的复制失败。
+    const syncOk = secret ? false : copyTextSync(text);
     try {
       const result = await api.clipboardWrite(text, secret);
       if (result.notice) {
@@ -56,7 +63,7 @@ export async function writeClipboard(text: string, secret = false): Promise<Clip
       throw e;
     }
   }
-  if (syncOk || (await copyTextWeb(text))) return PLAIN;
+  if (copyTextSync(text) || (await copyTextWeb(text))) return PLAIN;
   throw new Error(i18n.t("common.copyFailedPerm"));
 }
 

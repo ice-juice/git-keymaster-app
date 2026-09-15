@@ -143,6 +143,10 @@ fn run_locked(app: &AppHandle, state: &AppState, trigger: &str) -> Result<Option
         }
         v.clone()
     };
+    // 锁定后 Secret Key 已从内存清掉；没有钥匙就静默跳过，绝不拿空密钥去签请求。
+    if !sync_config.has_usable_secret() {
+        return Ok(None);
+    }
 
     let client = S3Client::from_app(sync_config, &app_cfg)?;
     let unmetered = state.network_unmetered.load(Ordering::Relaxed);

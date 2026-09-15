@@ -66,8 +66,11 @@ impl Vault {
             return Err(AppError::AlreadyInitialized(root.display().to_string()));
         }
         std::fs::create_dir_all(root)?;
+        restrict_dir_to_owner(root);
         for sub in ["data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons", "blobs"] {
-            std::fs::create_dir_all(root.join(sub))?;
+            let dir = root.join(sub);
+            std::fs::create_dir_all(&dir)?;
+            restrict_dir_to_owner(&dir);
         }
 
         let mut kdf = kdf;
@@ -191,6 +194,8 @@ impl Vault {
     }
 
     /// 锁定：清零 MK。
+    /// 云同步 / 代理密钥在 AppConfig 内存里，由 `lock_in_memory` 一并清掉；
+    /// 这里只动主密钥，避免 Vault 反过来依赖本机配置。
     pub fn lock(&mut self) {
         self.mk = None; // MasterKey 的 Drop 会 zeroize
     }
@@ -286,8 +291,11 @@ impl Vault {
             return Err(AppError::AlreadyInitialized(root.display().to_string()));
         }
         std::fs::create_dir_all(root)?;
+        restrict_dir_to_owner(root);
         for sub in ["data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons", "blobs"] {
-            std::fs::create_dir_all(root.join(sub))?;
+            let dir = root.join(sub);
+            std::fs::create_dir_all(&dir)?;
+            restrict_dir_to_owner(&dir);
         }
         header.kdf.clamp_to_safe_bounds();
         header.envelopes.password = envelope::wrap_with_password(&mk, new_password, &header.kdf)?;
@@ -345,12 +353,44 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
             tmp.display()
         )));
     }
+    // 在 rename 之前收权限，正本才不会有一瞬间是 0644。
+    // 这条路径写的是 vault.json / *.enc / blobs / config.json，
+    // 默认 umask 下同机其他用户可读。
+    restrict_to_owner(&tmp);
     if let Err(e) = replace_file_with_tmp(path, &tmp, data) {
         let _ = std::fs::remove_file(&tmp);
         return Err(AppError::Io(format!("写入 {} 失败：{e}", path.display())));
     }
     let _ = std::fs::remove_file(&tmp);
     Ok(())
+}
+
+/// 收到「仅所有者可读写」。Windows 上依赖用户目录自身的 ACL，不额外处理。
+pub fn restrict_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(e) = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)) {
+            log::warn!("收紧 {} 权限失败：{e}", path.display());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+/// 目录收到 0700，避免同机其他用户枚举工作空间内容。
+pub fn restrict_dir_to_owner(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700));
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
 }
 
 fn make_writable(path: &Path) {
@@ -375,6 +415,7 @@ fn replace_file_with_tmp(path: &Path, tmp: &Path, data: &[u8]) -> std::io::Resul
             log::warn!("无法把 {} 挪到上一份副本，改为直接覆盖：{e}", path.display());
             make_writable(path);
             std::fs::write(path, data)?;
+            restrict_to_owner(path);
             let _ = std::fs::remove_file(tmp);
             return Ok(());
         }
@@ -393,6 +434,7 @@ fn replace_file_with_tmp(path: &Path, tmp: &Path, data: &[u8]) -> std::io::Resul
             }
             make_writable(path);
             std::fs::write(path, data)?;
+            restrict_to_owner(path);
             let _ = std::fs::remove_file(tmp);
             Ok(())
         }

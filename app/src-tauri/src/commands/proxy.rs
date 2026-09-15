@@ -1,8 +1,8 @@
 //! 网络代理 IPC。
 
 use crate::app_config::NetworkProxy;
-use crate::commands::{recover_lock, AppState};
-use crate::error::Result;
+use crate::commands::{recover_lock, vault_is_unlocked, AppState};
+use crate::error::{AppError, Result};
 use crate::net;
 use serde::Serialize;
 use tauri::State;
@@ -20,12 +20,20 @@ pub struct ProxyTestResult {
 
 #[tauri::command]
 pub fn get_network_proxy(state: State<AppState>) -> Result<Option<NetworkProxy>> {
+    let unlocked = vault_is_unlocked(&state);
     let cfg = recover_lock(&state.config);
-    Ok(cfg.network_proxy.clone())
+    if unlocked {
+        Ok(cfg.network_proxy.clone())
+    } else {
+        Ok(cfg.redact_network_proxy())
+    }
 }
 
 #[tauri::command]
 pub fn save_network_proxy(state: State<AppState>, proxy: Option<NetworkProxy>) -> Result<()> {
+    if !vault_is_unlocked(&state) {
+        return Err(AppError::Locked);
+    }
     if let Some(ref p) = proxy {
         if p.enabled {
             let _ = net::proxy_url(p)?;
@@ -33,7 +41,21 @@ pub fn save_network_proxy(state: State<AppState>, proxy: Option<NetworkProxy>) -
             let _ = net::proxy_url(p)?;
         }
     }
+    let vault = {
+        let guard = recover_lock(&state.vault);
+        guard.as_ref().filter(|v| v.is_unlocked()).cloned().ok_or(AppError::Locked)?
+    };
+    match proxy.as_ref() {
+        Some(p) => {
+            crate::store::set_proxy_password(
+                &vault,
+                p.password.clone().filter(|s| !s.trim().is_empty()),
+            )?;
+        }
+        None => crate::store::set_proxy_password(&vault, None)?,
+    }
     let mut cfg = recover_lock(&state.config);
+    let _ = cfg.take_pending_legacy_secrets();
     cfg.network_proxy = proxy;
     cfg.save()
 }

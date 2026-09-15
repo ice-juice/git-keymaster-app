@@ -66,12 +66,18 @@ fn iso_now() -> String {
 }
 
 /// 导出加密备份包
+/// 备份口令下限。这个文件是最容易被带走的一份完整机密，口令不能形同虚设。
+pub const MIN_BACKUP_PASSWORD_LEN: usize = 8;
+
 pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<BackupSummary> {
     if !vault.is_unlocked() {
         return Err(AppError::Locked);
     }
-    if password.trim().is_empty() {
-        return Err(AppError::Invalid("备份加密密码不能为空".into()));
+    // 前端也校验长度，但后端必须自己兜住：IPC 不是只有界面会调。
+    if password.chars().count() < MIN_BACKUP_PASSWORD_LEN {
+        return Err(AppError::Invalid(format!(
+            "备份加密密码不能少于 {MIN_BACKUP_PASSWORD_LEN} 位"
+        )));
     }
 
     let mut data = store::load_data(vault)?;
@@ -142,8 +148,10 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
     // KDF 派生
     let salt = crypto::new_salt();
     let nonce = crypto::new_nonce();
-    // 使用标称安全的快速 Argon2 参数：32MiB, 3 次迭代
-    let kdf_params = KdfParams::new(32 * 1024, 3, 1);
+    // 对齐保险库自身的跨设备档位（128MiB / 4 轮）。原先是 32MiB/3 轮：
+    // 最容易被拷走的一份完整机密，却用了全项目最弱的 KDF。
+    // 参数随文件头走，手机端恢复仍能解（与 vault.json 同一上限）。
+    let kdf_params = KdfParams::new(kdf::MEM_CEIL_MOBILE_SAFE_KIB, 4, 4);
     let kek = kdf::derive_kek(password.as_bytes(), &salt, &kdf_params)?;
 
     let ciphertext = crypto::aead_encrypt(&kek, &nonce, &payload_bytes)?;
@@ -186,7 +194,12 @@ pub fn inspect_backup(src_path: &Path, password: &str) -> Result<BackupPayload> 
     let parallelism = u32::from_le_bytes(raw[cursor..cursor + 4].try_into().unwrap());
     cursor += 4;
 
-    let kdf_params = KdfParams::new(mem_kib, iters, parallelism);
+    // 参数来自**文件**，也就是来自不可信输入。不 clamp 的话，一个把 memKiB
+    // 写成 0xFFFFFFFF 的 .gambackup 会让 Argon2 去申请 4TiB，进程直接被系统杀掉
+    // （移动端表现为闪退）。clamp 到与保险库头部同一套安全边界，再过一次本机承受力护栏。
+    let mut kdf_params = KdfParams::new(mem_kib, iters, parallelism);
+    kdf_params.clamp_to_safe_bounds();
+    kdf::ensure_affordable(&kdf_params)?;
 
     let mut salt = [0u8; SALT_LEN];
     salt.copy_from_slice(&raw[cursor..cursor + SALT_LEN]);

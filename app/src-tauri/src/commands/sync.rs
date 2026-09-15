@@ -95,7 +95,7 @@ fn invalidate_view_cache() {
     }
 }
 
-fn invalidate_client_cache() {
+pub(crate) fn invalidate_client_cache() {
     let old = view_cache().client.lock().ok().and_then(|mut g| g.take());
     if old.is_some() {
         // reqwest::blocking::Client 在 Tokio worker 上 drop 会 panic。
@@ -155,9 +155,17 @@ pub fn export_vault_backup(
     state: State<AppState>,
     dest_path: String,
     password: String,
+    access_password: String,
 ) -> Result<BackupSummary> {
     let vault_guard = recover_lock(&state.vault);
     let vault = vault_guard.as_ref().ok_or(AppError::Locked)?;
+    // 这一步会把全部私钥、账号密码、TOTP 种子和 PAT 打成一个可随手拷走的文件，
+    // 加密口令还由调用方自己定。所以必须当场验访问密码，不吃免密查看窗口的便利——
+    // 否则一台没锁的机器前，任何人点几下就能整仓带走。
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    vault.verify_password(&access_password)?;
     backup::export_backup(vault, Path::new(&dest_path), &password)
 }
 
@@ -198,8 +206,13 @@ pub fn import_vault_backup(
 
 #[tauri::command]
 pub fn get_cloud_sync_config(state: State<AppState>) -> Result<Option<S3Config>> {
+    let unlocked = crate::commands::vault_is_unlocked(&state);
     let config = recover_lock(&state.config);
-    Ok(config.cloud_sync.clone())
+    if unlocked {
+        Ok(config.cloud_sync.clone())
+    } else {
+        Ok(config.redact_cloud_sync())
+    }
 }
 
 #[tauri::command]
@@ -207,7 +220,26 @@ pub fn save_cloud_sync_config(
     state: State<AppState>,
     sync_config: Option<S3Config>,
 ) -> Result<()> {
+    let vault = clone_unlocked_vault(&state)?;
+    let mut sync_config = sync_config;
+    match sync_config.as_mut() {
+        Some(cfg) => {
+            if cfg.secret_access_key.trim().is_empty() {
+                if let Some(sk) = crate::store::cloud_sync_secret(&vault)? {
+                    cfg.secret_access_key = sk;
+                }
+            }
+            if cfg.secret_access_key.trim().is_empty() {
+                return Err(AppError::Invalid(
+                    "请填写完整的 Endpoint、Bucket、Access Key 与 Secret Key".into(),
+                ));
+            }
+            crate::store::set_cloud_sync_secret(&vault, Some(cfg.secret_access_key.clone()))?;
+        }
+        None => crate::store::set_cloud_sync_secret(&vault, None)?,
+    }
     let mut config = recover_lock(&state.config);
+    let _ = config.take_pending_legacy_secrets();
     config.cloud_sync = sync_config;
     config.save()?;
     drop(config);
@@ -217,8 +249,36 @@ pub fn save_cloud_sync_config(
 }
 
 #[tauri::command]
-pub fn export_s3_config(dest_path: String, sync_config: S3Config) -> Result<()> {
-    crate::sync::s3::write_s3_config_file(Path::new(&dest_path), &sync_config)
+pub fn export_s3_config(
+    state: State<AppState>,
+    dest_path: String,
+    sync_config: S3Config,
+    access_password: String,
+) -> Result<()> {
+    let vault = clone_unlocked_vault(&state)?;
+    export_s3_config_authorized(&vault, Path::new(&dest_path), sync_config, &access_password)
+}
+
+/// 导出文件带 Secret Key，必须当场验访问密码，不能只靠「已经解锁」。
+pub fn export_s3_config_authorized(
+    vault: &Vault,
+    dest: &Path,
+    mut sync_config: S3Config,
+    access_password: &str,
+) -> Result<()> {
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    vault.verify_password(access_password)?;
+    if sync_config.secret_access_key.trim().is_empty() {
+        if let Some(sk) = crate::store::cloud_sync_secret(vault)? {
+            sync_config.secret_access_key = sk;
+        }
+    }
+    if sync_config.secret_access_key.trim().is_empty() {
+        return Err(AppError::Invalid("尚未配置 Secret Access Key".into()));
+    }
+    crate::sync::s3::write_s3_config_file(dest, &sync_config)
 }
 
 #[tauri::command]
@@ -266,8 +326,8 @@ pub async fn get_cloud_sync_status(
     };
 
     let sync_config = match sync_config {
-        Some(c) => c,
-        None => {
+        Some(c) if c.has_usable_secret() => c,
+        Some(_) | None => {
             let st = engine::local_sync_status(&vault, false)?;
             store_status(st.clone());
             return Ok(st);
@@ -334,6 +394,7 @@ pub async fn cloud_sync_push(app: AppHandle, state: State<'_, AppState>) -> Resu
             config
                 .cloud_sync
                 .clone()
+                .filter(|c| c.has_usable_secret())
                 .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?,
             config.clone(),
         )
@@ -362,6 +423,7 @@ pub async fn cloud_sync_pull(app: AppHandle, state: State<'_, AppState>) -> Resu
             config
                 .cloud_sync
                 .clone()
+                .filter(|c| c.has_usable_secret())
                 .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?,
             config.clone(),
         )
@@ -438,6 +500,9 @@ pub fn report_network_unmetered(state: State<AppState>, unmetered: bool) {
 }
 
 fn require_client(state: &AppState) -> Result<S3Client> {
+    if !crate::commands::vault_is_unlocked(state) {
+        return Err(AppError::Locked);
+    }
     let sync_config = state
         .config
         .lock()
@@ -445,6 +510,9 @@ fn require_client(state: &AppState) -> Result<S3Client> {
         .cloud_sync
         .clone()
         .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?;
+    if !sync_config.has_usable_secret() {
+        return Err(AppError::Locked);
+    }
     reuse_s3_client(state, sync_config)
 }
 
@@ -554,4 +622,66 @@ pub fn restore_from_cloud(
     }
     crate::commands::vault::schedule_after_unlock(app);
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::vault::header::KdfParams;
+    use crate::vault::kdf::{ITERS_FLOOR, MEM_FLOOR_KIB};
+
+    fn unlocked_vault() -> (Vault, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!("gam-s3-export-{}", uuid::Uuid::new_v4()));
+        let kdf = KdfParams::new(MEM_FLOOR_KIB, ITERS_FLOOR, 1);
+        let (v, _rec) = Vault::init(&root, "access-pw", kdf).unwrap();
+        (v, root)
+    }
+
+    fn sample_s3(secret: &str) -> S3Config {
+        S3Config {
+            endpoint: "https://example.r2.cloudflarestorage.com".into(),
+            bucket: "vault".into(),
+            region: "auto".into(),
+            access_key_id: "AKIAEXAMPLE".into(),
+            secret_access_key: secret.into(),
+            prefix: "gam-sync/".into(),
+        }
+    }
+
+    #[test]
+    fn locked_get_redacts_and_sync_is_unusable() {
+        let cfg = sample_s3("sk-should-not-leak");
+        let mut app = crate::app_config::AppConfig::default();
+        app.cloud_sync = Some(cfg.clone());
+        let redacted = app.redact_cloud_sync().unwrap();
+        assert!(redacted.secret_access_key.is_empty());
+        assert_eq!(redacted.access_key_id, "AKIAEXAMPLE");
+        assert!(cfg.has_usable_secret());
+        let mut locked = cfg.clone();
+        locked.secret_access_key.clear();
+        assert!(!locked.has_usable_secret(), "锁定清密钥后调度器不得静默同步");
+    }
+
+    #[test]
+    fn export_s3_requires_access_password_and_unlock() {
+        let (mut vault, root) = unlocked_vault();
+        crate::store::set_cloud_sync_secret(&vault, Some("sk-export".into())).unwrap();
+        let dest = root.join("exported.json");
+        let cfg = sample_s3("sk-export");
+
+        let empty = export_s3_config_authorized(&vault, &dest, cfg.clone(), "");
+        assert!(empty.is_err(), "无访问密码不得导出");
+
+        let wrong = export_s3_config_authorized(&vault, &dest, cfg.clone(), "nope");
+        assert!(wrong.is_err(), "访问密码错误不得导出");
+
+        export_s3_config_authorized(&vault, &dest, cfg.clone(), "access-pw").unwrap();
+        let raw = std::fs::read_to_string(&dest).unwrap();
+        assert!(raw.contains("sk-export"));
+
+        vault.lock();
+        let locked = export_s3_config_authorized(&vault, &root.join("locked.json"), cfg, "access-pw");
+        assert!(matches!(locked, Err(AppError::Locked)));
+        std::fs::remove_dir_all(&root).ok();
+    }
 }

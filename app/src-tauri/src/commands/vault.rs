@@ -200,6 +200,7 @@ pub(crate) fn adopt_unlocked_vault(
     let root = PathBuf::from(&workspace_path);
     *recover_lock(&state.vault) = Some(vault);
     recover_lock(&state.unlock_guard).reset();
+    crate::commands::hydrate_config_secrets(state);
     grant_grace_if_configured(state);
     let _ = crate::sys::adopt_ssh_config(&root);
     Ok(())
@@ -240,6 +241,7 @@ pub fn vault_unlock(app: AppHandle, state: State<'_, AppState>, password: String
         Ok(()) => {
             drop(vault);
             recover_lock(&state.unlock_guard).reset();
+            crate::commands::hydrate_config_secrets(&state);
             grant_grace_if_configured(&state);
             begin_write_lock(&state, &app, "正在从云端同步，可浏览、暂不可修改");
             schedule_after_unlock(app);
@@ -264,6 +266,7 @@ pub fn vault_unlock_recovery(
     let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
     v.unlock_with_recovery(&recovery_key)?;
     drop(vault);
+    crate::commands::hydrate_config_secrets(&state);
     grant_grace_if_configured(&state);
     begin_write_lock(&state, &app, "正在从云端同步，可浏览、暂不可修改");
     schedule_after_unlock(app);
@@ -289,6 +292,7 @@ pub fn vault_unlock_biometric(app: AppHandle, state: State<'_, AppState>) -> Res
             v.unlock_with_master_key(mk)?;
             drop(vault);
             recover_lock(&state.unlock_guard).reset();
+            crate::commands::hydrate_config_secrets(&state);
             grant_grace_if_configured(&state);
             begin_write_lock(&state, &app, "正在从云端同步，可浏览、暂不可修改");
             schedule_after_unlock(app);
@@ -314,6 +318,14 @@ pub fn lock_in_memory(state: &AppState) {
     if let Some(v) = recover_lock(&state.vault).as_mut() {
         v.lock();
     }
+    {
+        let mut cfg = recover_lock(&state.config);
+        cfg.clear_runtime_secrets();
+    }
+    crate::commands::sync::invalidate_cloud_view_cache();
+    crate::commands::sync::invalidate_client_cache();
+    // 锁上了却把刚复制的密码留在剪贴板，等于没锁。
+    crate::clipboard::clear_on_teardown();
     crate::commands::clear_reveal_grace(state);
     state
         .writes_locked
@@ -357,6 +369,7 @@ pub fn try_grace_unlock_silent(state: &AppState) -> bool {
             return false;
         }
     }
+    crate::commands::hydrate_config_secrets(state);
     true
 }
 
@@ -635,6 +648,47 @@ pub fn set_grace_days(state: State<AppState>, days: u32) -> Result<()> {
         grant_grace_if_configured(&state);
     }
     Ok(())
+}
+
+/// 前端节流上报的用户活动心跳，喂给空闲自动锁定判定。
+#[tauri::command]
+pub fn report_activity(state: State<AppState>) {
+    crate::autolock::touch(&state);
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoLockSettings {
+    pub auto_lock_minutes: u32,
+    pub lock_on_sleep: bool,
+    /// 本平台能否判定锁屏。false 时只有休眠能触发，界面需如实说明。
+    pub screen_lock_detectable: bool,
+}
+
+#[tauri::command]
+pub fn get_auto_lock_settings(state: State<AppState>) -> AutoLockSettings {
+    let cfg = recover_lock(&state.config);
+    AutoLockSettings {
+        auto_lock_minutes: cfg.auto_lock_minutes,
+        lock_on_sleep: cfg.lock_on_sleep,
+        screen_lock_detectable: crate::autolock::workstation_locked().is_some(),
+    }
+}
+
+#[tauri::command]
+pub fn set_auto_lock_minutes(state: State<AppState>, minutes: u32) -> Result<u32> {
+    let minutes = crate::app_config::clamp_auto_lock_minutes(minutes);
+    let mut cfg = recover_lock(&state.config);
+    cfg.auto_lock_minutes = minutes;
+    cfg.save()?;
+    Ok(minutes)
+}
+
+#[tauri::command]
+pub fn set_lock_on_sleep(state: State<AppState>, enabled: bool) -> Result<()> {
+    let mut cfg = recover_lock(&state.config);
+    cfg.lock_on_sleep = enabled;
+    cfg.save()
 }
 
 #[derive(Serialize)]

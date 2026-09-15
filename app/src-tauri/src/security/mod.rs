@@ -15,6 +15,9 @@ const REVEAL_GRACE_LONG_MINUTES: u32 = 15;
 /// 超过 30 分钟（默认的两倍）视为窗口偏长。
 const AUTO_LOCK_LONG_MINUTES: u32 = 30;
 
+const LIMITATION_SCREEN_LOCK: &str =
+    "本平台只能识别系统挂起（休眠），识别不了「仅锁屏但没睡」。锁屏期间保险库可能仍处于解锁态，请同时把空闲自动锁定设成较短的时长兜底。";
+
 const LIMITATION_CLIPBOARD: &str =
     "无法枚举剪贴板监听者或截屏调用方。剪贴板排除是给系统历史、云剪贴板和守规矩的管理器看的协作式约定，恶意程序可无视；不能防木马，也不会让截图变黑。";
 
@@ -92,6 +95,7 @@ pub fn build_checklist(cfg: &AppConfig) -> SecurityChecklist {
         item_lock_on_sleep(cfg.lock_on_sleep),
         item_auto_lock(cfg.auto_lock_minutes),
         item_clipboard_exclude(),
+        item_config_secrets(cfg),
     ];
     SecurityChecklist {
         checked_at: now_iso8601(),
@@ -206,15 +210,28 @@ fn item_lock_on_sleep(enabled: bool) -> SecurityFinding {
             limitation: None,
         }
     } else {
+        let screen_lock_detectable = crate::autolock::workstation_locked().is_some();
         SecurityFinding {
             id: "app.lock-on-sleep".into(),
             category: SecurityCategory::App,
             severity: SecuritySeverity::Ok,
-            title: "休眠或锁屏时会自动锁定".into(),
-            detail: "lock_on_sleep 已开启。".into(),
+            title: if screen_lock_detectable {
+                "休眠或锁屏时会自动锁定".into()
+            } else {
+                "休眠时会自动锁定".into()
+            },
+            detail: if screen_lock_detectable {
+                "lock_on_sleep 已开启，系统挂起或切到锁屏安全桌面时都会清空内存中的主密钥。".into()
+            } else {
+                "lock_on_sleep 已开启，系统挂起后会清空内存中的主密钥。".into()
+            },
             advice: "保持开启即可。".into(),
             settings_anchor: Some("lock-on-sleep".into()),
-            limitation: None,
+            limitation: if screen_lock_detectable {
+                None
+            } else {
+                Some(LIMITATION_SCREEN_LOCK.into())
+            },
         }
     }
 }
@@ -251,6 +268,32 @@ fn item_auto_lock(minutes: u32) -> SecurityFinding {
             detail: format!("当前 {minutes} 分钟无操作后锁定。"),
             advice: "默认 15 分钟。设为 0 会关闭此项。".into(),
             settings_anchor: Some("auto-lock".into()),
+            limitation: None,
+        }
+    }
+}
+
+fn item_config_secrets(cfg: &AppConfig) -> SecurityFinding {
+    if cfg.has_pending_legacy_secrets() {
+        SecurityFinding {
+            id: "storage.config-secrets".into(),
+            category: SecurityCategory::Storage,
+            severity: SecuritySeverity::Warn,
+            title: "本机配置里仍有明文云同步或代理密钥".into(),
+            detail: "旧版把 Secret Access Key 和代理密码写在 config.json。锁定、退出、锁屏都动不到这份文件。".into(),
+            advice: "解锁一次即可自动迁入保险库信封并从 config.json 抹掉。在此之前请勿把配置目录拷到同步盘或未加密磁盘。".into(),
+            settings_anchor: Some("cloud-sync".into()),
+            limitation: None,
+        }
+    } else {
+        SecurityFinding {
+            id: "storage.config-secrets".into(),
+            category: SecurityCategory::Storage,
+            severity: SecuritySeverity::Ok,
+            title: "云同步密钥与代理密码已进保险库".into(),
+            detail: "Secret Access Key 和代理密码只存在已加密的 secrets 容器；config.json 只留 endpoint / bucket / 代理主机等非机密字段。锁定后内存里的这两份密钥会被清掉。".into(),
+            advice: "导出 S3 配置仍会带出 Secret Key，需要当场验证访问密码。".into(),
+            settings_anchor: Some("cloud-sync".into()),
             limitation: None,
         }
     }
@@ -426,6 +469,22 @@ mod tests {
     }
 
     #[test]
+    fn pending_config_secrets_are_warn() {
+        let mut cfg = AppConfig::default();
+        cfg.pending_legacy_secrets = Some(crate::app_config::LegacyConfigSecrets {
+            s3_secret_access_key: Some("sk".into()),
+            proxy_password: None,
+        });
+        let item = build_checklist(&cfg)
+            .items
+            .into_iter()
+            .find(|i| i.id == "storage.config-secrets")
+            .unwrap();
+        assert_eq!(item.severity, SecuritySeverity::Warn);
+        assert_eq!(item.category, SecurityCategory::Storage);
+    }
+
+    #[test]
     fn auto_lock_zero_is_info() {
         let mut cfg = AppConfig::default();
         cfg.auto_lock_minutes = 0;
@@ -447,6 +506,7 @@ mod tests {
             "app.reveal-grace",
             "app.lock-on-sleep",
             "app.auto-lock",
+            "storage.config-secrets",
         ] {
             assert_eq!(
                 list.items.iter().find(|i| i.id == id).unwrap().severity,

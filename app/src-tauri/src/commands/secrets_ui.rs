@@ -24,12 +24,19 @@ pub struct ClipboardWriteResult {
 }
 
 #[tauri::command]
-pub fn clipboard_write(app: AppHandle, mut text: String, secret: Option<bool>) -> Result<ClipboardWriteResult> {
+pub fn clipboard_write(
+    app: AppHandle,
+    state: State<AppState>,
+    mut text: String,
+    secret: Option<bool>,
+) -> Result<ClipboardWriteResult> {
+    let clear_seconds = recover_lock(&state.config).clipboard_clear_seconds;
+
     #[cfg(target_os = "android")]
     {
         let outcome = clipboard::write_android(&app, &text);
         text.zeroize();
-        let _ = secret;
+        let _ = (secret, clear_seconds);
         let outcome = outcome.map_err(clipboard_err)?;
         return Ok(ClipboardWriteResult {
             excluded: outcome.excluded,
@@ -45,6 +52,10 @@ pub fn clipboard_write(app: AppHandle, mut text: String, secret: Option<bool>) -
         let outcome = clipboard::write(&text, secret);
         text.zeroize();
         let outcome = outcome.map_err(clipboard_err)?;
+        // 后端计时，不依赖界面还活着。
+        if secret {
+            clipboard::arm_auto_clear(clear_seconds);
+        }
         Ok(ClipboardWriteResult {
             excluded: outcome.excluded,
             fallback: outcome.fallback,

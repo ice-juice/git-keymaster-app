@@ -31,6 +31,31 @@ pub fn recover_lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+pub fn vault_is_unlocked(state: &AppState) -> bool {
+    recover_lock(&state.vault)
+        .as_ref()
+        .is_some_and(|v| v.is_unlocked())
+}
+
+/// 解锁后把旧 config.json 明文迁进信封，并回填内存。失败不阻断解锁。
+pub fn hydrate_config_secrets(state: &AppState) {
+    let vault = {
+        let guard = recover_lock(&state.vault);
+        match guard.as_ref() {
+            Some(v) if v.is_unlocked() => v.clone(),
+            _ => return,
+        }
+    };
+    let mut cfg = recover_lock(&state.config);
+    if let Err(e) = crate::store::migrate_and_hydrate_config_secrets(&vault, &mut cfg) {
+        log::warn!("无法把云同步/代理密钥迁入保险库：{e}");
+        return;
+    }
+    if let Err(e) = cfg.save() {
+        log::warn!("迁入密钥后无法回写本机配置：{e}");
+    }
+}
+
 /// 解锁限速：连续失败递增延迟，防手动试探。
 #[derive(Default)]
 pub struct UnlockGuard {
@@ -98,6 +123,8 @@ pub struct AppState {
     pub reveal_grace: Mutex<Option<Instant>>,
     /// 前端上报的当前网络是否非按量（Wi-Fi / 以太网）。默认按非按量处理。
     pub network_unmetered: AtomicBool,
+    /// 最近一次用户活动时刻，供空闲自动锁定判定（见 `crate::autolock`）。
+    pub last_activity: Mutex<Instant>,
 }
 
 impl AppState {
@@ -117,6 +144,7 @@ impl AppState {
             update_busy: AtomicBool::new(false),
             reveal_grace: Mutex::new(None),
             network_unmetered: AtomicBool::new(true),
+            last_activity: Mutex::new(Instant::now()),
         }
     }
 }

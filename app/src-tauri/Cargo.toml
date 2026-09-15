@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.7.0"
+version = "1.7.1"
 description = "御钥师 (Git Keymaster) - 本地 Git 多账号/身份保险库与智能识别管理"
 authors = ["Jeck"]
 license = ""
@@ -50,6 +50,8 @@ tauri-plugin-dialog = "2.7.3"
 tauri-plugin-process = "2"
 url = "2"
 semver = "1"
+# 安卓侧载也要先验安装包 minisign；不能只挂在桌面 updater 插件上。
+minisign-verify = "0.2"
 
 # ---- 2FA / 账号管理 ----
 data-encoding = "2.6"
@@ -79,7 +81,9 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security_Cryptography",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_StationsAndDesktops",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows = { version = "0.61", features = [
@@ -110,3 +114,6 @@ objc2-local-authentication = { version = "0.3.2", default-features = false, feat
 # 原生文件选择器只给非 Windows 的桌面平台；移动端走 tauri-plugin-dialog / SAF。
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 rfd = "0.15"
+
+[dev-dependencies]
+minisign = "0.7"

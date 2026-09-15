@@ -28,6 +28,8 @@ import { MobileShell } from "./ui/MobileShell";
 import { isAndroid, useIsCompact, supportsLocalGitTools } from "./lib/platform";
 import { decideMobileRootBack } from "./shared/mobileBack";
 import { startNetworkGuard } from "./shared/networkGuard";
+import { startActivityHeartbeat } from "./shared/activityHeartbeat";
+import { clearAllDrafts } from "./shared/noteDrafts";
 
 function AppShell({ compact }: { compact: boolean }) {
   if (compact) {
@@ -73,6 +75,26 @@ export default function App() {
   ) : null;
 
   useEffect(() => startNetworkGuard(), []);
+  useEffect(() => startActivityHeartbeat(), []);
+
+  // 后端因空闲/休眠/锁屏锁定后，界面必须立刻退回解锁页，
+  // 否则会留着一屏已解密的内容给下一个走到电脑前的人。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("vault-auto-locked", async () => {
+      clearAllDrafts();
+      await refresh();
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        /* 非 Tauri 环境 */
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, [refresh]);
 
   useEffect(() => {
     if (!compact || status?.unlocked) return;

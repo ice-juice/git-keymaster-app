@@ -3,8 +3,10 @@
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod checker;
 pub mod manifest;
+pub mod minisign;
 pub mod scheduler;
 pub mod source;
+pub mod watermark;
 
 pub use crate::app_config::{UpdateSource, DEFAULT_UPDATE_REPO};
 pub use source::{effective_source, resolve_endpoints};

@@ -1599,6 +1599,13 @@ fn pull_missing_blobs(
     let total = pending.len();
     let mut transferred = 0usize;
     for sha in pending {
+        // 这个 sha 会被拼成 `blobs/{sha}.blob` 的落盘路径，而它来自云端清单。
+        // `blob_exists` 已经过滤过一轮，这里再确认一次：下面用的是 `blob_path`
+        // 本身（不带校验），漏掉就等于把写入位置交给对端决定。
+        if !blob::is_sha256_hex(&sha) {
+            log::warn!("跳过云端非法附件哈希：{sha}");
+            continue;
+        }
         let Some(entry) = manifest.objects.get(&blob_logical_path(&sha)) else {
             continue;
         };
