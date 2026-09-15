@@ -208,6 +208,9 @@ function checkCommittedDefaults() {
   if (!sync.includes("evaluateManifestUpload") || !sync.includes("evaluatePinCanonical")) {
     fail("sync-release-assets.mjs 必须拒绝安卓-only 覆盖桌面清单，pin 不得接受无桌面 platforms");
   }
+  if (!sync.includes("collectBundleUploads")) {
+    fail("sync-release-assets.mjs 在 rename 映射为空时仍须上传安装包和 .sig");
+  }
   if (!sync.includes("signLatestJsonFile") || !sync.includes("readAndroidApkSignature")) {
     fail("sync-release-assets.mjs 必须用同一把 minisign 私钥签 latest.json，并写入 APK signature");
   }

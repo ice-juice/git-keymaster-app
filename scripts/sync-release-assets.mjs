@@ -80,6 +80,21 @@ export function collectUniqueUploads(mapping, cwd = process.cwd()) {
   return [...byBasename.values()];
 }
 
+/** 文件名已经是 Git.Keymaster_* 时 rename 映射为空，仍要把安装包和 .sig 传上去。 */
+export function collectBundleUploads(cwd = process.cwd()) {
+  const byBasename = new Map();
+  for (const root of BUNDLE_ROOTS) {
+    for (const file of walkFiles(path.join(cwd, root))) {
+      const base = path.basename(file);
+      const installer = INSTALLER_SUFFIXES.some((suffix) => base.endsWith(suffix));
+      if (installer || base.endsWith(".sig")) {
+        byBasename.set(base, file);
+      }
+    }
+  }
+  return [...byBasename.values()];
+}
+
 export function findLocalLatestJson(cwd = process.cwd()) {
   const candidates = [
     path.join(cwd, "latest.json"),
@@ -412,18 +427,17 @@ function syncTag(tag) {
   }
 
   const mappingPath = path.join(process.cwd(), "renamed-release-assets.json");
-  if (!fs.existsSync(mappingPath)) {
-    console.log("no renamed-release-assets.json, nothing to sync");
-    return;
+  const mapping = fs.existsSync(mappingPath) ? JSON.parse(fs.readFileSync(mappingPath, "utf8")) : [];
+  if (!Array.isArray(mapping)) {
+    console.error("renamed-release-assets.json must be an array");
+    process.exit(1);
   }
 
-  const mapping = JSON.parse(fs.readFileSync(mappingPath, "utf8"));
-  if (!Array.isArray(mapping) || mapping.length === 0) {
-    console.log("rename mapping empty");
-    return;
+  let uploads = collectUniqueUploads(mapping);
+  if (uploads.length === 0) {
+    uploads = collectBundleUploads();
+    console.log("[sync] rename mapping empty; uploading all bundle installers and .sig");
   }
-
-  const uploads = collectUniqueUploads(mapping);
   if (uploads.length > 0) {
     for (const file of uploads) {
       console.log(`[upload] ${path.basename(file)}`);
@@ -615,6 +629,10 @@ function runSelfTest() {
     const uploadsWithSig = collectUniqueUploads([["御钥师_1.3.0_x64-setup.exe", unified]], tmp);
     if (!uploadsWithSig.some((file) => path.basename(file) === `${unified}.sig`)) {
       throw new Error("collectUniqueUploads must also pick sibling .sig files");
+    }
+    const alreadyCanonical = collectBundleUploads(tmp);
+    if (!alreadyCanonical.some((file) => path.basename(file) === unified)) {
+      throw new Error("empty rename mapping must still upload Git.Keymaster installers");
     }
     const androidOnly = `${JSON.stringify({
       version: "1.7.0",
