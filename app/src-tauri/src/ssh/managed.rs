@@ -31,14 +31,64 @@ impl ManagedEntry {
             identities_only: true,
         }
     }
+
+    /// 写入 `~/.ssh/config` 前的强制校验。
+    ///
+    /// 这些字段是逐行 `format!` 进 config 的。一个带换行的 `HostName`
+    /// （`github.com\n    ProxyCommand calc`）会在托管区块里凭空长出一条
+    /// `ProxyCommand`，之后任何用到该别名的 git/ssh 都会执行它——等于任意代码执行。
+    /// 身份记录可以经云同步或 `.gambackup` 导入从别的设备流进来，所以不能只信界面。
+    pub fn validate(&self) -> crate::error::Result<()> {
+        check_config_value("Host", &self.alias)?;
+        check_config_value("HostName", &self.host_name)?;
+        check_config_value("User", &self.user)?;
+        check_config_value("IdentityFile", &self.identity_file)?;
+        Ok(())
+    }
+}
+
+fn check_config_value(field: &str, value: &str) -> crate::error::Result<()> {
+    use crate::error::AppError;
+    if value.trim().is_empty() {
+        return Err(AppError::Invalid(format!("{field} 不能为空")));
+    }
+    if value.contains('\n') || value.contains('\r') {
+        return Err(AppError::Invalid(format!(
+            "{field} 不能包含换行，这会往 SSH 配置里注入额外指令"
+        )));
+    }
+    if value.chars().any(|c| c.is_control()) {
+        return Err(AppError::Invalid(format!("{field} 不能包含控制字符")));
+    }
+    // 以 `-` 开头的值会被 `ssh -G <alias>` 当成命令行选项（如 `-oProxyCommand=...`）。
+    if value.starts_with('-') {
+        return Err(AppError::Invalid(format!("{field} 不能以 - 开头")));
+    }
+    Ok(())
+}
+
+/// 渲染前的最后一道兜底：只取首行并去掉控制字符。
+///
+/// 正常路径都过了 `validate`；这里保证即便将来新增一条没校验的写入路径，
+/// 也无法把第二行内容塞进 config。
+fn sanitize_value(raw: &str) -> String {
+    raw.split(['\n', '\r'])
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control())
+        .collect()
 }
 
 fn render_entry(e: &ManagedEntry) -> String {
     let mut s = String::new();
-    s.push_str(&format!("Host {}\n", e.alias));
-    s.push_str(&format!("    HostName {}\n", e.host_name));
-    s.push_str(&format!("    User {}\n", e.user));
-    s.push_str(&format!("    IdentityFile {}\n", e.identity_file));
+    s.push_str(&format!("Host {}\n", sanitize_value(&e.alias)));
+    s.push_str(&format!("    HostName {}\n", sanitize_value(&e.host_name)));
+    s.push_str(&format!("    User {}\n", sanitize_value(&e.user)));
+    s.push_str(&format!(
+        "    IdentityFile {}\n",
+        sanitize_value(&e.identity_file)
+    ));
     if e.identities_only {
         s.push_str("    IdentitiesOnly yes\n");
     }
@@ -302,6 +352,58 @@ pub fn merge_managed_prefer_local(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validate_rejects_newline_injection() {
+        // 这是「注入 ProxyCommand → 任意代码执行」的原始载荷。
+        let e = ManagedEntry::new("gh", "github.com\n    ProxyCommand calc.exe", "/k/id");
+        assert!(e.validate().is_err(), "带换行的 HostName 必须被拒");
+
+        let e = ManagedEntry::new("gh\nHost *", "github.com", "/k/id");
+        assert!(e.validate().is_err(), "带换行的 Host 别名必须被拒");
+
+        let mut e = ManagedEntry::new("gh", "github.com", "/k/id");
+        e.user = "git\n    ProxyCommand sh".into();
+        assert!(e.validate().is_err(), "带换行的 User 必须被拒");
+
+        e.user = "git".into();
+        e.identity_file = "/k/id\n    ProxyCommand sh".into();
+        assert!(e.validate().is_err(), "带换行的 IdentityFile 必须被拒");
+    }
+
+    #[test]
+    fn validate_rejects_option_lookalike_and_empty() {
+        // `-oProxyCommand=...` 作为别名会被 `ssh -G <alias>` 当成命令行选项。
+        assert!(ManagedEntry::new("-oProxyCommand=sh", "github.com", "/k/id")
+            .validate()
+            .is_err());
+        assert!(ManagedEntry::new("gh", "  ", "/k/id").validate().is_err());
+    }
+
+    #[test]
+    fn validate_accepts_normal_entries() {
+        assert!(ManagedEntry::new("github-work", "github.com", "C:\\k\\id_ed25519")
+            .validate()
+            .is_ok());
+        assert!(
+            ManagedEntry::new("gitlab.例子.cn", "gitlab.例子.cn", "/home/u/.ssh/id with space")
+                .validate()
+                .is_ok(),
+            "非 ASCII 主机名和带空格的路径都是合法数据"
+        );
+    }
+
+    #[test]
+    fn render_sanitizes_even_without_validate() {
+        // 兜底层：即便有路径绕过了 validate，也不能渲染出第二行。
+        let out = render_region(&[ManagedEntry::new(
+            "gh",
+            "github.com\n    ProxyCommand calc.exe",
+            "/k/id",
+        )]);
+        assert!(!out.contains("ProxyCommand"), "渲染结果不得含注入内容：{out}");
+        assert!(out.contains("HostName github.com\n"));
+    }
 
     #[test]
     fn upsert_into_empty_appends_region() {
