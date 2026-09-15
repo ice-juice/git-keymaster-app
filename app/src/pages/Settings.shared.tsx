@@ -574,7 +574,7 @@ export function AboutUpdateCard() {
   useEffect(() => {
     getVersion()
       .then(setVersion)
-      .catch(() => setVersion("1.5.1"));
+      .catch(() => setVersion("1.6.0"));
     loadPrefs().catch((e) => setErr(errMessage(e)));
   }, []);
 

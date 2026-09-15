@@ -9,4 +9,4 @@
 - **Debian / Ubuntu**：`Git.Keymaster_{{VERSION}}_amd64.deb`
 - **Fedora / RHEL / openSUSE**：`Git.Keymaster_{{VERSION}}_x86_64.rpm`
 - **Linux 包管理器**：用 deb / rpm 安装后请用系统软件包更新；应用内自更新只支持 AppImage
-- **Android（侧载，仅 64 位 ARM 手机）**：`Git.Keymaster_{{VERSION}}_arm64-v8a.apk`。装过旧正式包后，必须用同一把签名钥匙打的新包才能覆盖；手机上的 debug 包（包名带 `.debug`）互不影响。第一期安卓请重新下载 APK
+- **Android（侧载，仅 64 位 ARM 手机）**：`Git.Keymaster_{{VERSION}}_arm64-v8a.apk`。已装正式包时可在设置里检查更新并覆盖安装；也可手动下载 APK。必须用同一把签名钥匙打的新包才能覆盖；手机上的 debug 包（包名带 `.debug`）互不影响
