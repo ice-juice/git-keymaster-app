@@ -22,6 +22,7 @@ export function MobileListToolbar({
   addActions,
   sheetOpen,
   onSheetOpenChange,
+  beforeAdd,
 }: {
   query: string;
   onQueryChange: (q: string) => void;
@@ -32,6 +33,7 @@ export function MobileListToolbar({
   addActions?: MobileAddAction[];
   sheetOpen?: boolean;
   onSheetOpenChange?: (open: boolean) => void;
+  beforeAdd?: ReactNode;
 }) {
   const { t } = useTranslation();
   const hasSheet = !!addActions?.length;
@@ -79,6 +81,7 @@ export function MobileListToolbar({
             </button>
           )}
         </label>
+        {beforeAdd}
         <button
           type="button"
           className={"m-list-add-btn" + (open ? " on" : "")}

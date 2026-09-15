@@ -1,11 +1,15 @@
-import { useEffect, useRef } from "react";
-import { ChevronLeft, Pin, Plus } from "lucide-react";
+import { useEffect, useRef, type PointerEvent } from "react";
+import { ArrowUpToLine, CheckSquare, ChevronLeft, Download, Pin, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Empty } from "../ui/common";
 import { MobileListToolbar } from "../ui/MobileListToolbar";
 import { pushMobileBack } from "../shared/mobileBack";
-import { useNotesModel } from "../shared/hooks/useNotesModel";
-import { ingestNoteImage, NoteEditorCard, NotesDialogs, NotesFilters } from "./Notes.shared";
+import { useNotesModel, type NotesModel } from "../shared/hooks/useNotesModel";
+import { ingestNoteImage, NoteEditorCard, NoteIndexTags, NoteSelectedMark, NotesDialogs, NotesFilters } from "./Notes.shared";
+import type { NoteEntry } from "../lib/ipc";
+
+const LONG_PRESS_MS = 500;
+const MOVE_CANCEL_PX = 10;
 
 export function NotesMobile() {
   const { t } = useTranslation();
@@ -19,6 +23,14 @@ export function NotesMobile() {
       return true;
     });
   }, [m.detailOpen]);
+
+  useEffect(() => {
+    if (m.detailOpen || !m.selectionMode) return;
+    return pushMobileBack(() => {
+      m.exitSelectionMode();
+      return true;
+    });
+  }, [m.detailOpen, m.selectionMode]);
 
   function pickImage() {
     inputRef.current?.click();
@@ -66,6 +78,18 @@ export function NotesMobile() {
         addLabel={t("pages.notesNew")}
         addDisabled={m.writesLocked}
         onAdd={m.createNote}
+        beforeAdd={
+          <button
+            type="button"
+            className="m-list-side-btn"
+            disabled={m.filteredEntries.length === 0}
+            aria-label={t("notes.export")}
+            onClick={m.openExport}
+          >
+            <Download size={16} />
+            <span>{t("notes.export")}</span>
+          </button>
+        }
       />
       <NotesFilters m={m} hideSearch />
       {m.filteredEntries.length === 0 ? (
@@ -74,19 +98,20 @@ export function NotesMobile() {
         </div>
       ) : (
         <div className="m-note-list">
+          {m.selectionMode && (
+            <div className="m-note-select-bar">
+              <span className="m-note-select-count">{t("notes.selectedCount", { n: m.selectedCount })}</span>
+              <button type="button" className="m-note-select-all" onClick={m.toggleSelectAllFiltered}>
+                {m.allFilteredSelected ? t("notes.deselectAll") : t("notes.selectAllShort")}
+              </button>
+              <button type="button" className="m-note-select-done" onClick={m.exitSelectionMode}>
+                <CheckSquare size={14} />
+                {t("notes.multiSelectDone")}
+              </button>
+            </div>
+          )}
           {m.filteredEntries.map((e) => (
-            <button key={e.id} type="button" className="m-note-card" onClick={() => void m.selectNote(e.id)}>
-              <div className="m-note-card-title">
-                {e.pinned && <Pin size={13} />}
-                <span>{e.title.trim() || t("notes.untitled")}</span>
-              </div>
-              <div className="m-note-card-sub">
-                {(e.tags || []).slice(0, 3).map((tag) => `#${tag}`).join(" ")}
-                {(e.tags || []).length ? " · " : ""}
-                {m.formatUpdatedAt(e.updatedAt)}
-              </div>
-              {e.excerpt && <div className="m-note-card-excerpt">{e.excerpt}</div>}
-            </button>
+            <NoteMobileCard key={e.id} e={e} m={m} />
           ))}
         </div>
       )}
@@ -94,6 +119,80 @@ export function NotesMobile() {
         <Plus size={22} />
       </button>
       <NotesDialogs m={m} />
+    </div>
+  );
+}
+
+function NoteMobileCard({ e, m }: { e: NoteEntry; m: NotesModel }) {
+  const { t } = useTranslation();
+  const timerRef = useRef<number | null>(null);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+
+  function clearPress() {
+    if (timerRef.current != null) {
+      window.clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+    startRef.current = null;
+  }
+
+  function onPointerDown(ev: PointerEvent) {
+    if (m.selectionMode) return;
+    if (ev.pointerType === "mouse") return;
+    startRef.current = { x: ev.clientX, y: ev.clientY };
+    timerRef.current = window.setTimeout(() => {
+      timerRef.current = null;
+      m.markSkipNextOpen();
+      m.enterSelectionMode(e.id);
+    }, LONG_PRESS_MS);
+  }
+
+  function onPointerMove(ev: PointerEvent) {
+    const start = startRef.current;
+    if (!start || timerRef.current == null) return;
+    if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > MOVE_CANCEL_PX) clearPress();
+  }
+
+  return (
+    <div
+      className={
+        "m-note-card" + (m.selectedSet.has(e.id) ? " is-checked" : "") + (m.selectionMode ? " is-selecting" : "")
+      }
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={clearPress}
+      onPointerCancel={clearPress}
+      onContextMenu={(ev) => ev.preventDefault()}
+    >
+      <button
+        type="button"
+        className="m-note-card-main"
+        aria-pressed={m.selectionMode ? m.selectedSet.has(e.id) : undefined}
+        onClick={() => m.activateNote(e.id)}
+      >
+        <div className="m-note-card-title">
+          <span>{e.title.trim() || t("notes.untitled")}</span>
+        </div>
+        <div className="m-note-card-sub">
+          <NoteIndexTags tags={e.tags} />
+          <span className="m-note-card-time">{m.formatUpdatedAt(e.updatedAt)}</span>
+        </div>
+        {e.excerpt && <div className="m-note-card-excerpt">{e.excerpt}</div>}
+      </button>
+      <div className="m-note-card-actions">
+        <button
+          type="button"
+          className={"note-icon-btn" + (e.pinned ? " on" : "")}
+          title={e.pinned ? t("notes.unpin") : t("notes.pin")}
+          aria-label={e.pinned ? t("notes.unpin") : t("notes.pin")}
+          disabled={m.writesLocked}
+          onPointerDown={(ev) => ev.stopPropagation()}
+          onClick={() => void m.togglePin(e.id)}
+        >
+          {e.pinned ? <ArrowUpToLine size={14} /> : <Pin size={14} />}
+        </button>
+      </div>
+      {m.selectedSet.has(e.id) && <NoteSelectedMark />}
     </div>
   );
 }

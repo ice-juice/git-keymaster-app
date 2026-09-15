@@ -31,7 +31,7 @@ import {
 import { writeClipboard } from "../lib/clipboard";
 import { useApp } from "../store";
 import { THEME_OPTIONS } from "../lib/theme";
-import { UNLOCK_ANIM_STYLES } from "../lib/prefs";
+import { getNotesAutoSave, setNotesAutoSaveStored, UNLOCK_ANIM_STYLES } from "../lib/prefs";
 import { PageHead, Card, FieldLabel, Badge, ErrorDialog } from "../ui/common";
 import { LanguageCard } from "../ui/LanguageCard";
 
@@ -1032,6 +1032,7 @@ export function SettingsView() {
   const [newRecovery, setNewRecovery] = useState("");
   const [bio, setBio] = useState<BiometricStatus | null>(null);
   const [bioPw, setBioPw] = useState("");
+  const [notesAutoSave, setNotesAutoSave] = useState(getNotesAutoSave);
 
   useEffect(() => {
     setGraceDays(String(status?.graceDays ?? 0));
@@ -1209,6 +1210,26 @@ export function SettingsView() {
                         </button>
                       );
                     })}
+                  </div>
+                </div>
+              </Card>
+
+              <Card title={t("settings.notesCard")}>
+                <div className="field">
+                  <div className="between">
+                    <div>
+                      <FieldLabel name={t("settings.notesAutoSave")} tip={t("settings.notesAutoSaveTip")} />
+                      <div className="hint">{t("settings.notesAutoSaveHint")}</div>
+                    </div>
+                    <button
+                      type="button"
+                      className={"switch" + (notesAutoSave ? "" : " off")}
+                      onClick={() => {
+                        const next = !notesAutoSave;
+                        setNotesAutoSave(next);
+                        setNotesAutoSaveStored(next);
+                      }}
+                    />
                   </div>
                 </div>
               </Card>

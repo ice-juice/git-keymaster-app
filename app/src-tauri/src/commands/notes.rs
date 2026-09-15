@@ -417,14 +417,7 @@ pub fn note_save_groups(
     Ok(())
 }
 
-#[tauri::command(async)]
-pub fn note_export(
-    state: State<'_, AppState>,
-    id: String,
-    dest_path: String,
-    mode: Option<String>,
-) -> Result<()> {
-    ensure_writes_allowed(&state)?;
+fn resolve_export_dest(dest_path: &str) -> Result<PathBuf> {
     let dest = dest_path.trim();
     if dest.is_empty() {
         return Err(AppError::Invalid("请选择导出路径".into()));
@@ -435,8 +428,14 @@ pub fn note_export(
             std::fs::create_dir_all(parent)?;
         }
     }
-    let vault = recover_lock(&state.vault);
-    let v = unlocked_vault(&vault)?;
+    Ok(dest)
+}
+
+fn note_markdown_for_export(
+    v: &crate::vault::Vault,
+    id: &str,
+    mode: Option<&str>,
+) -> Result<String> {
     let data = store::load_notes(v)?;
     let entry = data
         .entries
@@ -446,14 +445,50 @@ pub fn note_export(
     let bytes = blob::read_blob_bytes(v, &entry.body_sha256)?;
     let markdown = String::from_utf8(bytes)
         .map_err(|_| AppError::Invalid("备忘录正文不是有效 UTF-8".into()))?;
-    let mode = mode.as_deref().unwrap_or("md_raw");
-    let body = if mode == "md_inline" {
-        inline_note_assets(v, &markdown)?
+    if mode.unwrap_or("md_raw") == "md_inline" {
+        inline_note_assets(v, &markdown)
     } else {
-        markdown
-    };
+        Ok(markdown)
+    }
+}
+
+#[tauri::command(async)]
+pub fn note_export(
+    state: State<'_, AppState>,
+    id: String,
+    dest_path: String,
+    mode: Option<String>,
+) -> Result<()> {
+    ensure_writes_allowed(&state)?;
+    let dest = resolve_export_dest(&dest_path)?;
+    let vault = recover_lock(&state.vault);
+    let v = unlocked_vault(&vault)?;
+    let body = note_markdown_for_export(v, &id, mode.as_deref())?;
     std::fs::write(&dest, body.as_bytes())?;
     util::audit(v.root(), &format!("导出备忘录 id={id}"));
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn note_export_content(
+    state: State<'_, AppState>,
+    id: String,
+    mode: Option<String>,
+) -> Result<String> {
+    let vault = recover_lock(&state.vault);
+    let v = unlocked_vault(&vault)?;
+    note_markdown_for_export(v, &id, mode.as_deref())
+}
+
+#[tauri::command(async)]
+pub fn note_write_export_file(
+    state: State<'_, AppState>,
+    dest_path: String,
+    bytes: Vec<u8>,
+) -> Result<()> {
+    ensure_writes_allowed(&state)?;
+    let dest = resolve_export_dest(&dest_path)?;
+    std::fs::write(&dest, bytes)?;
     Ok(())
 }
 

@@ -672,6 +672,10 @@ export const api = {
   noteSaveGroups: (groups: GroupMeta[]) => invoke<void>("note_save_groups", { groups }),
   noteExport: (id: string, destPath: string, mode?: string) =>
     invoke<void>("note_export", { id, destPath, mode: mode ?? null }),
+  noteExportContent: (id: string, mode?: string) =>
+    invoke<string>("note_export_content", { id, mode: mode ?? null }),
+  noteWriteExportFile: (destPath: string, bytes: number[]) =>
+    invoke<void>("note_write_export_file", { destPath, bytes }),
 
   clipboardWrite: (text: string, secret = false) =>
     invoke<ClipboardWriteResult>("clipboard_write", { text, secret }),

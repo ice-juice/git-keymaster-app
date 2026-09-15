@@ -2,6 +2,7 @@
 
 const UNLOCK_ANIM_KEY = "gam.unlockAnim";
 const UNLOCK_ANIM_STYLE_KEY = "gam.unlockAnimStyle";
+const NOTES_AUTO_SAVE_KEY = "gam.notesAutoSave";
 
 export type UnlockAnimStyle = "cyber" | "classic" | "minimal";
 
@@ -29,6 +30,15 @@ export function getUnlockAnimStyle(): UnlockAnimStyle {
 
 export function setUnlockAnimStyleStored(style: UnlockAnimStyle): void {
   localStorage.setItem(UNLOCK_ANIM_STYLE_KEY, style);
+}
+
+/** 备忘录离开编辑区时自动保存，默认开启。 */
+export function getNotesAutoSave(): boolean {
+  return localStorage.getItem(NOTES_AUTO_SAVE_KEY) !== "off";
+}
+
+export function setNotesAutoSaveStored(on: boolean): void {
+  localStorage.setItem(NOTES_AUTO_SAVE_KEY, on ? "on" : "off");
 }
 
 /** 系统是否开启了「减少动态效果」。开启时应跳过过场动画。 */

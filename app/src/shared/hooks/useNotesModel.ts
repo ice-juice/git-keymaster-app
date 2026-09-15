@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, errMessage, type GroupMeta, type NoteEntry } from "../../lib/ipc";
+import { markdownToPdfBytes } from "../../lib/notePdf";
 import { resolvePlatform } from "../../platform/resolve";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import type { NoteMarkdownEditorHandle } from "../../ui/NoteMarkdownEditor";
 import { showAppToast } from "../../ui/Toast";
 import { i18n } from "../../lib/i18n";
 import { useApp } from "../../store";
+import { getNotesAutoSave } from "../../lib/prefs";
 import { formatUpdatedAt } from "./useFilesModel";
+
+export type NoteExportFormat = "md_raw" | "md_inline" | "pdf";
+export type NoteExportScope = "selected" | "filtered";
 
 export interface NoteDraftState {
   id?: string;
@@ -89,6 +94,38 @@ export function extractKmassetHashes(md: string): string[] {
   return out;
 }
 
+function safeExportStem(title: string): string {
+  const s = title.trim().replace(/[\\/:*?"<>|]/g, "_").replace(/\s+/g, " ").slice(0, 80);
+  return s || "note";
+}
+
+function uniqueExportName(title: string, ext: string, used: Set<string>): string {
+  const stem = safeExportStem(title);
+  let name = `${stem}.${ext}`;
+  let n = 2;
+  while (used.has(name.toLowerCase())) {
+    name = `${stem} (${n}).${ext}`;
+    n += 1;
+  }
+  used.add(name.toLowerCase());
+  return name;
+}
+
+function joinExportPath(dir: string, file: string): string {
+  const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/";
+  return dir.endsWith("/") || dir.endsWith("\\") ? `${dir}${file}` : `${dir}${sep}${file}`;
+}
+
+async function writeNoteExport(entry: NoteEntry, dest: string, format: NoteExportFormat) {
+  if (format === "pdf") {
+    const markdown = await api.noteExportContent(entry.id, "md_inline");
+    const pdf = await markdownToPdfBytes(entry.title.trim() || "note", markdown);
+    await api.noteWriteExportFile(dest, Array.from(pdf));
+    return;
+  }
+  await api.noteExport(entry.id, dest, format);
+}
+
 export function useNotesModel() {
   const { writesLocked } = useApp();
   const [entries, setEntries] = useState<NoteEntry[]>([]);
@@ -113,8 +150,13 @@ export function useNotesModel() {
   const [detailOpen, setDetailOpen] = useState(false);
   const editorRef = useRef<NoteMarkdownEditorHandle | null>(null);
   const savedRef = useRef({ title: "", markdown: "", group: undefined as string | undefined, tags: [] as string[], pinned: false });
-  const autosaveTimer = useRef<number | null>(null);
   const draftTimer = useRef<number | null>(null);
+  const dirtyRef = useRef(false);
+  const savingRef = useRef(false);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const skipNextOpenRef = useRef(false);
 
   const load = useCallback(async () => {
     const data = await api.noteList();
@@ -151,6 +193,21 @@ export function useNotesModel() {
     return list;
   }, [entries, q, group, selectedTag]);
 
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedCount = useMemo(
+    () => filteredEntries.reduce((n, e) => n + (selectedSet.has(e.id) ? 1 : 0), 0),
+    [filteredEntries, selectedSet],
+  );
+  const allFilteredSelected = filteredEntries.length > 0 && selectedCount === filteredEntries.length;
+
+  useEffect(() => {
+    const live = new Set(entries.map((e) => e.id));
+    setSelectedIds((prev) => {
+      const next = prev.filter((id) => live.has(id));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [entries]);
+
   const activeNote = entries.find((e) => e.id === activeId) || null;
   const isDirty =
     draft.title !== savedRef.current.title ||
@@ -158,6 +215,8 @@ export function useNotesModel() {
     (draft.group || "") !== (savedRef.current.group || "") ||
     draft.pinned !== savedRef.current.pinned ||
     draft.tags.join("\u0001") !== savedRef.current.tags.join("\u0001");
+  dirtyRef.current = isDirty;
+  savingRef.current = saving;
 
   function rememberSaved(next: NoteDraftState) {
     savedRef.current = {
@@ -193,7 +252,8 @@ export function useNotesModel() {
   }, [draft, isDirty]);
 
   const saveCurrentNote = useCallback(async () => {
-    if (writesLocked) return;
+    if (writesLocked || savingRef.current) return;
+    savingRef.current = true;
     setSaving(true);
     try {
       const created = appendGroupIfNew(groups, draft.group);
@@ -222,20 +282,15 @@ export function useNotesModel() {
     } catch (e) {
       setErr(errMessage(e));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, [draft, groups, load, writesLocked]);
 
-  useEffect(() => {
-    if (!isDirty || writesLocked) return;
-    if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
-    autosaveTimer.current = window.setTimeout(() => {
-      void saveCurrentNote();
-    }, 1500);
-    return () => {
-      if (autosaveTimer.current) window.clearTimeout(autosaveTimer.current);
-    };
-  }, [isDirty, draft, saveCurrentNote, writesLocked]);
+  const onEditorFocusLeave = useCallback(() => {
+    if (!getNotesAutoSave() || writesLocked || savingRef.current || !dirtyRef.current) return;
+    void saveCurrentNote();
+  }, [saveCurrentNote, writesLocked]);
 
   async function selectNote(id: string | null) {
     if (id === activeId && (id !== null || !detailOpen)) return;
@@ -406,26 +461,103 @@ export function useNotesModel() {
         pinned: !entry.pinned,
         markdown: body,
       });
-      if (draft.id === id) updateDraft({ pinned: !entry.pinned });
+      const nextPinned = !entry.pinned;
+      if (draft.id === id) {
+        updateDraft({ pinned: nextPinned });
+        savedRef.current = { ...savedRef.current, pinned: nextPinned };
+      }
       await load();
     } catch (e) {
       setErr(errMessage(e));
     }
   }
 
-  async function exportNote(mode: "md_raw" | "md_inline") {
-    if (!draft.id) return;
+  function enterSelectionMode(id?: string) {
+    setSelectionMode(true);
+    if (id) {
+      setSelectedIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    }
+  }
+
+  function exitSelectionMode() {
+    setSelectionMode(false);
+    setSelectedIds([]);
+  }
+
+  function markSkipNextOpen() {
+    skipNextOpenRef.current = true;
+  }
+
+  function activateNote(id: string) {
+    if (skipNextOpenRef.current) {
+      skipNextOpenRef.current = false;
+      return;
+    }
+    if (selectionMode) {
+      toggleSelect(id);
+      return;
+    }
+    void selectNote(id);
+  }
+
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function toggleSelectAllFiltered() {
+    if (!selectionMode) return;
+    if (allFilteredSelected) {
+      const drop = new Set(filteredEntries.map((e) => e.id));
+      setSelectedIds((prev) => prev.filter((id) => !drop.has(id)));
+      return;
+    }
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      for (const e of filteredEntries) next.add(e.id);
+      return [...next];
+    });
+  }
+
+  function openExport() {
+    setExportModal(true);
+  }
+
+  async function exportNotes(format: NoteExportFormat, scope: NoteExportScope) {
+    const list =
+      scope === "selected" ? filteredEntries.filter((e) => selectedSet.has(e.id)) : filteredEntries;
+    if (!list.length) {
+      setErr(i18n.t("notes.exportNeedNotes"));
+      return;
+    }
+    setExporting(true);
     try {
-      const dest = await save({
-        defaultPath: `${(draft.title || "note").replace(/[\\/:*?"<>|]/g, "_")}.md`,
-        filters: [{ name: "Markdown", extensions: ["md"] }],
-      });
-      if (!dest) return;
-      await api.noteExport(draft.id, dest, mode);
+      const used = new Set<string>();
+      const names = list.map((e) => uniqueExportName(e.title, format === "pdf" ? "pdf" : "md", used));
+      if (list.length === 1) {
+        const dest = await save({
+          defaultPath: names[0],
+          filters:
+            format === "pdf"
+              ? [{ name: "PDF", extensions: ["pdf"] }]
+              : [{ name: "Markdown", extensions: ["md"] }],
+        });
+        if (!dest) return;
+        await writeNoteExport(list[0], dest, format);
+        setExportModal(false);
+        showAppToast(i18n.t("notes.toastExported", { path: dest }));
+        return;
+      }
+      const dir = await open({ directory: true, multiple: false });
+      if (!dir || Array.isArray(dir)) return;
+      for (let i = 0; i < list.length; i++) {
+        await writeNoteExport(list[i], joinExportPath(dir, names[i]), format);
+      }
       setExportModal(false);
-      showAppToast(i18n.t("notes.toastExported", { path: dest }));
+      showAppToast(i18n.t("notes.toastExportedMany", { n: list.length, path: dir }));
     } catch (e) {
       setErr(errMessage(e));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -468,7 +600,21 @@ export function useNotesModel() {
     setMobileTab,
     assetUploading,
     exportModal,
+    exporting,
+    selectedIds,
+    selectedSet,
+    selectedCount,
+    selectionMode,
+    allFilteredSelected,
+    enterSelectionMode,
+    exitSelectionMode,
+    markSkipNextOpen,
+    activateNote,
+    toggleSelect,
+    toggleSelectAllFiltered,
     setExportModal,
+    openExport,
+    onEditorFocusLeave,
     pendingDelete,
     setPendingDelete,
     err,
@@ -491,7 +637,7 @@ export function useNotesModel() {
     deleteNote,
     togglePin,
     uploadAndInsertAsset,
-    exportNote,
+    exportNotes,
     insertAtCursor,
     wrapSelection,
     saveGroup,

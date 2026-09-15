@@ -1,13 +1,19 @@
 import { useEffect, useState, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Columns2, Download, Eye, FileCode2, Pin, Plus, Trash2, Type, X } from "lucide-react";
+import { ArrowUpToLine, Check, Columns2, Eye, FileCode2, Pin, Plus, Save, Trash2, Type, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDangerDialog, Empty, ErrorDialog } from "../ui/common";
 import { GroupDialog } from "../ui/GroupDialog";
 import { MarkdownToolbar } from "../ui/MarkdownToolbar";
 import { NoteMarkdownEditor } from "../ui/NoteMarkdownEditor";
-import { extractKmassetHashes, type NotesModel, type NotesViewLayout } from "../shared/hooks/useNotesModel";
+import {
+  extractKmassetHashes,
+  type NoteExportFormat,
+  type NoteExportScope,
+  type NotesModel,
+  type NotesViewLayout,
+} from "../shared/hooks/useNotesModel";
 import { useOverlayBack } from "../shared/mobileBack";
 import { api } from "../lib/ipc";
 import type { NoteEntry } from "../lib/ipc";
@@ -143,24 +149,119 @@ export function NotesFilters({ m, hideSearch }: { m: NotesModel; hideSearch?: bo
   );
 }
 
+export function NoteSelectedMark() {
+  return (
+    <span className="note-selected-mark" aria-hidden>
+      <Check size={12} strokeWidth={2.6} />
+    </span>
+  );
+}
+
+const TAG_PALETTE = [
+  { bg: "rgba(79, 70, 229, 0.16)", fg: "#3730a3" },
+  { bg: "rgba(219, 39, 119, 0.16)", fg: "#9d174d" },
+  { bg: "rgba(5, 150, 105, 0.16)", fg: "#065f46" },
+  { bg: "rgba(217, 119, 6, 0.18)", fg: "#92400e" },
+  { bg: "rgba(2, 132, 199, 0.16)", fg: "#075985" },
+  { bg: "rgba(124, 58, 237, 0.16)", fg: "#5b21b6" },
+  { bg: "rgba(225, 29, 72, 0.16)", fg: "#9f1239" },
+  { bg: "rgba(13, 148, 136, 0.16)", fg: "#115e59" },
+] as const;
+
+export function tagTone(tag: string) {
+  let hash = 0;
+  for (let i = 0; i < tag.length; i++) hash = (hash * 31 + tag.charCodeAt(i)) | 0;
+  return Math.abs(hash) % TAG_PALETTE.length;
+}
+
+export function NoteIndexTags({ tags }: { tags?: string[] }) {
+  const shown = (tags || []).map((tag) => tag.trim()).filter(Boolean).slice(0, 3);
+  if (!shown.length) return null;
+  return (
+    <div className="note-index-tags">
+      {shown.map((tag) => {
+        const tone = TAG_PALETTE[tagTone(tag)];
+        return (
+          <span key={tag} className="note-index-tag" style={{ backgroundColor: tone.bg, color: tone.fg }}>
+            #{tag}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function NoteIndexItem({ e, m }: { e: NoteEntry; m: NotesModel }) {
   const { t } = useTranslation();
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const checked = m.selectedSet.has(e.id);
   return (
-    <button
-      type="button"
-      className={"note-index-item" + (m.activeId === e.id ? " on" : "")}
-      onClick={() => void m.selectNote(e.id)}
+    <div
+      className={
+        "note-index-item" +
+        (m.activeId === e.id ? " on" : "") +
+        (checked ? " is-checked" : "") +
+        (m.selectionMode ? " is-selecting" : "")
+      }
+      onContextMenu={(ev) => {
+        ev.preventDefault();
+        setMenu({ x: ev.clientX, y: ev.clientY });
+      }}
     >
-      <div className="note-index-title">
-        {e.pinned && <Pin size={12} />}
-        <span>{e.title.trim() || t("notes.untitled")}</span>
+      <button
+        type="button"
+        className="note-index-main"
+        aria-pressed={m.selectionMode ? checked : undefined}
+        onClick={() => m.activateNote(e.id)}
+      >
+        <div className="note-index-title">
+          <span>{e.title.trim() || t("notes.untitled")}</span>
+        </div>
+        <NoteIndexTags tags={e.tags} />
+        {e.excerpt && <div className="note-index-excerpt">{e.excerpt}</div>}
+        <div className="note-index-time">{m.formatUpdatedAt(e.updatedAt)}</div>
+      </button>
+      <div className="note-index-actions">
+        <button
+          type="button"
+          className={"note-icon-btn" + (e.pinned ? " on" : "")}
+          title={e.pinned ? t("notes.unpin") : t("notes.pin")}
+          aria-label={e.pinned ? t("notes.unpin") : t("notes.pin")}
+          disabled={m.writesLocked}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            void m.togglePin(e.id);
+          }}
+        >
+          {e.pinned ? <ArrowUpToLine size={13} /> : <Pin size={13} />}
+        </button>
       </div>
-      {(e.tags || []).length > 0 && (
-        <div className="note-index-tags">{e.tags.slice(0, 3).map((tag) => `#${tag}`).join(" ")}</div>
+      {checked && <NoteSelectedMark />}
+      {menu && (
+        <>
+          <div
+            className="note-ctx-backdrop"
+            onClick={() => setMenu(null)}
+            onContextMenu={(ev) => {
+              ev.preventDefault();
+              setMenu(null);
+            }}
+          />
+          <div className="note-ctx-menu" style={{ left: menu.x, top: menu.y }} role="menu">
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                m.enterSelectionMode(e.id);
+                setMenu(null);
+              }}
+            >
+              {t("notes.ctxMultiSelect")}
+            </button>
+          </div>
+        </>
       )}
-      {e.excerpt && <div className="note-index-excerpt">{e.excerpt}</div>}
-      <div className="note-index-time">{m.formatUpdatedAt(e.updatedAt)}</div>
-    </button>
+    </div>
   );
 }
 
@@ -232,24 +333,81 @@ export function NoteEditorEmpty({ onCreate, writesLocked }: { onCreate: () => vo
 
 export function NoteExportModal({ m }: { m: NotesModel }) {
   const { t } = useTranslation();
+  const [scope, setScope] = useState<NoteExportScope>(m.selectedCount > 0 ? "selected" : "filtered");
+  const [format, setFormat] = useState<NoteExportFormat>("md_raw");
+
+  useEffect(() => {
+    if (!m.exportModal) return;
+    setScope(m.selectedCount > 0 ? "selected" : "filtered");
+    setFormat("md_raw");
+  }, [m.exportModal, m.selectedCount]);
+
   if (!m.exportModal) return null;
+  const selectedN = m.selectedCount;
+  const filteredN = m.filteredEntries.length;
+  const targetN = scope === "selected" ? selectedN : filteredN;
+  const formats: { id: NoteExportFormat; label: string }[] = [
+    { id: "md_raw", label: t("notes.exportRaw") },
+    { id: "md_inline", label: t("notes.exportInline") },
+    { id: "pdf", label: t("notes.exportPdf") },
+  ];
+
   return (
     <div className="wizard-overlay">
-      <div className="card" style={{ width: 420, maxWidth: "96vw" }}>
+      <div className="card" style={{ width: 440, maxWidth: "96vw" }}>
         <div className="card-head">
           <div className="card-title">{t("notes.exportTitle")}</div>
         </div>
         <div className="card-body stack">
-          <button type="button" className="btn" onClick={() => void m.exportNote("md_raw")}>
-            {t("notes.exportRaw")}
-          </button>
-          <button type="button" className="btn" onClick={() => void m.exportNote("md_inline")}>
-            {t("notes.exportInline")}
-          </button>
+          <fieldset className="note-export-fieldset">
+            <legend className="note-export-legend">{t("notes.exportScope")}</legend>
+            <label className={"note-export-option" + (selectedN === 0 ? " is-disabled" : "")}>
+              <input
+                type="radio"
+                name="note-export-scope"
+                checked={scope === "selected"}
+                disabled={selectedN === 0}
+                onChange={() => setScope("selected")}
+              />
+              <span>{t("notes.exportSelected", { n: selectedN })}</span>
+            </label>
+            <label className={"note-export-option" + (filteredN === 0 ? " is-disabled" : "")}>
+              <input
+                type="radio"
+                name="note-export-scope"
+                checked={scope === "filtered"}
+                disabled={filteredN === 0}
+                onChange={() => setScope("filtered")}
+              />
+              <span>{t("notes.exportFiltered", { n: filteredN })}</span>
+            </label>
+          </fieldset>
+          <fieldset className="note-export-fieldset">
+            <legend className="note-export-legend">{t("notes.exportFormat")}</legend>
+            {formats.map((item) => (
+              <label key={item.id} className="note-export-option">
+                <input
+                  type="radio"
+                  name="note-export-format"
+                  checked={format === item.id}
+                  onChange={() => setFormat(item.id)}
+                />
+                <span>{item.label}</span>
+              </label>
+            ))}
+          </fieldset>
         </div>
-        <div className="card-foot" style={{ justifyContent: "flex-end" }}>
-          <button type="button" className="btn ghost sm" onClick={() => m.setExportModal(false)}>
+        <div className="card-foot" style={{ justifyContent: "flex-end", gap: 8 }}>
+          <button type="button" className="btn ghost sm" disabled={m.exporting} onClick={() => m.setExportModal(false)}>
             {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            className="btn primary sm"
+            disabled={m.exporting || targetN === 0}
+            onClick={() => void m.exportNotes(format, scope)}
+          >
+            {m.exporting ? t("notes.exporting") : t("notes.exportConfirm")}
           </button>
         </div>
       </div>
@@ -321,15 +479,6 @@ export function NoteDraftBanner({ m }: { m: NotesModel }) {
   );
 }
 
-export function NoteSaveState({ m }: { m: NotesModel }) {
-  const { t } = useTranslation();
-  return (
-    <span className={"note-save-state" + (m.saving ? " saving" : m.isDirty ? " dirty" : " saved")}>
-      {m.saving ? t("notes.saving") : m.isDirty ? t("notes.dirty") : t("notes.saved")}
-    </span>
-  );
-}
-
 export function NoteLayoutSwitch({
   layout,
   onLayout,
@@ -395,7 +544,7 @@ export function NoteEditorCard({
           <label className={"note-title-field" + (m.draft.title.trim() ? "" : " is-empty")}>
             <span className="note-title-label">{t("notes.titleLabel")}</span>
             <span className="note-title-control">
-              <Type size={16} className="note-title-icon" aria-hidden />
+              <Type size={14} className="note-title-icon" aria-hidden />
               <input
                 className="note-title-input"
                 placeholder={t("notes.titlePlaceholder")}
@@ -405,7 +554,6 @@ export function NoteEditorCard({
               />
             </span>
           </label>
-          <NoteSaveState m={m} />
         </div>
         <div className="note-editor-meta">
           <input
@@ -421,53 +569,53 @@ export function NoteEditorCard({
             ))}
           </datalist>
           <NoteTagEditor m={m} />
-          <button
-            type="button"
-            className={"note-icon-btn" + (m.draft.pinned ? " on" : "")}
-            title={m.draft.pinned ? t("notes.unpin") : t("notes.pin")}
-            aria-label={m.draft.pinned ? t("notes.unpin") : t("notes.pin")}
-            onClick={() => m.updateDraft({ pinned: !m.draft.pinned })}
-          >
-            <Pin size={14} />
-          </button>
-          <button
-            type="button"
-            className="note-icon-btn"
-            title={t("notes.export")}
-            aria-label={t("notes.export")}
-            disabled={!m.draft.id}
-            onClick={() => m.setExportModal(true)}
-          >
-            <Download size={14} />
-          </button>
-          <button
-            type="button"
-            className="note-icon-btn danger"
-            title={t("notes.delete")}
-            aria-label={t("notes.delete")}
-            disabled={!m.draft.id || m.writesLocked}
-            onClick={() => m.activeNote && m.setPendingDelete(m.activeNote)}
-          >
-            <Trash2 size={14} />
-          </button>
         </div>
         <div className="note-editor-tools">
-          {showSource ? (
+          <div className="note-editor-tools-row">
+            <NoteLayoutSwitch layout={layout} onLayout={onLayout} modes={modes} />
+            <div className="note-editor-tool-actions">
+              {m.isDirty && !m.saving && <span className="note-save-state dirty">{t("notes.dirty")}</span>}
+              {m.saving && <span className="note-save-state saving">{t("notes.saving")}</span>}
+              <button
+                type="button"
+                className="btn primary sm"
+                disabled={m.writesLocked || m.saving || !m.isDirty}
+                onClick={() => void m.saveCurrentNote()}
+              >
+                <Save size={13} /> {m.saving ? t("notes.saving") : t("notes.save")}
+              </button>
+              <button
+                type="button"
+                className="note-icon-btn danger"
+                title={t("notes.delete")}
+                aria-label={t("notes.delete")}
+                disabled={!m.draft.id || m.writesLocked}
+                onClick={() => m.activeNote && m.setPendingDelete(m.activeNote)}
+              >
+                <Trash2 size={14} />
+              </button>
+            </div>
+          </div>
+          {showSource && (
             <MarkdownToolbar
               onWrap={m.wrapSelection}
               onInsert={m.insertAtCursor}
               onInsertImage={onInsertImage}
               disabled={m.writesLocked || m.assetUploading}
             />
-          ) : (
-            <div className="md-toolbar" />
           )}
-          <NoteLayoutSwitch layout={layout} onLayout={onLayout} modes={modes} />
         </div>
       </div>
       <div className={"notes-panes" + (layout === "split" ? " split" : "")}>
         {showSource && (
-          <div className="note-pane">
+          <div
+            className="note-pane"
+            onBlur={(ev) => {
+              const next = ev.relatedTarget as Node | null;
+              if (next && ev.currentTarget.contains(next)) return;
+              m.onEditorFocusLeave();
+            }}
+          >
             {layout === "split" && <div className="note-pane-label">{t("notes.paneSource")}</div>}
             <NoteMarkdownEditor
               ref={m.editorRef}

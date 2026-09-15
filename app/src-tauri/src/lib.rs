@@ -242,6 +242,8 @@ pub fn run() {
             commands::notes::note_asset_get,
             commands::notes::note_save_groups,
             commands::notes::note_export,
+            commands::notes::note_export_content,
+            commands::notes::note_write_export_file,
             commands::secrets_ui::clipboard_write,
             commands::secrets_ui::clipboard_clear,
             commands::secrets_ui::get_reveal_settings,

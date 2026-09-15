@@ -506,6 +506,28 @@ html[data-platform="mobile"] .startup-lock-bar {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+.m-list-side-btn {
+  flex: 0 0 auto;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  -webkit-tap-highlight-color: transparent;
+}
+.m-list-side-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 .m-list-add-btn {
   flex: 0 0 auto;
   min-height: 44px;
@@ -1574,16 +1596,85 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
 .m-note-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
+}
+.m-note-select-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-soft);
+}
+.m-note-select-count {
+  font-weight: 650;
+  color: var(--text);
+}
+.m-note-select-all {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 650;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.m-note-select-done {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  padding: 4px 2px;
 }
 .m-note-card {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
   text-align: left;
   border: 1px solid var(--border);
   background: var(--panel);
   border-radius: 14px;
-  padding: 12px;
+  padding: 10px;
   color: inherit;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.m-note-card.is-selecting:not(.is-checked) {
+  opacity: 0.72;
+}
+.m-note-card-main {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 2px 6px;
   cursor: pointer;
+}
+.m-note-card.is-checked {
+  background: var(--accent-soft, var(--gray-soft));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+  padding-bottom: 16px;
+}
+.m-note-card.is-checked .m-note-card-main {
+  padding-right: 28px;
+}
+.m-note-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .m-note-card-title {
   display: flex;
@@ -1597,6 +1688,18 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   font-size: 12px;
   color: var(--text-mute);
   margin-top: 4px;
+}
+.m-note-card-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.m-note-card-sub .note-index-tags {
+  margin: 0;
+}
+.m-note-card-time {
+  color: var(--text-mute);
 }
 .m-note-card-excerpt {
   display: -webkit-box;
@@ -1626,16 +1729,21 @@ html[data-platform="mobile"] .note-editor-title-row {
   align-items: flex-end;
 }
 html[data-platform="mobile"] .note-title-input {
-  font-size: 16px;
-  height: 40px;
+  font-size: 15px;
+  height: 34px;
 }
 html[data-platform="mobile"] .note-editor-meta {
   padding: 0 10px 8px;
 }
 html[data-platform="mobile"] .note-editor-tools {
   padding: 6px 8px;
+  gap: 4px;
+}
+html[data-platform="mobile"] .note-editor-tools-row {
   gap: 6px;
-  align-items: flex-start;
+}
+html[data-platform="mobile"] .note-editor-tool-actions {
+  margin-left: auto;
 }
 html[data-platform="mobile"] .note-cm.is-mobile .cm-editor,
 html[data-platform="mobile"] .note-cm.is-mobile .cm-content {

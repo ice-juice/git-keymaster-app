@@ -18,10 +18,11 @@ import {
   Info,
   Play,
   Cloud,
+  NotebookPen,
 } from "lucide-react";
 import { useSettingsModel } from "../shared/hooks/useSettingsModel";
 import { THEME_OPTIONS } from "../lib/theme";
-import { UNLOCK_ANIM_STYLES } from "../lib/prefs";
+import { getNotesAutoSave, setNotesAutoSaveStored, UNLOCK_ANIM_STYLES } from "../lib/prefs";
 import { writeClipboard } from "../lib/clipboard";
 import { Badge, Card, ErrorDialog, FieldLabel } from "../ui/common";
 import {
@@ -55,6 +56,7 @@ export function SettingsMobile() {
   const { uiLocale } = useLocale();
   const m = useSettingsModel();
   const [subSection, setSubSection] = useState<SubSection>(null);
+  const [notesAutoSave, setNotesAutoSave] = useState(getNotesAutoSave);
 
   useEffect(() => {
     if (subSection === null) return;
@@ -618,6 +620,23 @@ export function SettingsMobile() {
           <span className="m-settings-cell-title">{t("settings.animCell")}</span>
           <span className="m-settings-cell-value">{m.unlockAnimEnabled ? t("common.on") : t("common.off")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
+        </button>
+
+        <button
+          type="button"
+          className="m-settings-cell"
+          title={t("settings.notesAutoSaveTip")}
+          onClick={() => {
+            const next = !notesAutoSave;
+            setNotesAutoSave(next);
+            setNotesAutoSaveStored(next);
+          }}
+        >
+          <div className="m-settings-cell-icon" style={{ background: "rgba(14, 165, 233, 0.12)", color: "#0ea5e9" }}>
+            <NotebookPen size={16} />
+          </div>
+          <span className="m-settings-cell-title">{t("settings.notesAutoSave")}</span>
+          <span className="m-settings-cell-value">{notesAutoSave ? t("common.on") : t("common.off")}</span>
         </button>
       </div>
 
