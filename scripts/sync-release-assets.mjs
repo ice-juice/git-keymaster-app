@@ -334,6 +334,13 @@ function publishUnifiedManifest(tag, mapping) {
   }
 }
 
+export function shouldSkipAndroidMerge(existingText, downloaded) {
+  if (!downloaded) {
+    return true;
+  }
+  return missingDesktopPlatforms(parseManifestText(existingText).platforms).length > 0;
+}
+
 function mergeAndroidManifest(tag) {
   if (!tag || tag === "v__VERSION__") {
     console.log("skip android latest.json merge (no real tag)");
@@ -345,12 +352,23 @@ function mergeAndroidManifest(tag) {
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-android-latest-"));
   try {
-    const downloadedPath = downloadReleaseFile(tag, "latest.json", tmp);
-    if (!downloadedPath) {
-      console.error("[sync] --merge-android requires existing latest.json; download failed, not clobbering");
-      process.exit(1);
+    let downloadedPath = null;
+    for (let attempt = 1; attempt <= 6; attempt++) {
+      downloadedPath = downloadReleaseFile(tag, "latest.json", tmp);
+      const existing = downloadedPath ? fs.readFileSync(downloadedPath, "utf8") : "";
+      if (!shouldSkipAndroidMerge(existing, Boolean(downloadedPath))) {
+        break;
+      }
+      if (attempt < 6) {
+        console.log(`[sync] desktop latest.json not ready for android merge, retry ${attempt}/6`);
+        sleepMs(15000);
+      }
     }
-    const existingText = fs.readFileSync(downloadedPath, "utf8");
+    const existingText = downloadedPath && fs.existsSync(downloadedPath) ? fs.readFileSync(downloadedPath, "utf8") : "";
+    if (shouldSkipAndroidMerge(existingText, Boolean(downloadedPath))) {
+      console.log("[sync] desktop latest.json not on the release yet; skip android merge (pin will inject APK)");
+      return;
+    }
     const version = tag.replace(/^v/, "");
     const incomingText = buildAndroidLatestJson(version, tag);
     const apkSig = readAndroidApkSignature(tag, version, tmp);
@@ -612,6 +630,12 @@ function runSelfTest() {
     });
     if (downloadFail.ok) {
       throw new Error("android-only incoming + download fail must not clobber latest.json");
+    }
+    if (!shouldSkipAndroidMerge("", false) || !shouldSkipAndroidMerge(androidOnly, true)) {
+      throw new Error("android merge must skip when desktop latest.json is missing or incomplete");
+    }
+    if (shouldSkipAndroidMerge(desktop, true)) {
+      throw new Error("android merge should run once desktop platforms are present");
     }
     const dropped = evaluateManifestUpload({
       existingText: desktop,
