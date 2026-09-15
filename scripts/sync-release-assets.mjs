@@ -23,7 +23,7 @@ import {
   mergeLatestJson,
   rewriteLatestJson,
 } from "./rename-release-assets.mjs";
-import { signLatestJsonFile } from "./sign-update-manifest.mjs";
+import { signFileWithTauri, signLatestJsonFile } from "./sign-update-manifest.mjs";
 
 const REPO = "ice-juice/git-keymaster-app";
 export const REQUIRED_DESKTOP_PLATFORM_KEYS = [
@@ -35,6 +35,10 @@ export const REQUIRED_DESKTOP_PLATFORM_KEYS = [
 const BUNDLE_ROOTS = [
   "app/src-tauri/target/release/bundle",
   "app/src-tauri/target/universal-apple-darwin/release/bundle",
+];
+const EXTRA_SIG_ROOTS = [
+  "app/src-tauri/target/release",
+  "app/src-tauri/target/universal-apple-darwin/release",
 ];
 const INSTALLER_SUFFIXES = [
   ".app.tar.gz",
@@ -83,7 +87,7 @@ export function collectUniqueUploads(mapping, cwd = process.cwd()) {
 /** 文件名已经是 Git.Keymaster_* 时 rename 映射为空，仍要把安装包和 .sig 传上去。 */
 export function collectBundleUploads(cwd = process.cwd()) {
   const byBasename = new Map();
-  for (const root of BUNDLE_ROOTS) {
+  for (const root of [...BUNDLE_ROOTS, ...EXTRA_SIG_ROOTS]) {
     for (const file of walkFiles(path.join(cwd, root))) {
       const base = path.basename(file);
       const installer = INSTALLER_SUFFIXES.some((suffix) => base.endsWith(suffix));
@@ -175,11 +179,21 @@ export function evaluateManifestUpload({ existingText, incomingText, mergedText,
 }
 
 export function evaluatePinCanonical(text) {
-  const missing = missingDesktopPlatforms(parseManifestText(text).platforms);
+  const platforms = parseManifestText(text).platforms;
+  const missing = missingDesktopPlatforms(platforms);
   if (missing.length > 0) {
     return {
       ok: false,
       reason: `refusing to pin: latest.json missing desktop platforms (${missing.join(", ")})`,
+    };
+  }
+  const emptySig = REQUIRED_DESKTOP_PLATFORM_KEYS.filter(
+    (key) => !String(platforms?.[key]?.signature || "").trim(),
+  );
+  if (emptySig.length > 0) {
+    return {
+      ok: false,
+      reason: `refusing to pin: empty updater signatures (${emptySig.join(", ")})`,
     };
   }
   return { ok: true };
@@ -202,6 +216,35 @@ export function pickUpdaterAsset(names, kind) {
     );
   }
   throw new Error(`unknown updater asset kind: ${kind}`);
+}
+
+/** 安装包已在 Release，但旁边没有 .sig 时，pin 必须补签，否则桌面更新器验不过。 */
+export function missingUpdaterSignatures(names) {
+  const missing = [];
+  for (const kind of ["windows", "linux", "darwin"]) {
+    const filename = pickUpdaterAsset(names, kind);
+    if (filename && !names.includes(`${filename}.sig`)) {
+      missing.push(filename);
+    }
+  }
+  return missing;
+}
+
+function ensureSignedAsset(tag, filename, tmp) {
+  const dest = downloadReleaseFile(tag, filename, tmp);
+  if (!dest) {
+    console.error(`[sync] could not download ${filename} to sign`);
+    return false;
+  }
+  signFileWithTauri(dest);
+  const sigPath = `${dest}.sig`;
+  if (!fs.existsSync(sigPath)) {
+    console.error(`[sync] signed ${filename} but ${path.basename(sigPath)} was not written`);
+    return false;
+  }
+  runGh(["release", "upload", tag, sigPath, "--repo", REPO, "--clobber"], { retries: 4 });
+  console.log(`[sync] uploaded ${path.basename(sigPath)}`);
+  return true;
 }
 
 export function rebuildDesktopPlatforms(tag, manifestText, names, readSignature) {
@@ -550,7 +593,15 @@ function pinLegacyLatest(tag) {
       console.log("[sync] no latest.json on the release yet; seeding from CHANGELOG");
     }
     const apkSig = readAndroidApkSignature(tag, version, tmp);
-    const names = listReleaseAssetNames(tag);
+    let names = listReleaseAssetNames(tag);
+    console.log(`[sync] pin assets: ${names.join(", ") || "(none)"}`);
+    for (const filename of missingUpdaterSignatures(names)) {
+      console.log(`[sync] ${filename} has no sibling .sig; downloading installer to sign`);
+      if (!ensureSignedAsset(tag, filename, tmp)) {
+        console.error(`[sync] failed to backfill ${filename}.sig`);
+      }
+    }
+    names = listReleaseAssetNames(tag);
     let pinned = injectAndroidAarch64(fs.readFileSync(source, "utf8"), tag, version, apkSig);
     pinned = rebuildDesktopPlatforms(tag, pinned, names, (sigName) => {
       const sigPath = downloadReleaseFile(tag, sigName, tmp);
@@ -560,6 +611,7 @@ function pinLegacyLatest(tag) {
     const verdict = evaluatePinCanonical(pinned);
     if (!verdict.ok) {
       console.error(`[sync] ${verdict.reason}`);
+      console.error(`[sync] pin assets after rebuild: ${names.join(", ") || "(none)"}`);
       process.exit(1);
     }
     if (!JSON.parse(pinned).platforms?.[ANDROID_PLATFORM_KEY]?.signature) {
@@ -634,6 +686,12 @@ function runSelfTest() {
     if (!alreadyCanonical.some((file) => path.basename(file) === unified)) {
       throw new Error("empty rename mapping must still upload Git.Keymaster installers");
     }
+    const looseSig = `${unified}.sig`;
+    fs.writeFileSync(path.join(tmp, "app/src-tauri/target/release", looseSig), "loose-sig");
+    const uploadsWithLooseSig = collectBundleUploads(tmp);
+    if (!uploadsWithLooseSig.some((file) => path.basename(file) === looseSig)) {
+      throw new Error("collectBundleUploads must pick .sig next to target/release, not only under bundle/");
+    }
     const androidOnly = `${JSON.stringify({
       version: "1.7.0",
       notes: "n",
@@ -705,6 +763,29 @@ function runSelfTest() {
     const pinOk = evaluatePinCanonical(androidInjected);
     if (!pinOk.ok) {
       throw new Error(`pin should accept complete desktop platforms: ${pinOk.reason}`);
+    }
+    const pinEmptySig = evaluatePinCanonical(
+      `${JSON.stringify({
+        version: "1.7.1",
+        platforms: {
+          "windows-x86_64": { signature: "", url: "win.exe" },
+          "darwin-aarch64": { signature: "s", url: "mac.app.tar.gz" },
+          "darwin-x86_64": { signature: "s", url: "mac.app.tar.gz" },
+          "linux-x86_64": { signature: "s", url: "app.AppImage" },
+        },
+      }, null, 2)}\n`,
+    );
+    if (pinEmptySig.ok) {
+      throw new Error("pin must reject empty updater signatures");
+    }
+    if (
+      missingUpdaterSignatures([
+        "Git.Keymaster_1.7.1_x64-setup.exe",
+        "Git.Keymaster_1.7.1_amd64.AppImage",
+        "Git.Keymaster_1.7.1_amd64.AppImage.sig",
+      ]).join(",") !== "Git.Keymaster_1.7.1_x64-setup.exe"
+    ) {
+      throw new Error("missingUpdaterSignatures must report installer without sibling .sig");
     }
     const rebuilt = JSON.parse(
       rebuildDesktopPlatforms(

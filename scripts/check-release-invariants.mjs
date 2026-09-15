@@ -211,6 +211,9 @@ function checkCommittedDefaults() {
   if (!sync.includes("collectBundleUploads")) {
     fail("sync-release-assets.mjs 在 rename 映射为空时仍须上传安装包和 .sig");
   }
+  if (!sync.includes("missingUpdaterSignatures") || !sync.includes("ensureSignedAsset")) {
+    fail("pin 在 Release 缺安装包 .sig 时必须下载安装包并用同一把 minisign 补签");
+  }
   if (!sync.includes("signLatestJsonFile") || !sync.includes("readAndroidApkSignature")) {
     fail("sync-release-assets.mjs 必须用同一把 minisign 私钥签 latest.json，并写入 APK signature");
   }
@@ -398,6 +401,9 @@ function checkRenameStem() {
   }
   if (!yml.includes("--pin-legacy")) {
     fail("release.yml 必须在全部桌面任务结束后把 latest.json 复制成旧名别名");
+  }
+  if (!/pin-updater-json[\s\S]*npm ci/.test(yml)) {
+    fail("pin latest.json 必须 npm ci，否则签不了清单、也补不了缺失的安装包 .sig");
   }
   if (!yml.includes("needs: [build, build-android]")) {
     fail("pin-updater-json 必须等安卓 job 写入 android-aarch64 后再复制别名");

@@ -268,6 +268,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
       - name: Copy latest.json to legacy locale aliases
         env:
           GH_TOKEN: ${{ github.token }}
