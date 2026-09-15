@@ -38,11 +38,15 @@
 - 解锁页优先指纹，可手动改用密码或恢复密钥；锁定后需用户主动点指纹图标，不会自动唤醒传感器。
 - 查看 TOTP / 隐私密码也可选指纹重认证；导出 TOTP 原始密钥默认仍要访问密码。
 
+![设置 → 安全与凭据：开机免验证、指纹解锁与查看机密时的二次认证](docs/screenshots/02-settings-security.png)
+
 ### 3. 身份总览与体检
 
 - 每项身份显示密钥、SSH 配置、agent 驻留、远程 `ssh -T` 四维状态。
 - 单项或批量连通性测试，确认免密认证是否指向正确账号。
 - 改别名时检查已绑定仓库，避免断链。
+
+![身份总览：密钥、配置、Agent 与连通性四维状态](docs/screenshots/03-identities.png)
 
 ### 4. SSH 密钥与配置
 
@@ -51,10 +55,20 @@
 - 只改 `# ===== BEGIN/END managed by git-keymaster =====` 区块，区块外手写内容保留。
 - `~/.ssh/config` 以 Include 指向工作空间正本，系统入口与正本分离。
 
+**密钥管理**：库内密钥加密存放，可生成、导入、复制公钥。
+
+![密钥管理](docs/screenshots/04-keys.png)
+
+**SSH 配置 / 编辑**：工作空间正本、健康检查与托管区块内容。
+
+![SSH 配置与编辑](docs/screenshots/04-ssh-config.png)
+
 ### 5. ssh-agent 托管
 
 - 解锁后自动把私钥注入 agent，日常 `git push/pull` 不必反复输密。
 - 探测本机 OpenSSH / Git 自带工具链，按平台选择可用二进制。
+
+![Agent 托管：本机工具链检测与已加载密钥](docs/screenshots/05-agent.png)
 
 ### 6. 仓库管理与智能克隆
 
@@ -62,17 +76,35 @@
 - 集中管理已绑定仓库：打开目录、检查远程、切换身份。
 - 克隆或初始化后写入正确的 `user.name` / `user.email`。
 
+**仓库管理**：扫描本机带 remote 的目录并入库。
+
+![仓库管理](docs/screenshots/06-repos.png)
+
+**克隆仓库**：识别地址、推荐身份，再克隆或初始化到本地。
+
+![克隆仓库：地址识别与身份推荐](docs/screenshots/06-clone.png)
+
 ### 7. 2FA / TOTP 与隐私账号
 
 - TOTP 密钥加密存放，支持手动、otpauth URI、图片、屏幕扫码导入。
 - 隐私账号按平台聚合，密码二次验证、历史版本、可联动 TOTP。
 - 复制到系统剪贴板后按设置秒数自动清空。
 
+**2FA / TOTP**：卡片或列表查看验证码，支持扫码与图片导入。
+
+![2FA / TOTP](docs/screenshots/07-totp.png)
+
+**隐私账号**：按平台折叠，密码与关联 2FA 默认掩码。
+
+![隐私账号](docs/screenshots/07-vault-accounts.png)
+
 ### 8. 离线备份与云同步
 
 - **离线**：导出 `.gambackup`，独立备份密码，换机预览后合并还原。
 - **云同步**：兼容 Cloudflare R2、AWS S3、MinIO 等 S3 API；出机即密文，对象名 HMAC 混淆；先传对象再提交 Manifest。
 - 多端按身份 id 合并；SSH 正本按 alias 去重，避免恢复后 Host 重复。
+
+![云端同步：推送 / 拉取、定时同步与自备 S3 / R2](docs/screenshots/08-cloud-sync.png)
 
 ### 9. 网络、更新与环境自查
 
