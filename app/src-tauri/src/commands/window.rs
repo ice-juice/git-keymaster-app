@@ -7,17 +7,21 @@ use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 pub fn show_main(app: &AppHandle) {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.unminimize();
         let _ = win.show();
         let _ = win.set_focus();
     }
+    let _ = app;
 }
 
 pub fn hide_main(app: &AppHandle) {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.hide();
     }
+    let _ = app;
 }
 
 /// 最小化到托盘：按设置锁定内存中的工作空间。
@@ -44,6 +48,7 @@ pub fn quit_app(app: &AppHandle, state: &AppState) {
     app.exit(0);
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn persist_close_action(state: &AppState, action: &str) -> Result<()> {
     let mut cfg = recover_lock(&state.config);
     cfg.close_action = Some(action.to_string());
@@ -58,6 +63,12 @@ pub fn apply_close_choice(
     action: String,
     remember: bool,
 ) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, action, remember);
+        return Err(AppError::Unsupported("窗口关闭行为"));
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     match action.as_str() {
         "tray" => {
             if remember {

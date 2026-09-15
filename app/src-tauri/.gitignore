@@ -2,3 +2,5 @@
 # will have compiled files and executables
 /target/
 /gen/schemas
+# prepare-lang.mjs 写入；未准备时 build.rs 默认中文。
+/gam-lang.txt

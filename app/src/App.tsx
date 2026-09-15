@@ -1,4 +1,5 @@
 import { useEffect, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { HashRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/ipc";
@@ -19,9 +20,19 @@ import { Settings } from "./pages/Settings";
 import { TotpPage } from "./pages/Totp";
 import { AccountsPage } from "./pages/Accounts";
 import { CloseConfirmHost } from "./ui/CloseConfirm";
+import { ToastHost } from "./ui/Toast";
 import UnlockAnimation from "./ui/UnlockAnimation";
+import { MobileShell } from "./ui/MobileShell";
+import { useIsCompact, supportsLocalGitTools } from "./lib/platform";
 
-function AppShell() {
+function AppShell({ compact }: { compact: boolean }) {
+  if (compact) {
+    return (
+      <MobileShell>
+        <Outlet />
+      </MobileShell>
+    );
+  }
   return (
     <Layout>
       <Outlet />
@@ -30,6 +41,7 @@ function AppShell() {
 }
 
 export default function App() {
+  const { t } = useTranslation();
   const {
     status,
     loading,
@@ -41,6 +53,12 @@ export default function App() {
     animPlayId,
     endUnlockAnim,
   } = useApp();
+
+  const compact = useIsCompact();
+  // 本机 Git / SSH 工具链相关页面在移动端没有消费者，连路由都不注册，
+  // 避免深链接或历史记录把用户带到一个必然报错的页面。
+  // 平台标记（<html data-platform>）已由 main.tsx 在首帧前写好，这里无需再动。
+  const localTools = supportsLocalGitTools();
 
   const unlockOverlay = playUnlockAnim ? (
     <UnlockAnimation
@@ -112,7 +130,7 @@ export default function App() {
   if (loading) {
     screen = (
       <div className="center-stage">
-        <div className="muted">加载中…</div>
+        <div className="muted">{t("common.loading")}</div>
       </div>
     );
   } else if (!status?.initialized) {
@@ -123,14 +141,14 @@ export default function App() {
     screen = (
       <HashRouter>
         <Routes>
-          <Route path="/identities/new" element={<NewIdentity />} />
-          <Route element={<AppShell />}>
+          {localTools && <Route path="/identities/new" element={<NewIdentity />} />}
+          <Route element={<AppShell compact={compact} />}>
             <Route path="/" element={<Overview />} />
             <Route path="/keys" element={<Keys />} />
-            <Route path="/config" element={<ConfigPage />} />
-            <Route path="/agent" element={<AgentPage />} />
-            <Route path="/repos" element={<Repos />} />
-            <Route path="/clone" element={<ClonePage />} />
+            {localTools && <Route path="/config" element={<ConfigPage />} />}
+            {localTools && <Route path="/agent" element={<AgentPage />} />}
+            {localTools && <Route path="/repos" element={<Repos />} />}
+            {localTools && <Route path="/clone" element={<ClonePage />} />}
             <Route path="/totp" element={<TotpPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/sync" element={<SyncPage />} />
@@ -145,8 +163,10 @@ export default function App() {
   return (
     <>
       <CloseConfirmHost />
+      <ToastHost />
       <div className="app-shell">
-        <TitleBar />
+        {/* 移动端没有窗口控制，标题栏由 MobileShell 的精简顶栏代替 */}
+        {!compact && <TitleBar />}
         <div className="app-view">{screen}</div>
       </div>
       {unlockOverlay}

@@ -25,7 +25,6 @@ pub struct AgentStatus {
 pub fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus> {
     let env = recover_lock(&state.agent_env).clone();
     let using_fallback = env.auth_sock.is_some();
-    let unify_status = unify::inspect(&env);
     let agent_keys = match agent::list(&env) {
         Ok(k) => k,
         Err(_) => {
@@ -36,10 +35,11 @@ pub fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus> {
                 ssh_add: env.ssh_add.clone(),
                 auth_sock: env.auth_sock.clone(),
                 keys: vec![],
-                unify: unify_status,
+                unify: unify::inspect(&env, false),
             })
         }
     };
+    let unify_status = unify::inspect(&env, true);
     // 反查需要 vault 数据（若已解锁）。
     let vault = recover_lock(&state.vault);
     let resolved = match vault.as_ref() {
@@ -170,11 +170,23 @@ pub fn agent_load_all(state: State<'_, AppState>) -> Result<u32> {
     let v = vault.as_ref().ok_or(AppError::Locked)?;
     let data = store::load_data(v)?;
     let mut loaded = 0u32;
+    let mut attempted = 0u32;
+    let mut last_err: Option<AppError> = None;
     for identity in &data.identities {
         if let Some(key_id) = &identity.key_id {
-            if agent::load_key(v, &env, key_id).is_ok() {
-                loaded += 1;
+            attempted += 1;
+            match agent::load_key(v, &env, key_id) {
+                Ok(()) => loaded += 1,
+                Err(e) => last_err = Some(e),
             }
+        }
+    }
+    if loaded == 0 {
+        if let Some(e) = last_err {
+            return Err(e);
+        }
+        if attempted == 0 {
+            return Err(AppError::Invalid("没有可加载的身份密钥".into()));
         }
     }
     crate::util::audit(v.root(), &format!("agent 自动加载 {loaded} 把密钥"));

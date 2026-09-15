@@ -6,7 +6,8 @@ use crate::model::{AccountData, Secrets, TotpData, VaultData};
 use crate::vault::atomic_write;
 use crate::vault::crypto::{self, KEY_LEN, LABEL_KEYFILE, LABEL_METADATA, XNONCE_LEN};
 use crate::vault::Vault;
-use std::path::PathBuf;
+use serde::de::DeserializeOwned;
+use std::path::{Path, PathBuf};
 
 fn seal(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Result<Vec<u8>> {
     let nonce = crypto::new_nonce();
@@ -46,16 +47,20 @@ fn icon_path(vault: &Vault, hash: &str) -> PathBuf {
     vault.root().join("icons").join(format!("{hash}.webp"))
 }
 
-/// 读取元数据容器（不存在时返回默认）。需已解锁。
-pub fn load_data(vault: &Vault) -> Result<VaultData> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let path = data_path(vault);
+fn load_sealed<T: Default + DeserializeOwned>(vault: &Vault, path: &Path) -> Result<T> {
+    crate::vault::recover_previous_if_missing(path);
     if !path.exists() {
-        return Ok(VaultData::default());
+        return Ok(T::default());
     }
-    let raw = std::fs::read(&path)?;
+    let key = vault.subkey(LABEL_METADATA)?;
+    let raw = std::fs::read(path)?;
     let plain = open(&key, &raw)?;
     Ok(serde_json::from_slice(&plain)?)
+}
+
+/// 读取元数据容器（不存在时返回默认）。需已解锁。
+pub fn load_data(vault: &Vault) -> Result<VaultData> {
+    load_sealed(vault, &data_path(vault))
 }
 
 pub fn save_data(vault: &Vault, data: &VaultData) -> Result<()> {
@@ -66,14 +71,7 @@ pub fn save_data(vault: &Vault, data: &VaultData) -> Result<()> {
 }
 
 pub fn load_secrets(vault: &Vault) -> Result<Secrets> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let path = secrets_path(vault);
-    if !path.exists() {
-        return Ok(Secrets::default());
-    }
-    let raw = std::fs::read(&path)?;
-    let plain = open(&key, &raw)?;
-    Ok(serde_json::from_slice(&plain)?)
+    load_sealed(vault, &secrets_path(vault))
 }
 
 pub fn save_secrets(vault: &Vault, secrets: &Secrets) -> Result<()> {
@@ -102,14 +100,7 @@ pub fn key_exists(vault: &Vault, key_id: &str) -> bool {
 }
 
 pub fn load_totp(vault: &Vault) -> Result<TotpData> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let path = totp_path(vault);
-    if !path.exists() {
-        return Ok(TotpData::default());
-    }
-    let raw = std::fs::read(&path)?;
-    let plain = open(&key, &raw)?;
-    Ok(serde_json::from_slice(&plain)?)
+    load_sealed(vault, &totp_path(vault))
 }
 
 pub fn save_totp(vault: &Vault, data: &TotpData) -> Result<()> {
@@ -120,14 +111,7 @@ pub fn save_totp(vault: &Vault, data: &TotpData) -> Result<()> {
 }
 
 pub fn load_accounts(vault: &Vault) -> Result<AccountData> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let path = accounts_path(vault);
-    if !path.exists() {
-        return Ok(AccountData::default());
-    }
-    let raw = std::fs::read(&path)?;
-    let plain = open(&key, &raw)?;
-    Ok(serde_json::from_slice(&plain)?)
+    load_sealed(vault, &accounts_path(vault))
 }
 
 pub fn save_accounts(vault: &Vault, data: &AccountData) -> Result<()> {
@@ -258,6 +242,21 @@ mod tests {
         let got = load_secrets(&v).unwrap();
         assert_eq!(got.key_passphrases.get("k1").unwrap(), "s3cr3t-pass");
         assert_eq!(got.github_pat.as_deref(), Some("ghp_xxx"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn load_secrets_recovers_previous_copy() {
+        let (v, root) = unlocked_vault();
+        let mut s = Secrets::default();
+        s.totp_seeds.insert("t1".into(), "JBSWY3DPEHPK3PXP".into());
+        save_secrets(&v, &s).unwrap();
+        let path = secrets_path(&v);
+        let bak = crate::vault::previous_path(&path);
+        std::fs::rename(&path, &bak).unwrap();
+        let got = load_secrets(&v).unwrap();
+        assert_eq!(got.totp_seeds.get("t1").unwrap(), "JBSWY3DPEHPK3PXP");
+        assert!(path.is_file());
         std::fs::remove_dir_all(&root).ok();
     }
 

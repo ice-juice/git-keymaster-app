@@ -53,7 +53,7 @@ fn silent_check(app: &AppHandle) {
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        match update::checker::check(&app, &src, proxy.as_ref()).await {
+        match update::run_check(&app, &src, proxy.as_ref()).await {
             Ok(result) => {
                 persist_last_check(&app);
                 if should_notify(
@@ -82,9 +82,17 @@ fn is_unlocked_with_window(app: &AppHandle, state: &AppState) -> bool {
     if !unlocked {
         return false;
     }
-    app.get_webview_window("main")
-        .map(|w| w.is_visible().unwrap_or(true))
-        .unwrap_or(false)
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = app;
+        return unlocked;
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        app.get_webview_window("main")
+            .map(|w| w.is_visible().unwrap_or(true))
+            .unwrap_or(false)
+    }
 }
 
 pub fn should_notify(available: bool, latest: Option<&str>, skipped: Option<&str>) -> bool {

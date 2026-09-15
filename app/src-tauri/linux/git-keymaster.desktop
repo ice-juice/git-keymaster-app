@@ -1,0 +1,11 @@
+[Desktop Entry]
+Categories={{categories}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}}
+Icon={{icon}}
+Name=Git Keymaster
+Name[zh_CN]=御钥师
+Terminal=false
+Type=Application

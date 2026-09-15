@@ -98,13 +98,17 @@ pub fn account_add(app: AppHandle, state: State<AppState>, args: AccountUpsertAr
     }
     let mut data = store::load_accounts(v)?;
     let mut secrets = store::load_secrets(v)?;
-    let platform = args.platform.trim().to_string();
     let username = args.username.trim().to_string();
-    if platform.is_empty() || username.is_empty() {
+    if args.platform.trim().is_empty() || username.is_empty() {
         return Err(AppError::Invalid("平台与用户名不能为空".into()));
     }
+    let (platform, icon) = resolve_and_align(
+        &mut data.entries,
+        None,
+        args.platform.trim(),
+        nonempty_icon(args.icon.clone()),
+    );
     let now = now();
-    let icon = args.icon.clone().or_else(|| icons::suggest_builtin(&platform));
     let entry = AccountEntry {
         id: uuid::Uuid::new_v4().to_string(),
         platform,
@@ -155,12 +159,27 @@ pub fn account_update(app: AppHandle, state: State<AppState>, args: AccountUpser
     }
     let mut data = store::load_accounts(v)?;
     let mut secrets = store::load_secrets(v)?;
+    if !data.entries.iter().any(|e| e.id == id) {
+        return Err(AppError::Invalid("账号不存在".into()));
+    }
+    let incoming_icon = nonempty_icon(args.icon.clone()).or_else(|| {
+        data.entries
+            .iter()
+            .find(|e| e.id == id)
+            .and_then(|e| e.icon.clone())
+    });
+    let (platform, icon) = resolve_and_align(
+        &mut data.entries,
+        Some(&id),
+        args.platform.trim(),
+        incoming_icon,
+    );
     let entry = data
         .entries
         .iter_mut()
         .find(|e| e.id == id)
         .ok_or_else(|| AppError::Invalid("账号不存在".into()))?;
-    entry.platform = args.platform.trim().to_string();
+    entry.platform = platform;
     entry.username = args.username.trim().to_string();
     entry.display_name = empty_none(args.display_name);
     entry.url = empty_none(args.url);
@@ -169,9 +188,7 @@ pub fn account_update(app: AppHandle, state: State<AppState>, args: AccountUpser
     if let Some(tags) = args.tags {
         entry.tags = tags;
     }
-    if args.icon.is_some() {
-        entry.icon = args.icon;
-    }
+    entry.icon = icon;
     if let Some(p) = args.pinned {
         entry.pinned = p;
     }
@@ -413,4 +430,143 @@ pub fn account_clear_history(app: AppHandle, state: State<AppState>, id: String)
 
 fn empty_none(s: Option<String>) -> Option<String> {
     s.map(|x| x.trim().to_string()).filter(|x| !x.is_empty())
+}
+
+fn nonempty_icon(s: Option<String>) -> Option<String> {
+    empty_none(s)
+}
+
+fn platform_family(platform: &str) -> String {
+    icons::suggest_builtin(platform).unwrap_or_else(|| platform.trim().to_ascii_lowercase())
+}
+
+fn builtin_display_name(family: &str, raw_platform: &str) -> Option<String> {
+    let id = family.strip_prefix("builtin:")?;
+    let b = icons::list_builtin().into_iter().find(|i| i.id == id)?;
+    let q = raw_platform.trim().to_ascii_lowercase();
+    if q == b.id.to_ascii_lowercase() || q == b.name.to_ascii_lowercase() {
+        Some(b.name)
+    } else {
+        None
+    }
+}
+
+/// 同一平台（大小写 / 内置站别名）共用一份平台名和图标。
+fn resolve_and_align(
+    entries: &mut [AccountEntry],
+    except_id: Option<&str>,
+    platform: &str,
+    icon: Option<String>,
+) -> (String, Option<String>) {
+    let platform = platform.trim();
+    let family = platform_family(platform);
+    let sibling_ids: Vec<String> = entries
+        .iter()
+        .filter(|e| except_id != Some(e.id.as_str()) && platform_family(&e.platform) == family)
+        .map(|e| e.id.clone())
+        .collect();
+
+    let canonical_name = sibling_ids
+        .first()
+        .and_then(|id| {
+            entries
+                .iter()
+                .find(|e| e.id == *id)
+                .map(|e| e.platform.clone())
+        })
+        .or_else(|| builtin_display_name(&family, platform))
+        .unwrap_or_else(|| platform.to_string());
+
+    let sibling_icon = sibling_ids.iter().find_map(|id| {
+        entries
+            .iter()
+            .find(|e| e.id == *id)
+            .and_then(|e| e.icon.clone())
+    });
+    let canonical_icon = icon
+        .filter(|s| !s.trim().is_empty())
+        .or(sibling_icon)
+        .or_else(|| icons::suggest_builtin(&canonical_name));
+
+    for e in entries.iter_mut() {
+        if sibling_ids.iter().any(|id| *id == e.id) {
+            e.platform = canonical_name.clone();
+            e.icon = canonical_icon.clone();
+        }
+    }
+    (canonical_name, canonical_icon)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(id: &str, platform: &str, icon: Option<&str>) -> AccountEntry {
+        AccountEntry {
+            id: id.into(),
+            platform: platform.into(),
+            username: id.into(),
+            display_name: None,
+            url: None,
+            note: None,
+            group: None,
+            tags: vec![],
+            icon: icon.map(|s| s.into()),
+            pinned: false,
+            sort_order: 0,
+            totp_ref: None,
+            last_used_at: None,
+            created_at: "t".into(),
+            updated_at: "t".into(),
+            has_password: true,
+        }
+    }
+
+    #[test]
+    fn add_joins_existing_github_spelling() {
+        let mut entries = vec![entry("a", "GitHub", Some("builtin:github"))];
+        let (name, icon) = resolve_and_align(&mut entries, None, "github.com", None);
+        assert_eq!(name, "GitHub");
+        assert_eq!(icon.as_deref(), Some("builtin:github"));
+        assert_eq!(entries[0].platform, "GitHub");
+    }
+
+    #[test]
+    fn custom_icon_spreads_to_siblings() {
+        let mut entries = vec![
+            entry("a", "GitHub", Some("builtin:github")),
+            entry("b", "github", Some("builtin:github")),
+        ];
+        let (name, icon) = resolve_and_align(
+            &mut entries,
+            None,
+            "GitHub",
+            Some("custom:abc".into()),
+        );
+        assert_eq!(name, "GitHub");
+        assert_eq!(icon.as_deref(), Some("custom:abc"));
+        assert!(entries.iter().all(|e| e.platform == "GitHub"));
+        assert!(entries.iter().all(|e| e.icon.as_deref() == Some("custom:abc")));
+    }
+
+    #[test]
+    fn case_only_name_keeps_one_group() {
+        let mut entries = vec![entry("a", "MyBank", None)];
+        let (name, _) = resolve_and_align(&mut entries, None, "mybank", None);
+        assert_eq!(name, "MyBank");
+        assert_eq!(entries[0].platform, "MyBank");
+    }
+
+    #[test]
+    fn moving_to_other_platform_leaves_old_siblings() {
+        let mut entries = vec![
+            entry("a", "GitHub", Some("builtin:github")),
+            entry("b", "GitHub", Some("builtin:github")),
+        ];
+        let (name, icon) = resolve_and_align(&mut entries, Some("b"), "GitLab", None);
+        assert_eq!(name, "GitLab");
+        assert_eq!(icon.as_deref(), Some("builtin:gitlab"));
+        assert_eq!(entries[0].platform, "GitHub");
+        assert_eq!(entries[0].icon.as_deref(), Some("builtin:github"));
+    }
 }

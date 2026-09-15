@@ -96,9 +96,42 @@ fn invalidate_view_cache() {
 }
 
 fn invalidate_client_cache() {
-    if let Ok(mut g) = view_cache().client.lock() {
-        *g = None;
+    let old = view_cache().client.lock().ok().and_then(|mut g| g.take());
+    if old.is_some() {
+        // reqwest::blocking::Client 在 Tokio worker 上 drop 会 panic。
+        let _ = std::thread::Builder::new()
+            .name("drop-s3-client".into())
+            .spawn(move || drop(old));
     }
+}
+
+/// `reqwest::blocking` 不能在 `#[tauri::command(async)]` 的 Tokio 线程里创建或收尾。
+async fn run_cloud_io<T, F>(f: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Other(format!("云同步任务中断：{e}")))?
+}
+
+fn reuse_or_create_s3_client(
+    sync_config: S3Config,
+    app_cfg: &crate::app_config::AppConfig,
+) -> Result<S3Client> {
+    if let Ok(cache) = view_cache().client.lock() {
+        if let Some((cfg, client)) = cache.as_ref() {
+            if cfg == &sync_config {
+                return Ok(client.clone());
+            }
+        }
+    }
+    let client = S3Client::from_app(sync_config.clone(), app_cfg)?;
+    if let Ok(mut cache) = view_cache().client.lock() {
+        *cache = Some((sync_config, client.clone()));
+    }
+    Ok(client)
 }
 
 fn clone_unlocked_vault(state: &AppState) -> Result<Vault> {
@@ -111,18 +144,8 @@ fn clone_unlocked_vault(state: &AppState) -> Result<Vault> {
 }
 
 fn reuse_s3_client(state: &AppState, sync_config: S3Config) -> Result<S3Client> {
-    if let Ok(cache) = view_cache().client.lock() {
-        if let Some((cfg, client)) = cache.as_ref() {
-            if cfg == &sync_config {
-                return Ok(client.clone());
-            }
-        }
-    }
-    let client = s3_from_state(state, sync_config.clone())?;
-    if let Ok(mut cache) = view_cache().client.lock() {
-        *cache = Some((sync_config, client.clone()));
-    }
-    Ok(client)
+    let app_cfg = recover_lock(&state.config).clone();
+    reuse_or_create_s3_client(sync_config, &app_cfg)
 }
 
 // ==================== M6 本地加密备份导出/导入 ====================
@@ -205,6 +228,14 @@ pub fn import_s3_config(src_path: String) -> Result<S3Config> {
     Ok(cfg)
 }
 
+/// 手机端系统选文件给的是内容 URI，`std::fs` 读不到；由前端读成文本再解析。
+#[tauri::command]
+pub fn import_s3_config_text(raw: String) -> Result<S3Config> {
+    let cfg = crate::sync::s3::parse_s3_config_file(&raw)?;
+    validate_s3_config(&cfg)?;
+    Ok(cfg)
+}
+
 #[tauri::command]
 pub fn test_cloud_sync_config(state: State<AppState>, sync_config: S3Config) -> Result<u128> {
     let proxy = {
@@ -215,8 +246,11 @@ pub fn test_cloud_sync_config(state: State<AppState>, sync_config: S3Config) -> 
     client.test_connection()
 }
 
-#[tauri::command(async)]
-pub fn get_cloud_sync_status(state: State<'_, AppState>, lite: Option<bool>) -> Result<CloudSyncStatus> {
+#[tauri::command]
+pub async fn get_cloud_sync_status(
+    state: State<'_, AppState>,
+    lite: Option<bool>,
+) -> Result<CloudSyncStatus> {
     let lite = lite.unwrap_or(false);
     // 轻量进页刷新可复用热缓存；手动「刷新」走完整探测。
     if lite {
@@ -226,9 +260,9 @@ pub fn get_cloud_sync_status(state: State<'_, AppState>, lite: Option<bool>) -> 
     }
 
     let vault = clone_unlocked_vault(&state)?;
-    let sync_config = {
+    let (sync_config, app_cfg) = {
         let config = recover_lock(&state.config);
-        config.cloud_sync.clone()
+        (config.cloud_sync.clone(), config.clone())
     };
 
     let sync_config = match sync_config {
@@ -240,12 +274,15 @@ pub fn get_cloud_sync_status(state: State<'_, AppState>, lite: Option<bool>) -> 
         }
     };
 
-    let client = reuse_s3_client(&state, sync_config)?;
-    let st = if lite {
-        engine::get_sync_status_lite(&vault, &client)?
-    } else {
-        engine::get_sync_status(&vault, &client)?
-    };
+    let st = run_cloud_io(move || {
+        let client = reuse_or_create_s3_client(sync_config, &app_cfg)?;
+        if lite {
+            engine::get_sync_status_lite(&vault, &client)
+        } else {
+            engine::get_sync_status(&vault, &client)
+        }
+    })
+    .await?;
     store_status(st.clone());
     Ok(st)
 }
@@ -261,8 +298,8 @@ pub struct CloudSyncPageData {
 }
 
 /// 页面首屏：只读本地配置/计数与缓存，绝不访问云端。
-#[tauri::command(async)]
-pub fn get_cloud_sync_page(state: State<'_, AppState>) -> Result<CloudSyncPageData> {
+#[tauri::command]
+pub fn get_cloud_sync_page(state: State<AppState>) -> Result<CloudSyncPageData> {
     let vault = clone_unlocked_vault(&state)?;
     let (config, auto_sync) = {
         let cfg = recover_lock(&state.config);
@@ -292,43 +329,53 @@ pub fn get_cloud_sync_page(state: State<'_, AppState>) -> Result<CloudSyncPageDa
     })
 }
 
-#[tauri::command(async)]
-pub fn cloud_sync_push(state: State<'_, AppState>) -> Result<SyncResult> {
+#[tauri::command]
+pub async fn cloud_sync_push(state: State<'_, AppState>) -> Result<SyncResult> {
     crate::commands::ensure_writes_allowed(&state)?;
-    let vault_guard = recover_lock(&state.vault);
-    let vault = vault_guard.as_ref().ok_or(AppError::Locked)?;
-
-    let sync_config = {
+    let vault = clone_unlocked_vault(&state)?;
+    let (sync_config, app_cfg) = {
         let config = recover_lock(&state.config);
-        config
-            .cloud_sync
-            .clone()
-            .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?
+        (
+            config
+                .cloud_sync
+                .clone()
+                .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?,
+            config.clone(),
+        )
     };
 
-    let client = reuse_s3_client(&state, sync_config)?;
-    let result = engine::push_to_cloud(vault, &client)?;
-    let _ = crate::commands::write::reconcile_ssh_hosts(vault);
+    let result = run_cloud_io(move || {
+        let client = reuse_or_create_s3_client(sync_config, &app_cfg)?;
+        let result = engine::push_to_cloud(&vault, &client)?;
+        let _ = crate::commands::write::reconcile_ssh_hosts(&vault);
+        Ok(result)
+    })
+    .await?;
     invalidate_view_cache();
     Ok(result)
 }
 
-#[tauri::command(async)]
-pub fn cloud_sync_pull(state: State<'_, AppState>) -> Result<SyncResult> {
-    let vault_guard = recover_lock(&state.vault);
-    let vault = vault_guard.as_ref().ok_or(AppError::Locked)?;
-
-    let sync_config = {
+#[tauri::command]
+pub async fn cloud_sync_pull(state: State<'_, AppState>) -> Result<SyncResult> {
+    let vault = clone_unlocked_vault(&state)?;
+    let (sync_config, app_cfg) = {
         let config = recover_lock(&state.config);
-        config
-            .cloud_sync
-            .clone()
-            .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?
+        (
+            config
+                .cloud_sync
+                .clone()
+                .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?,
+            config.clone(),
+        )
     };
 
-    let client = reuse_s3_client(&state, sync_config)?;
-    let result = engine::pull_from_cloud(vault, &client)?;
-    let _ = crate::commands::write::reconcile_ssh_hosts(vault);
+    let result = run_cloud_io(move || {
+        let client = reuse_or_create_s3_client(sync_config, &app_cfg)?;
+        let result = engine::pull_from_cloud(&vault, &client)?;
+        let _ = crate::commands::write::reconcile_ssh_hosts(&vault);
+        Ok(result)
+    })
+    .await?;
     invalidate_view_cache();
     Ok(result)
 }
@@ -371,10 +418,6 @@ fn require_client(state: &AppState) -> Result<S3Client> {
         .clone()
         .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?;
     reuse_s3_client(state, sync_config)
-}
-
-fn s3_from_state(state: &AppState, sync_config: S3Config) -> Result<S3Client> {
-    S3Client::from_app(sync_config, &recover_lock(&state.config))
 }
 
 #[tauri::command]
@@ -455,9 +498,7 @@ pub fn restore_from_cloud(
     include_repos: Option<bool>,
 ) -> Result<SyncResult> {
     validate_s3_config(&sync_config)?;
-    if path.trim().is_empty() {
-        return Err(AppError::Invalid("请选择工作空间目录".into()));
-    }
+    crate::workspace_path::reject_if_invalid(&path)?;
     if password.len() < 8 {
         return Err(AppError::Invalid("访问密码至少 8 位".into()));
     }

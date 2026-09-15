@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { api, errMessage, type UpdateCheckResult, type UpdateProgress } from "../lib/ipc";
 
 export function UpdateToast() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [notice, setNotice] = useState<UpdateCheckResult | null>(null);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
@@ -72,10 +74,10 @@ export function UpdateToast() {
   return (
     <div className="update-toast" role="status">
       {progress?.phase === "finished" ? (
-        <div className="update-toast-title">更新已就绪，即将重启…</div>
+        <div className="update-toast-title">{t("update.toastReady")}</div>
       ) : downloading ? (
         <>
-          <div className="update-toast-title">正在下载更新…</div>
+          <div className="update-toast-title">{t("update.toastDownloading")}</div>
           <div className="update-progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent ?? 0}>
             <span style={{ width: `${percent ?? 15}%` }} />
           </div>
@@ -87,21 +89,23 @@ export function UpdateToast() {
         </>
       ) : notice ? (
         <>
-          <div className="update-toast-title">发现新版本 v{notice.latestVersion}</div>
+          <div className="update-toast-title">{t("update.toastFound", { version: notice.latestVersion })}</div>
           <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-            当前 {notice.currentVersion}
-            {notice.selfUpdateSupported ? "，可直接下载安装。" : "，当前安装方式请手动下载。"}
+            {t("update.toastCurrent", { version: notice.currentVersion })}
+            {notice.selfUpdateSupported || notice.sideloadUpdateSupported
+              ? t("update.toastCanInstall")
+              : t("update.toastManual")}
           </div>
           {err && <div className="err-text">{err}</div>}
           <div className="row" style={{ flexWrap: "wrap", marginTop: 10 }}>
-            {notice.selfUpdateSupported && (
+            {(notice.selfUpdateSupported || notice.sideloadUpdateSupported) && (
               <button type="button" className="btn primary sm" disabled={busy} onClick={install}>
-                下载并安装
+                {t("update.install")}
               </button>
             )}
             {notice.downloadUrl && (
               <button type="button" className="btn sm" onClick={() => api.openUrl(notice.downloadUrl!)}>
-                手动下载
+                {t("update.manual")}
               </button>
             )}
             <button
@@ -112,10 +116,10 @@ export function UpdateToast() {
                 navigate("/settings");
               }}
             >
-              查看说明
+              {t("update.viewNotes")}
             </button>
             <button type="button" className="btn ghost sm" disabled={busy} onClick={skip}>
-              跳过
+              {t("update.skipShort")}
             </button>
           </div>
         </>

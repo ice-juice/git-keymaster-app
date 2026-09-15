@@ -1,11 +1,20 @@
-import { api, errCode, errMessage } from "./ipc";
+import { api, errCode, errMessage, type ClipboardWriteResult } from "./ipc";
 import { clearClipboard, writeClipboard } from "./clipboard";
+import { resolvePlatform } from "../platform/resolve";
+import { showAppToast } from "../ui/Toast";
 
 const customCache = new Map<string, string>();
 let clearTimer: number | null = null;
 
 export async function copyWithClear(text: string, seconds?: number, secret = true) {
-  const result = await writeClipboard(text, secret);
+  let result: ClipboardWriteResult;
+  try {
+    result = await writeClipboard(text, secret);
+  } catch (e) {
+    if (resolvePlatform() === "mobile") showAppToast("复制失败");
+    throw e;
+  }
+  if (resolvePlatform() === "mobile") showAppToast("已复制");
   let wait = seconds;
   if (wait === undefined) {
     try {

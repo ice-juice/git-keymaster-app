@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Copy, Square, X, Sun, Moon, Palette } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { AppLogo } from "./AppLogo";
 import { useApp } from "../store";
-import { APP_NAME } from "../lib/config";
+import { useAppName } from "../lib/config";
 
 const appWindow = (() => {
   try {
@@ -19,8 +20,11 @@ const appWindow = (() => {
  * 非按钮区域标记为拖拽域，可拖动窗口、双击最大化。
  */
 export function TitleBar() {
+  const { t } = useTranslation();
   const { status, theme, toggleTheme } = useApp();
-  const themeLabel = theme === "light" ? "浅色" : theme === "dark" ? "深色" : "黛蓝";
+  const APP_NAME = useAppName();
+  const themeLabel =
+    theme === "light" ? t("theme.light") : theme === "dark" ? t("theme.dark") : t("theme.navy");
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -45,15 +49,16 @@ export function TitleBar() {
       {/* 左段：品牌，宽度对齐侧边栏 */}
       <div className="tb-brand" data-tauri-drag-region>
         <AppLogo size={26} />
+        {/* 只渲染 APP_NAME（useAppName / brand.mjs）。不要去读运行时产品名。 */}
         <div className="tb-title">{APP_NAME}</div>
       </div>
 
       {/* 右段：路径 + 操作 + 窗口控制 */}
       <div className="tb-main" data-tauri-drag-region>
         <div className="tb-ws" data-tauri-drag-region>
-          <span className="tb-ws-label">工作空间</span>
+          <span className="tb-ws-label">{t("titlebar.workspace")}</span>
           <span className="tb-ws-path" title={status?.workspacePath ?? ""}>
-            {status?.workspacePath ?? "—"}
+            {status?.workspacePath ?? t("common.emDash")}
           </span>
         </div>
 
@@ -62,7 +67,7 @@ export function TitleBar() {
         <button
           type="button"
           className="tb-chip"
-          title={`当前主题：${themeLabel}（点击切换风格）`}
+          title={t("theme.current", { name: themeLabel })}
           onClick={toggleTheme}
         >
           {theme === "light" ? <Sun size={13} /> : theme === "dark" ? <Moon size={13} /> : <Palette size={13} />}
@@ -72,7 +77,7 @@ export function TitleBar() {
         {status?.initialized && (
           <div className={"tb-status" + (unlocked ? " on" : "")} data-tauri-drag-region>
             <span className="led" />
-            {unlocked ? "已解锁" : "已锁定"}
+            {unlocked ? t("titlebar.unlocked") : t("titlebar.locked")}
           </div>
         )}
 
@@ -81,8 +86,8 @@ export function TitleBar() {
           <button
             type="button"
             className="tb-winbtn"
-            aria-label="最小化"
-            title="最小化"
+            aria-label={t("titlebar.minimize")}
+            title={t("titlebar.minimize")}
             onClick={() => appWindow?.minimize()}
           >
             <Minus size={15} />
@@ -90,8 +95,8 @@ export function TitleBar() {
           <button
             type="button"
             className="tb-winbtn"
-            aria-label={maximized ? "还原" : "最大化"}
-            title={maximized ? "还原" : "最大化"}
+            aria-label={maximized ? t("titlebar.restore") : t("titlebar.maximize")}
+            title={maximized ? t("titlebar.restore") : t("titlebar.maximize")}
             onClick={() => appWindow?.toggleMaximize()}
           >
             {maximized ? <Copy size={12} /> : <Square size={12} />}
@@ -99,8 +104,8 @@ export function TitleBar() {
           <button
             type="button"
             className="tb-winbtn danger"
-            aria-label="关闭"
-            title="关闭"
+            aria-label={t("titlebar.close")}
+            title={t("titlebar.close")}
             onClick={() => appWindow?.close()}
           >
             <X size={16} />

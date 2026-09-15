@@ -1,6 +1,7 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, Trash2, AlertTriangle } from "lucide-react";
+import { useIsCompact } from "../lib/platform";
 
 function placeTooltip(icon: HTMLElement, pop: HTMLElement) {
   const r = icon.getBoundingClientRect();
@@ -77,13 +78,17 @@ export function FieldLabel({ name, tip }: { name: string; tip: string }) {
 }
 
 export function PageHead({ title, desc, actions }: { title: string; desc?: string; actions?: ReactNode }) {
+  const compact = useIsCompact();
+  if (compact && !actions) return null;
   return (
-    <div className="page-head">
-      <div>
-        <div className="title-lg">{title}</div>
-        {desc && <div className="muted">{desc}</div>}
-      </div>
-      {actions && <div className="row">{actions}</div>}
+    <div className={"page-head" + (compact ? " is-compact" : "")}>
+      {!compact && (
+        <div>
+          <div className="title-lg">{title}</div>
+          {desc && <div className="muted">{desc}</div>}
+        </div>
+      )}
+      {actions && <div className={compact ? "page-head-actions" : "row"}>{actions}</div>}
     </div>
   );
 }
@@ -113,4 +118,205 @@ export function Empty({ icon = "📭", text }: { icon?: string; text: string }) 
 
 export function Badge({ kind = "muted", children }: { kind?: string; children: ReactNode }) {
   return <span className={"badge " + kind}>{children}</span>;
+}
+
+/** 设置等页面的错误提示：居中弹窗，避免顶部一行红字被忽略。 */
+export function ErrorDialog({
+  title = "操作未能完成",
+  message,
+  onClose,
+}: {
+  title?: string;
+  message: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!message) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [message, onClose]);
+
+  if (!message) return null;
+  return createPortal(
+    <div
+      className="close-overlay"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="error-dialog-title"
+      onClick={onClose}
+    >
+      <div className="close-dialog settings-error-dialog" onClick={(e) => e.stopPropagation()}>
+        <div className="close-dialog-titlebar">
+          <span id="error-dialog-title">{title}</span>
+          <button type="button" className="close-dialog-x" onClick={onClose} aria-label="关闭">
+            ×
+          </button>
+        </div>
+        <div className="close-dialog-body">
+          <div className="close-dialog-content">
+            <div className="settings-error-text">{message}</div>
+          </div>
+        </div>
+        <div className="close-dialog-footer settings-error-actions">
+          <button type="button" className="btn primary sm" onClick={onClose} autoFocus>
+            知道了
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** 破坏性操作的应用内二次确认。不用 window.confirm，避免手机 WebView 弹不出来。 */
+export function ConfirmDangerDialog({
+  title,
+  message,
+  detail,
+  confirmLabel = "确认删除",
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: ReactNode;
+  detail?: ReactNode;
+  confirmLabel?: string;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+
+  return createPortal(
+    <div
+      className="close-overlay"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="confirm-danger-title"
+    >
+      <div className="card" style={{ width: 400, maxWidth: "95%", border: "1px solid var(--red)" }}>
+        <div className="card-head" style={{ background: "var(--red-soft)" }}>
+          <div className="row" style={{ gap: 6, color: "var(--red)" }}>
+            <Trash2 size={16} />
+            <div id="confirm-danger-title" className="card-title" style={{ color: "var(--red)", fontWeight: 700 }}>
+              {title}
+            </div>
+          </div>
+        </div>
+        <div className="card-body stack" style={{ gap: 10, padding: "14px 16px" }}>
+          <div>{message}</div>
+          {detail && <div className="callout danger sm">{detail}</div>}
+        </div>
+        <div
+          className="card-head"
+          style={{ justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border)", borderBottom: "none" }}
+        >
+          <button type="button" className="btn ghost sm" disabled={busy} onClick={onCancel}>
+            取消
+          </button>
+          <button type="button" className="btn danger sm" disabled={busy} onClick={onConfirm} autoFocus>
+            {busy ? "正在删除…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/** 应用内二次确认，替代 WebView 的 window.confirm（避免弹出「tauri.localhost」系统框）。 */
+export function ConfirmDialog({
+  title,
+  message,
+  detail,
+  confirmLabel = "确定",
+  cancelLabel = "取消",
+  tone = "default",
+  busy,
+  busyLabel,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  message: ReactNode;
+  detail?: ReactNode;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  tone?: "default" | "danger";
+  busy?: boolean;
+  busyLabel?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const danger = tone === "danger";
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [busy, onCancel]);
+
+  return createPortal(
+    <div
+      className="close-overlay"
+      role="alertdialog"
+      aria-modal="true"
+      aria-labelledby="confirm-dialog-title"
+    >
+      <div
+        className="card"
+        style={{
+          width: 400,
+          maxWidth: "95%",
+          border: danger ? "1px solid var(--red)" : "1px solid var(--border-strong)",
+        }}
+      >
+        <div className="card-head" style={danger ? { background: "var(--red-soft)" } : undefined}>
+          <div className="row" style={{ gap: 6, color: danger ? "var(--red)" : "var(--text)" }}>
+            <AlertTriangle size={16} />
+            <div
+              id="confirm-dialog-title"
+              className="card-title"
+              style={{ color: danger ? "var(--red)" : undefined, fontWeight: 700 }}
+            >
+              {title}
+            </div>
+          </div>
+        </div>
+        <div className="card-body stack" style={{ gap: 10, padding: "14px 16px" }}>
+          <div>{message}</div>
+          {detail && <div className={"callout sm " + (danger ? "danger" : "info")}>{detail}</div>}
+        </div>
+        <div
+          className="card-head"
+          style={{ justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border)", borderBottom: "none" }}
+        >
+          <button type="button" className="btn ghost sm" disabled={busy} onClick={onCancel}>
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            className={"btn sm " + (danger ? "danger" : "primary")}
+            disabled={busy}
+            onClick={onConfirm}
+            autoFocus
+          >
+            {busy ? busyLabel || "处理中…" : confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
 }

@@ -33,6 +33,8 @@ pub fn availability() -> BiometricAvailability {
         available: available || strong,
         kind: "windows-hello",
         strong,
+        fingerprint: available || strong,
+        face: false,
     }
 }
 

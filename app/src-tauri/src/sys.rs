@@ -9,6 +9,7 @@ use std::time::Duration;
 
 /// GUI 进程里隐藏子进程控制台窗口，避免 `ssh-add`/`sc` 闪黑框。
 pub fn hide_console(cmd: &mut Command) {
+    let _ = cmd;
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -197,6 +198,7 @@ pub fn resolve_bin(name: &str) -> Option<PathBuf> {
     if as_path.is_absolute() && as_path.is_file() {
         return Some(as_path.to_path_buf());
     }
+    #[allow(unused_mut)]
     let mut names = vec![name.to_string()];
     #[cfg(windows)]
     {

@@ -68,9 +68,21 @@ pub fn suggest_builtin(name: &str) -> Option<String> {
     if q.is_empty() {
         return None;
     }
+    let stem = q
+        .strip_suffix(".com")
+        .or_else(|| q.strip_suffix(".cn"))
+        .or_else(|| q.strip_suffix(".net"))
+        .or_else(|| q.strip_suffix(".org"))
+        .or_else(|| q.strip_suffix(".io"))
+        .unwrap_or(&q);
+
     list_builtin()
         .into_iter()
-        .find(|i| q.contains(&i.id) || i.name.to_ascii_lowercase().contains(&q) || q.contains(&i.name.to_ascii_lowercase()))
+        .find(|i| {
+            let id = i.id.to_ascii_lowercase();
+            let n = i.name.to_ascii_lowercase();
+            q == id || q == n || stem == id || stem == n
+        })
         .map(|i| format!("builtin:{}", i.id))
 }
 

@@ -151,8 +151,8 @@ pub struct TotpEntry {
     pub sort_order: i32,
     pub created_at: String,
     pub updated_at: String,
-    /// 仅列表展示：种子是否还在 secrets 里。不落盘。
-    #[serde(default, skip)]
+    /// 仅列表展示：种子是否还在 secrets 里。读盘时忽略，由 totp_list 现算后发给前端。
+    #[serde(default, skip_deserializing)]
     pub has_seed: bool,
 }
 
@@ -175,8 +175,8 @@ pub struct AccountEntry {
     pub last_used_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
-    /// 仅列表展示：密码是否还在 secrets 里。不落盘。
-    #[serde(default, skip)]
+    /// 仅列表展示：密码是否还在 secrets 里。读盘时忽略，由账号列表现算后发给前端。
+    #[serde(default, skip_deserializing)]
     pub has_password: bool,
 }
 
@@ -480,24 +480,54 @@ pub fn merge_secrets_with_meta(
         local.github_pat = remote.github_pat.clone();
     }
     for (k, v) in remote.totp_seeds.clone() {
+        if !usable_seed(&v) {
+            continue;
+        }
         if take_remote_secret(
             totp_updated_at(local_totp, &k),
             totp_updated_at(remote_totp, &k),
-            local.totp_seeds.contains_key(&k),
+            local.totp_seeds.get(&k).is_some_and(|s| usable_seed(s)),
         ) {
             local.totp_seeds.insert(k, v);
         }
     }
     for (k, v) in remote.account_secrets.clone() {
+        if !usable_account_secret(&v) {
+            continue;
+        }
         if take_remote_secret(
             account_updated_at(local_accounts, &k),
             account_updated_at(remote_accounts, &k),
-            local.account_secrets.contains_key(&k),
+            local
+                .account_secrets
+                .get(&k)
+                .is_some_and(usable_account_secret),
         ) {
             local.account_secrets.insert(k, v);
         }
     }
     local
+}
+
+fn usable_seed(secret: &str) -> bool {
+    !secret.trim().is_empty()
+}
+
+fn usable_account_secret(secret: &AccountSecret) -> bool {
+    !secret.password.trim().is_empty()
+}
+
+/// 本地条目还在，但对应密码/种子已经空了。推送前应先尝试从云端补回。
+pub fn secrets_incomplete_for_entries(secrets: &Secrets, totp: &TotpData, accounts: &AccountData) -> bool {
+    totp.entries
+        .iter()
+        .any(|e| !secrets.totp_seeds.get(&e.id).is_some_and(|s| usable_seed(s)))
+        || accounts.entries.iter().any(|e| {
+            !secrets
+                .account_secrets
+                .get(&e.id)
+                .is_some_and(usable_account_secret)
+        })
 }
 
 fn totp_updated_at<'a>(data: Option<&'a TotpData>, id: &str) -> Option<&'a str> {
@@ -710,6 +740,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn totp_has_seed_reaches_frontend_but_not_disk_read() {
+        let mut e = totp("a", "GitHub", "2026-09-09T12:00:00Z");
+        e.has_seed = true;
+        let json = serde_json::to_value(&e).unwrap();
+        assert_eq!(json.get("hasSeed").and_then(|v| v.as_bool()), Some(true));
+        let loaded: TotpEntry = serde_json::from_value(json).unwrap();
+        assert!(!loaded.has_seed, "读盘必须忽略 hasSeed，由 totp_list 现算");
+    }
+
+    #[test]
+    fn account_has_password_reaches_frontend_but_not_disk_read() {
+        let e = AccountEntry {
+            id: "a".into(),
+            platform: "GitHub".into(),
+            username: "u".into(),
+            display_name: None,
+            url: None,
+            note: None,
+            group: None,
+            tags: vec![],
+            icon: None,
+            pinned: false,
+            sort_order: 0,
+            totp_ref: None,
+            last_used_at: None,
+            created_at: "t".into(),
+            updated_at: "t".into(),
+            has_password: true,
+        };
+        let json = serde_json::to_value(&e).unwrap();
+        assert_eq!(json.get("hasPassword").and_then(|v| v.as_bool()), Some(true));
+        let loaded: AccountEntry = serde_json::from_value(json).unwrap();
+        assert!(!loaded.has_password, "读盘必须忽略 hasPassword，由 account_list 现算");
+    }
+
     fn totp(id: &str, issuer: &str, updated_at: &str) -> TotpEntry {
         TotpEntry {
             id: id.into(),
@@ -776,5 +842,85 @@ mod tests {
         );
         assert_eq!(merged.totp_seeds.get("a").map(String::as_str), Some("REMOTESEED"));
         assert_eq!(merged.totp_seeds.get("b").map(String::as_str), Some("ONLYREMOTE"));
+    }
+
+    #[test]
+    fn merge_does_not_let_empty_remote_secret_wipe_local() {
+        let local_data = TotpData {
+            entries: vec![totp("a", "local", "2026-09-08T00:00:00Z")],
+            ..TotpData::default()
+        };
+        let remote_data = TotpData {
+            entries: vec![totp("a", "remote-newer", "2026-09-09T12:00:00Z")],
+            ..TotpData::default()
+        };
+        let mut local = Secrets::default();
+        local.totp_seeds.insert("a".into(), "LOCALSEED".into());
+        local.account_secrets.insert(
+            "acc".into(),
+            AccountSecret {
+                password: "local-pw".into(),
+                extra_fields: HashMap::new(),
+                history: vec![],
+            },
+        );
+        let mut remote = Secrets::default();
+        remote.totp_seeds.insert("a".into(), "".into());
+        remote.account_secrets.insert("acc".into(), AccountSecret::default());
+        let merged = merge_secrets_with_meta(
+            local,
+            &remote,
+            Some(&local_data),
+            Some(&remote_data),
+            None,
+            None,
+        );
+        assert_eq!(merged.totp_seeds.get("a").map(String::as_str), Some("LOCALSEED"));
+        assert_eq!(
+            merged.account_secrets.get("acc").map(|s| s.password.as_str()),
+            Some("local-pw")
+        );
+    }
+
+    #[test]
+    fn secrets_incomplete_when_entry_has_no_usable_secret() {
+        let totp = TotpData {
+            entries: vec![totp("a", "GitHub", "2026-09-09T12:00:00Z")],
+            ..TotpData::default()
+        };
+        let accounts = AccountData {
+            entries: vec![AccountEntry {
+                id: "acc".into(),
+                platform: "GitHub".into(),
+                username: "u".into(),
+                display_name: None,
+                url: None,
+                note: None,
+                group: None,
+                tags: vec![],
+                icon: None,
+                pinned: false,
+                sort_order: 0,
+                totp_ref: None,
+                last_used_at: None,
+                created_at: "t".into(),
+                updated_at: "t".into(),
+                has_password: false,
+            }],
+            ..AccountData::default()
+        };
+        let empty = Secrets::default();
+        assert!(secrets_incomplete_for_entries(&empty, &totp, &accounts));
+        let mut filled = Secrets::default();
+        filled.totp_seeds.insert("a".into(), "SEED".into());
+        filled.account_secrets.insert(
+            "acc".into(),
+            AccountSecret {
+                password: "pw".into(),
+                extra_fields: HashMap::new(),
+                history: vec![],
+            },
+        );
+        assert!(!secrets_incomplete_for_entries(&filled, &totp, &accounts));
     }
 }

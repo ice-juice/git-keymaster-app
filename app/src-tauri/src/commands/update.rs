@@ -4,10 +4,13 @@ use crate::app_config::UpdateSource;
 use crate::commands::{recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::platform;
-use crate::update::{self, checker::UpdateCheckResult};
+use crate::update::{self, UpdateCheckResult};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 use serde_json::json;
 use std::sync::atomic::Ordering;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use tauri::Emitter;
 
 #[tauri::command]
 pub fn get_update_source(state: State<AppState>) -> Result<UpdateSource> {
@@ -48,24 +51,32 @@ pub async fn check_update(app: AppHandle, state: State<'_, AppState>) -> Result<
             crate::net::effective(&cfg),
         )
     };
-    let result = update::checker::check(&app, &src, proxy.as_ref()).await?;
+    let result = update::run_check(&app, &src, proxy.as_ref()).await?;
     persist_last_check(&state);
     Ok(result)
 }
 
 #[tauri::command]
 pub async fn download_and_install_update(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
-    if !platform::self_update_supported() {
-        return Err(AppError::Invalid(
-            "当前安装方式不支持应用内更新，请使用手动下载".into(),
-        ));
+    #[cfg(target_os = "ios")]
+    {
+        let _ = (app, state);
+        return Err(AppError::Unsupported("请到 App Store 更新"));
     }
-    if state.update_busy.swap(true, Ordering::SeqCst) {
-        return Err(AppError::Other("正在下载更新，请稍候".into()));
+    #[cfg(not(target_os = "ios"))]
+    {
+        if !platform::self_update_supported() && !platform::sideload_update_supported() {
+            return Err(AppError::Invalid(
+                "当前安装方式不支持应用内更新，请使用手动下载".into(),
+            ));
+        }
+        if state.update_busy.swap(true, Ordering::SeqCst) {
+            return Err(AppError::Other("正在下载更新，请稍候".into()));
+        }
+        let outcome = install_inner(&app, &state).await;
+        state.update_busy.store(false, Ordering::SeqCst);
+        outcome
     }
-    let outcome = install_inner(&app, &state).await;
-    state.update_busy.store(false, Ordering::SeqCst);
-    outcome
 }
 
 #[tauri::command]
@@ -85,6 +96,7 @@ pub fn get_last_update_check(state: State<AppState>) -> Result<Option<String>> {
     Ok(cfg.last_update_check_at.clone())
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 async fn install_inner(app: &AppHandle, state: &AppState) -> Result<()> {
     let (src, proxy) = {
         let cfg = recover_lock(&state.config);
@@ -132,6 +144,18 @@ async fn install_inner(app: &AppHandle, state: &AppState) -> Result<()> {
         .await
         .map_err(update::checker::map_updater_err)?;
     app.restart();
+}
+
+#[cfg(target_os = "android")]
+async fn install_inner(app: &AppHandle, state: &AppState) -> Result<()> {
+    let (src, proxy) = {
+        let cfg = recover_lock(&state.config);
+        (
+            update::source::effective_source(&cfg),
+            crate::net::effective(&cfg),
+        )
+    };
+    crate::mobile::update::download_and_install(app, &src, proxy.as_ref()).await
 }
 
 fn persist_last_check(state: &AppState) {

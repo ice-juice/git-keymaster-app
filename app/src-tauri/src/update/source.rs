@@ -45,7 +45,10 @@ pub fn resolve_endpoints_with(src: &UpdateSource, ctx: &EndpointCtx) -> Result<V
                 .filter(|s| !s.is_empty())
                 .unwrap_or(DEFAULT_UPDATE_REPO);
             validate_github_repo(repo)?;
-            let url = format!("https://github.com/{repo}/releases/latest/download/latest.json");
+            let url = format!(
+                "https://github.com/{repo}/releases/latest/download/{}",
+                updater_manifest_name()
+            );
             Ok(vec![parse_https_url(&url)?])
         }
         "manifest" => {
@@ -62,10 +65,17 @@ pub fn resolve_endpoints_with(src: &UpdateSource, ctx: &EndpointCtx) -> Result<V
     }
 }
 
+/// 统一包装一份 `latest.json`。旧客户端仍拉的 `latest-zh-CN.json` /
+/// `latest-en-US.json` 由发版脚本复制成同一内容的别名，不在这里按语言分叉。
+pub fn updater_manifest_name() -> &'static str {
+    "latest.json"
+}
+
 pub fn github_latest_json_url(repo: &str) -> Result<Url> {
     validate_github_repo(repo)?;
     parse_https_url(&format!(
-        "https://github.com/{repo}/releases/latest/download/latest.json"
+        "https://github.com/{repo}/releases/latest/download/{}",
+        updater_manifest_name()
     ))
 }
 
@@ -76,7 +86,8 @@ pub fn github_tag_json_url(repo: &str, tag: &str) -> Result<Url> {
         return Err(AppError::Invalid("无效的 Release 标签".into()));
     }
     parse_https_url(&format!(
-        "https://github.com/{repo}/releases/download/{tag}/latest.json"
+        "https://github.com/{repo}/releases/download/{tag}/{}",
+        updater_manifest_name()
     ))
 }
 
@@ -229,5 +240,20 @@ mod tests {
         let src = effective_source(&cfg);
         assert_eq!(src.kind, "github");
         assert_eq!(src.repo.as_deref(), Some(DEFAULT_UPDATE_REPO));
+    }
+
+    #[test]
+    fn unified_package_always_uses_latest_json() {
+        assert_eq!(updater_manifest_name(), "latest.json");
+        assert_eq!(
+            github_latest_json_url(DEFAULT_UPDATE_REPO).unwrap().as_str(),
+            "https://github.com/ice-juice/git-keymaster-app/releases/latest/download/latest.json"
+        );
+        assert_eq!(
+            github_tag_json_url(DEFAULT_UPDATE_REPO, "v1.5.1")
+                .unwrap()
+                .as_str(),
+            "https://github.com/ice-juice/git-keymaster-app/releases/download/v1.5.1/latest.json"
+        );
     }
 }

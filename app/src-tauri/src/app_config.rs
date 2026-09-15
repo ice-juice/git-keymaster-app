@@ -32,6 +32,17 @@ fn default_account_history_limit() -> u32 {
     10
 }
 
+fn default_biometric_method() -> String {
+    "auto".into()
+}
+
+pub fn clamp_biometric_method(raw: &str) -> String {
+    match raw.trim() {
+        "fingerprint" | "password" | "auto" => raw.trim().into(),
+        _ => "password".into(),
+    }
+}
+
 pub fn clamp_reveal_grace_minutes(minutes: u32) -> u32 {
     minutes.min(30)
 }
@@ -49,6 +60,18 @@ pub fn clamp_account_history_limit(n: u32) -> u32 {
 }
 
 /// 0 表示关闭；其余夹到 5–1440 分钟。
+fn default_ui_locale() -> String {
+    "system".into()
+}
+
+/// `system` | `zh` | `en`。其它值回退跟随系统。
+pub fn clamp_ui_locale(raw: &str) -> String {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "zh" | "en" | "system" => raw.trim().to_ascii_lowercase(),
+        _ => "system".into(),
+    }
+}
+
 pub fn clamp_auto_sync_minutes(minutes: u32) -> u32 {
     if minutes == 0 {
         0
@@ -123,6 +146,12 @@ pub struct AppConfig {
     /// 是否允许指纹替代密码取回 TOTP 原始密钥。默认关。
     #[serde(default)]
     pub biometric_reveal_secret: bool,
+    /// 解锁方式：`password` | `fingerprint` | `auto`。
+    #[serde(default = "default_biometric_method")]
+    pub biometric_method: String,
+    /// 运行时界面语言：`system` | `zh` | `en`。只影响 React 文案，不写卸载项。
+    #[serde(default = "default_ui_locale")]
+    pub ui_locale: String,
 }
 
 /// 本机 HTTP/HTTPS/SOCKS5 代理。
@@ -243,6 +272,8 @@ impl Default for AppConfig {
             biometric_unlock_enabled: false,
             biometric_reveal_enabled: false,
             biometric_reveal_secret: false,
+            biometric_method: default_biometric_method(),
+            ui_locale: default_ui_locale(),
         }
     }
 }
@@ -302,6 +333,14 @@ mod tests {
         assert_eq!(cfg.skipped_update_version, None);
         assert_eq!(cfg.last_update_check_at, None);
         assert_eq!(cfg.network_proxy, None);
+        assert_eq!(cfg.biometric_method, "auto");
+        assert_eq!(cfg.ui_locale, "system");
+        assert_eq!(clamp_ui_locale("ZH"), "zh");
+        assert_eq!(clamp_ui_locale("en"), "en");
+        assert_eq!(clamp_ui_locale("nope"), "system");
+        assert_eq!(clamp_biometric_method("fingerprint"), "fingerprint");
+        assert_eq!(clamp_biometric_method("face"), "password");
+        assert_eq!(clamp_biometric_method("nope"), "password");
         let filled = UpdateSource::effective(cfg.update_source.as_ref());
         assert_eq!(filled.kind, "github");
         assert_eq!(filled.repo.as_deref(), Some(DEFAULT_UPDATE_REPO));

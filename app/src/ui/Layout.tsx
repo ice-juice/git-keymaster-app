@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { NavLink } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import {
   LayoutDashboard,
   KeyRound,
@@ -18,6 +19,7 @@ import { useApp } from "../store";
 import { UpdateToast } from "./UpdateToast";
 
 export function Layout({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const { status, lock, writesLocked, startupNote } = useApp();
   const [idCount, setIdCount] = useState<number | null>(null);
   const [keyCount, setKeyCount] = useState<number | null>(null);
@@ -43,22 +45,22 @@ export function Layout({ children }: { children: ReactNode }) {
   }, [status?.unlocked, writesLocked]);
 
   const NAV = [
-    { to: "/", label: "身份总览", icon: LayoutDashboard, end: true, badge: idCount },
-    { to: "/keys", label: "密钥管理", icon: KeyRound, badge: keyCount },
-    { to: "/config", label: "SSH 配置 / 编辑", icon: FileCog },
-    { to: "/agent", label: "Agent", icon: Cpu },
-    { to: "/repos", label: "仓库管理", icon: FolderGit2, badge: repoCount },
-    { to: "/clone", label: "克隆仓库", icon: Download },
-    { to: "/totp", label: "2FA / TOTP", icon: Timer },
-    { to: "/accounts", label: "隐私账号", icon: UserRound },
-    { to: "/sync", label: "云端同步", icon: Cloud },
+    { to: "/", label: t("nav.overview"), icon: LayoutDashboard, end: true, badge: idCount },
+    { to: "/keys", label: t("nav.keys"), icon: KeyRound, badge: keyCount },
+    { to: "/config", label: t("nav.config"), icon: FileCog },
+    { to: "/agent", label: t("nav.agent"), icon: Cpu },
+    { to: "/repos", label: t("nav.repos"), icon: FolderGit2, badge: repoCount },
+    { to: "/clone", label: t("nav.clone"), icon: Download },
+    { to: "/totp", label: t("nav.totp"), icon: Timer },
+    { to: "/accounts", label: t("nav.accounts"), icon: UserRound },
+    { to: "/sync", label: t("nav.sync"), icon: Cloud },
   ];
 
   return (
     <div className="window">
       <div className="body">
         <aside className="sidebar">
-          <div className="nav-group">导航菜单</div>
+          <div className="nav-group">{t("nav.group")}</div>
           {NAV.map((n) => {
             const Icon = n.icon;
             return (
@@ -91,7 +93,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 <span className="ic">
                   <SettingsIcon size={15} />
                 </span>
-                <span>设置</span>
+                <span>{t("nav.settings")}</span>
               </div>
             </NavLink>
             <button type="button" className="nav-item" onClick={() => lock()}>
@@ -99,7 +101,7 @@ export function Layout({ children }: { children: ReactNode }) {
                 <span className="ic">
                   <Lock size={15} />
                 </span>
-                <span>立即锁定</span>
+                <span>{t("nav.lockNow")}</span>
               </div>
             </button>
           </div>
@@ -109,8 +111,8 @@ export function Layout({ children }: { children: ReactNode }) {
           <div className="content">
             {writesLocked && (
               <div className="startup-lock-bar" role="status">
-                <strong>同步中</strong>
-                <span>{startupNote || "正在从云端同步，可浏览，暂不可修改身份、密钥和仓库。"}</span>
+                <strong>{t("startup.syncing")}</strong>
+                <span>{startupNote || t("startup.syncingNoteDesktop")}</span>
               </div>
             )}
             {children}

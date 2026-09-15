@@ -47,8 +47,29 @@ pub const LEGACY_INSTANCE_LOCK: &str = "com.jeck.gitaccountmanager.instance.lock
 /// HTTP User-Agent。
 pub const USER_AGENT: &str = "git-keymaster";
 
-/// 本机配置根目录（Windows 为 `%APPDATA%`，其它平台回退临时目录）。
+/// 由宿主在启动早期注入的本机配置根目录。
+///
+/// 移动端沙箱目录只能通过 Tauri 的 path API 拿到（Android 要问 Context），
+/// 所以 `run()` 会在建 `AppState` 之前调用 [`init_base_dir`] 把它填进来。
+/// 桌面端也走同一条路，`%APPDATA%` 只作为未注入时的兜底。
+static BASE_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// 注入本机配置根目录。只有第一次调用生效，重复调用被忽略。
+///
+/// **必须在任何 `AppConfig::load()` / `config_base_dir()` 之前调用**，
+/// 否则移动端会退化到临时目录，保险库可能被系统清空。
+pub fn init_base_dir(dir: PathBuf) {
+    let _ = BASE_DIR.set(dir);
+}
+
+/// 本机配置根目录。
+///
+/// 优先用 [`init_base_dir`] 注入的值；未注入时桌面回退 `%APPDATA%`，
+/// 最后才回退临时目录（仅单元测试等无宿主场景会走到）。
 pub fn config_base_dir() -> PathBuf {
+    if let Some(dir) = BASE_DIR.get() {
+        return dir.clone();
+    }
     std::env::var("APPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir())
@@ -56,6 +77,27 @@ pub fn config_base_dir() -> PathBuf {
 
 pub fn app_config_dir() -> PathBuf {
     config_base_dir().join(APP_DIR)
+}
+
+/// 移动端保险库固定目录：`<配置根>/workspace`。
+pub fn workspace_dir() -> PathBuf {
+    config_base_dir().join("workspace")
+}
+
+/// 冷启动时要扫的配置根。Android 上 JS `appDataDir()` 有时是包根，
+/// Rust `app_data_dir()` 则是 `files/`，两边都可能已经落下 vault。
+pub fn workspace_search_roots_from(base: PathBuf) -> Vec<PathBuf> {
+    let mut roots = vec![base.clone()];
+    if let Some(parent) = base.parent() {
+        if parent != base.as_path() {
+            roots.push(parent.to_path_buf());
+        }
+    }
+    roots
+}
+
+pub fn workspace_search_roots() -> Vec<PathBuf> {
+    workspace_search_roots_from(config_base_dir())
 }
 
 pub fn legacy_app_config_dir() -> PathBuf {
@@ -80,6 +122,35 @@ pub fn migrate_app_data() {
         ),
         Err(e) => log::warn!(
             "拷贝旧本机目录失败：{} → {}：{e}",
+            old_dir.display(),
+            new_dir.display()
+        ),
+    }
+}
+
+/// Android 上 JS `appDataDir()` 有时是包根，Rust `app_data_dir()` 是 `files/`。
+/// 若上层已经有 `git-keymaster/config.json` 而当前配置根还没有，拷过来。
+pub fn adopt_parent_app_config() {
+    let new_dir = app_config_dir();
+    if new_dir.join("config.json").is_file() {
+        return;
+    }
+    let base = config_base_dir();
+    let Some(parent) = base.parent() else {
+        return;
+    };
+    let old_dir = parent.join(APP_DIR);
+    if old_dir == new_dir || !old_dir.join("config.json").is_file() {
+        return;
+    }
+    match copy_dir_recursive(&old_dir, &new_dir) {
+        Ok(()) => log::info!(
+            "已从沙箱上层目录拷贝配置：{} → {}",
+            old_dir.display(),
+            new_dir.display()
+        ),
+        Err(e) => log::warn!(
+            "拷贝沙箱上层配置失败：{} → {}：{e}",
             old_dir.display(),
             new_dir.display()
         ),
@@ -147,6 +218,19 @@ mod tests {
         assert_eq!(std::fs::read_to_string(new.join("keep.json")).unwrap(), "keep");
         assert!(old.join("config.json").is_file());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn workspace_search_includes_base_and_parent() {
+        let base = PathBuf::from("/data/user/0/com.jeck.gitkeymaster/files");
+        let roots = workspace_search_roots_from(base);
+        assert_eq!(
+            roots,
+            vec![
+                PathBuf::from("/data/user/0/com.jeck.gitkeymaster/files"),
+                PathBuf::from("/data/user/0/com.jeck.gitkeymaster"),
+            ]
+        );
     }
 
     #[test]

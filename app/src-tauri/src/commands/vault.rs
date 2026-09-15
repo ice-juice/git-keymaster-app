@@ -21,6 +21,7 @@ pub struct VaultStatus {
     pub workspace_id: Option<String>,
     pub auto_lock_minutes: u32,
     pub launch_at_login: bool,
+    pub launch_at_login_supported: bool,
     pub grace_days: u32,
     pub grace_active: bool,
     pub grace_expires_at: Option<String>,
@@ -38,16 +39,50 @@ pub struct InitResult {
     pub workspace_id: String,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PathCheck {
-    /// 命中同步盘时的中文告警，None 表示安全。
-    pub warning: Option<String>,
+pub use crate::workspace_path::PathCheck;
+
+#[cfg(mobile)]
+fn discover_existing_workspace() -> Option<PathBuf> {
+    crate::identity::workspace_search_roots()
+        .into_iter()
+        .map(|root| root.join("workspace"))
+        .find(|p| Vault::exists(p))
+}
+
+/// 移动端配置根和 JS `appDataDir()` 可能差一层 `files/`。
+/// 若沙箱里已经有 vault，但本机 config 还没记下路径，冷启动会误进初始化向导。
+#[cfg(mobile)]
+fn adopt_sandboxed_workspace_if_needed(state: &AppState) {
+    {
+        let cfg = recover_lock(&state.config);
+        if cfg
+            .workspace_path
+            .as_ref()
+            .is_some_and(|p| Vault::exists(&PathBuf::from(p)))
+        {
+            return;
+        }
+    }
+    let Some(found) = discover_existing_workspace() else {
+        return;
+    };
+    let mut cfg = recover_lock(&state.config);
+    if !cfg
+        .workspace_path
+        .as_ref()
+        .is_some_and(|p| Vault::exists(&PathBuf::from(p)))
+    {
+        cfg.workspace_path = Some(found.to_string_lossy().into_owned());
+        let _ = cfg.save();
+    }
 }
 
 /// 查询当前状态（前端启动时首先调用）。
 #[tauri::command]
 pub fn vault_status(state: State<AppState>) -> VaultStatus {
+    #[cfg(mobile)]
+    adopt_sandboxed_workspace_if_needed(&state);
+
     let cfg = recover_lock(&state.config);
     let vault = recover_lock(&state.vault);
     let initialized = cfg
@@ -72,47 +107,56 @@ pub fn vault_status(state: State<AppState>) -> VaultStatus {
         workspace_id,
         auto_lock_minutes,
         launch_at_login,
+        launch_at_login_supported: autostart::is_supported(),
         grace_days,
         grace_active: grace.active,
         grace_expires_at: grace.expires_at,
         close_action,
-        writes_locked: state.writes_locked.load(std::sync::atomic::Ordering::SeqCst),
+        writes_locked: state
+            .writes_locked
+            .load(std::sync::atomic::Ordering::SeqCst),
         startup_note: state.startup_note.lock().ok().and_then(|n| n.clone()),
     }
 }
 
-/// 检测路径是否位于常见同步盘目录下（应避免）。
+/// 移动端固定保险库目录；已有库时优先返回实际路径。桌面端也返回同一约定（前端只在手机上用）。
+#[tauri::command]
+pub fn default_workspace_path() -> String {
+    #[cfg(mobile)]
+    if let Some(found) = discover_existing_workspace() {
+        return found.to_string_lossy().into_owned();
+    }
+    crate::identity::workspace_dir()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// 检测工作空间路径：非法字符拒绝；空格 / 非 ASCII / 同步盘只警告。
 #[tauri::command]
 pub fn check_workspace_path(path: String) -> PathCheck {
-    let lower = path.to_lowercase();
-    let hits = [
-        ("onedrive", "OneDrive"),
-        ("dropbox", "Dropbox"),
-        ("google drive", "Google Drive"),
-        ("googledrive", "Google Drive"),
-        ("icloud", "iCloud"),
-        ("坚果云", "坚果云"),
-        ("nutstore", "坚果云"),
-        ("百度网盘", "百度网盘"),
-        ("baidunetdisk", "百度网盘"),
-    ];
-    for (needle, label) in hits {
-        if lower.contains(needle) {
-            return PathCheck {
-                warning: Some(format!(
-                    "该路径疑似位于「{}」同步盘内。端到端加密备份应走应用内的云同步通道，请勿让第三方同步盘接管整个工作空间目录。",
-                    label
-                )),
-            };
-        }
-    }
-    PathCheck { warning: None }
+    crate::workspace_path::inspect(&path)
 }
 
 /// 初始化工作空间。会做 Argon2id 运行时标定（略慢，属正常）。
 #[tauri::command(async)]
-pub fn vault_init(state: State<'_, AppState>, path: String, password: String) -> Result<InitResult> {
+pub fn vault_init(
+    state: State<'_, AppState>,
+    path: String,
+    password: String,
+) -> Result<InitResult> {
+    crate::workspace_path::reject_if_invalid(&path)?;
     let root = PathBuf::from(&path);
+    if Vault::exists(&root) {
+        // 库已在，但本机 config 可能没记下路径（手机上 JS/Rust 数据目录曾分叉）。
+        // 先写回路径，前端再 refresh 就能进解锁，而不是停在向导里报错。
+        #[cfg(mobile)]
+        {
+            let mut cfg = recover_lock(&state.config);
+            cfg.workspace_path = Some(path.clone());
+            let _ = cfg.save();
+        }
+        return Err(AppError::AlreadyInitialized(path));
+    }
     let kdf: KdfParams = calibrate(DEFAULT_TARGET_MS);
     let (vault, recovery_key) = Vault::init(&root, &password, kdf)?;
     let workspace_id = vault.workspace_id().to_string();
@@ -206,7 +250,11 @@ pub fn vault_unlock(app: AppHandle, state: State<'_, AppState>, password: String
 
 /// 用恢复密钥解锁（忘记密码/换机）。
 #[tauri::command(async)]
-pub fn vault_unlock_recovery(app: AppHandle, state: State<'_, AppState>, recovery_key: String) -> Result<()> {
+pub fn vault_unlock_recovery(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    recovery_key: String,
+) -> Result<()> {
     ensure_loaded(&state)?;
     let mut vault = recover_lock(&state.vault);
     let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
@@ -263,7 +311,9 @@ pub fn lock_in_memory(state: &AppState) {
         v.lock();
     }
     crate::commands::clear_reveal_grace(state);
-    state.writes_locked.store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .writes_locked
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     if let Ok(mut n) = state.startup_note.lock() {
         *n = None;
     }
@@ -308,7 +358,11 @@ pub fn try_grace_unlock_silent(state: &AppState) -> bool {
 
 /// 修改访问密码（需正确旧密码）。
 #[tauri::command]
-pub fn change_password(state: State<AppState>, old_password: String, new_password: String) -> Result<()> {
+pub fn change_password(
+    state: State<AppState>,
+    old_password: String,
+    new_password: String,
+) -> Result<()> {
     ensure_loaded(&state)?;
     let mut vault = recover_lock(&state.vault);
     let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
@@ -317,6 +371,64 @@ pub fn change_password(state: State<AppState>, old_password: String, new_passwor
     session::clear();
     grant_grace_if_configured(&state);
     Ok(())
+}
+
+/// 当前保险库的 KDF 参数与移动端兼容性。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KdfInfo {
+    pub mem_mib: u32,
+    pub iters: u32,
+    pub parallelism: u32,
+    /// 内存是否已收在移动端安全上限内（手机能否用访问密码解锁）。
+    pub mobile_compatible: bool,
+    pub mobile_ceiling_mib: u32,
+}
+
+fn kdf_info(p: &KdfParams) -> KdfInfo {
+    KdfInfo {
+        mem_mib: p.mem_kib / 1024,
+        iters: p.iters,
+        parallelism: p.parallelism,
+        mobile_compatible: p.mem_kib <= crate::vault::kdf::MEM_CEIL_MOBILE_SAFE_KIB,
+        mobile_ceiling_mib: crate::vault::kdf::MEM_CEIL_MOBILE_SAFE_KIB / 1024,
+    }
+}
+
+/// 查询当前 KDF 参数（设置页展示「手机能否接入」）。
+#[tauri::command]
+pub fn get_kdf_info(state: State<AppState>) -> Result<KdfInfo> {
+    let vault = recover_lock(&state.vault);
+    let v = vault.as_ref().ok_or(AppError::NotInitialized)?;
+    Ok(kdf_info(v.kdf_params()))
+}
+
+/// 降低 KDF 参数以便手机接入（需正确访问密码）。
+///
+/// 只重新包裹密码信封，不重加密数据；完成后把头部推到云端，其它设备才拿得到新参数。
+/// 标定较慢，走 async 命令避免堵住 WebView。
+#[tauri::command(async)]
+pub fn relax_kdf_for_mobile(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    password: String,
+) -> Result<KdfInfo> {
+    ensure_loaded(&state)?;
+    let target = crate::vault::kdf::calibrate_with(
+        DEFAULT_TARGET_MS,
+        crate::vault::kdf::KdfProfile::CrossDevice,
+    );
+    let mut vault = recover_lock(&state.vault);
+    let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
+    let changed = v.relax_kdf(&password, target)?;
+    let info = kdf_info(v.kdf_params());
+    drop(vault);
+    if changed.is_some() {
+        session::clear();
+        grant_grace_if_configured(&state);
+        crate::sync::scheduler::kick_publish(app);
+    }
+    Ok(info)
 }
 
 /// 轮换恢复密钥（需已解锁），返回新恢复密钥。
@@ -396,7 +508,9 @@ pub fn vault_try_grace_unlock(app: AppHandle, state: State<'_, AppState>) -> Res
 }
 
 fn begin_write_lock(state: &AppState, app: &AppHandle, note: &str) {
-    state.writes_locked.store(true, std::sync::atomic::Ordering::SeqCst);
+    state
+        .writes_locked
+        .store(true, std::sync::atomic::Ordering::SeqCst);
     if let Ok(mut n) = state.startup_note.lock() {
         *n = Some(note.to_string());
     }
@@ -407,11 +521,16 @@ fn begin_write_lock(state: &AppState, app: &AppHandle, note: &str) {
 }
 
 fn end_write_lock(state: &AppState, app: &AppHandle) {
-    state.writes_locked.store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .writes_locked
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     if let Ok(mut n) = state.startup_note.lock() {
         *n = None;
     }
-    let _ = app.emit("writes-lock", serde_json::json!({ "locked": false, "note": null }));
+    let _ = app.emit(
+        "writes-lock",
+        serde_json::json!({ "locked": false, "note": null }),
+    );
     let _ = app.emit("startup-ready", serde_json::json!({}));
 }
 
@@ -429,12 +548,20 @@ fn set_startup_note(state: &AppState, app: &AppHandle, note: &str) {
 pub(crate) fn schedule_after_unlock(app: AppHandle) {
     let state = app.state::<AppState>();
     begin_write_lock(&state, &app, "正在从云端同步，可浏览、暂不可修改");
-    if state.bootstrap_busy.swap(true, std::sync::atomic::Ordering::SeqCst) {
+    if state
+        .bootstrap_busy
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
         return;
     }
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
-        if let Some(p) = state.config.lock().ok().and_then(|c| c.workspace_path.clone()) {
+        if let Some(p) = state
+            .config
+            .lock()
+            .ok()
+            .and_then(|c| c.workspace_path.clone())
+        {
             let _ = crate::sys::adopt_ssh_config(std::path::Path::new(&p));
         }
         set_startup_note(&state, &app, "正在从云端拉取身份数据…");
@@ -443,7 +570,9 @@ pub(crate) fn schedule_after_unlock(app: AppHandle) {
         let vault_clone = match state.vault.lock() {
             Ok(g) => g.as_ref().filter(|v| v.is_unlocked()).cloned(),
             Err(_) => {
-                state.bootstrap_busy.store(false, std::sync::atomic::Ordering::SeqCst);
+                state
+                    .bootstrap_busy
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
                 end_write_lock(&state, &app);
                 return;
             }
@@ -453,7 +582,9 @@ pub(crate) fn schedule_after_unlock(app: AppHandle) {
         }
         set_startup_note(&state, &app, "正在加载 ssh-agent…");
         load_agent_best_effort(&state);
-        state.bootstrap_busy.store(false, std::sync::atomic::Ordering::SeqCst);
+        state
+            .bootstrap_busy
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         let still_unlocked = state
             .vault
             .lock()
@@ -464,7 +595,9 @@ pub(crate) fn schedule_after_unlock(app: AppHandle) {
             end_write_lock(&state, &app);
             crate::update::scheduler::kick_after_unlock(app.clone());
         } else {
-            state.writes_locked.store(false, std::sync::atomic::Ordering::SeqCst);
+            state
+                .writes_locked
+                .store(false, std::sync::atomic::Ordering::SeqCst);
         }
     });
 }
@@ -501,7 +634,16 @@ pub struct FactoryResetReport {
 
 fn wipe_workspace_files(root: &std::path::Path) -> Vec<String> {
     let mut steps = Vec::new();
-    for name in ["vault.json", "data", "keys", "backups", "sync", "ssh-keys", "ssh", "audit.log"] {
+    for name in [
+        "vault.json",
+        "data",
+        "keys",
+        "backups",
+        "sync",
+        "ssh-keys",
+        "ssh",
+        "audit.log",
+    ] {
         let path = root.join(name);
         if path.is_dir() {
             if std::fs::remove_dir_all(&path).is_ok() {
@@ -525,7 +667,9 @@ pub fn factory_reset(
         return Err(AppError::Invalid("请先确认要清空还原本程序".into()));
     }
     if confirm_phrase.trim() != "清空" {
-        return Err(AppError::Invalid("请输入「清空」以确认不可恢复的还原".into()));
+        return Err(AppError::Invalid(
+            "请输入「清空」以确认不可恢复的还原".into(),
+        ));
     }
 
     let mut steps = Vec::new();
@@ -576,7 +720,9 @@ pub fn factory_reset(
         *recover_lock(&state.config) = cfg;
     }
     recover_lock(&state.unlock_guard).reset();
-    state.writes_locked.store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .writes_locked
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     if let Ok(mut note) = state.startup_note.lock() {
         *note = None;
     }

@@ -284,8 +284,9 @@ pub fn totp_scan_screen() -> Result<Vec<qrscan::ScreenHit>> {
     qrscan::scan_screen()
 }
 
-#[tauri::command]
-pub fn totp_reveal_secret(state: State<AppState>, id: String, password: String) -> Result<TotpSecretReveal> {
+#[tauri::command(async)]
+pub fn totp_reveal_secret(app: AppHandle, state: State<'_, AppState>, id: String, password: String) -> Result<TotpSecretReveal> {
+    crate::biometric::bind_window(&app);
     let allow_bio = {
         let cfg = recover_lock(&state.config);
         cfg.biometric_unlock_enabled && cfg.biometric_reveal_secret
@@ -329,9 +330,9 @@ pub fn totp_reveal_secret(state: State<AppState>, id: String, password: String) 
     })
 }
 
-#[tauri::command]
-pub fn totp_export_qr(state: State<AppState>, id: String, password: String) -> Result<String> {
-    Ok(totp_reveal_secret(state, id, password)?.qr_png_base64)
+#[tauri::command(async)]
+pub fn totp_export_qr(app: AppHandle, state: State<'_, AppState>, id: String, password: String) -> Result<String> {
+    Ok(totp_reveal_secret(app, state, id, password)?.qr_png_base64)
 }
 
 fn preview_from_parsed(p: &totp::ParsedOtpauth) -> ParsedTotpPreview {

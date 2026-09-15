@@ -53,6 +53,8 @@ impl S3Client {
         Self::new_with_proxy(config, None)
     }
 
+    /// 必须在普通线程或 `spawn_blocking` 里调用。
+    /// 在 Tokio worker 上 `build()` / drop 会直接 panic，IPC 也就没有返回。
     pub fn new_with_proxy(config: S3Config, proxy: Option<&NetworkProxy>) -> Result<Self> {
         let mut builder = reqwest::blocking::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(8))
@@ -480,5 +482,19 @@ mod tests {
         })
         .unwrap();
         assert_eq!(parse_s3_config_file(&legacy).unwrap().bucket, "b");
+    }
+
+    #[test]
+    fn blocking_client_builds_inside_spawn_blocking() {
+        tauri::async_runtime::block_on(async {
+            tauri::async_runtime::spawn_blocking(|| {
+                reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(1))
+                    .build()
+                    .expect("spawn_blocking 内应能创建 blocking Client");
+            })
+            .await
+            .expect("spawn_blocking 不应被取消");
+        });
     }
 }
