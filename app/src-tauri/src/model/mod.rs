@@ -1,7 +1,7 @@
 //! 领域模型：身份、密钥记录、机密集合、以及加密落盘的数据容器。
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 mod serde_maps {
     use serde::ser::{SerializeMap, Serializer};
@@ -204,6 +204,146 @@ pub struct TotpData {
 #[serde(rename_all = "camelCase")]
 pub struct AccountData {
     pub entries: Vec<AccountEntry>,
+    pub groups: Vec<GroupMeta>,
+    #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
+    pub deleted_entries: HashMap<String, String>,
+}
+
+/// 保险库条目下的单个附件（内容寻址 blob）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileAttachment {
+    pub id: String,
+    pub original_name: String,
+    pub mime: Option<String>,
+    pub size: u64,
+    pub sha256: String,
+}
+
+/// 文件保险库条目（元数据；密文内容按 sha256 存入内容寻址 blob 库）。
+///
+/// `original_name` / `mime` / `size` / `sha256` 是摘要字段：多附件时
+/// `size` 为总和，其余取第一份，便于兼容旧客户端与检索。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct FileEntry {
+    pub id: String,
+    pub name: String,
+    pub original_name: String,
+    pub mime: Option<String>,
+    pub size: u64,
+    pub sha256: String,
+    #[serde(default)]
+    pub attachments: Vec<FileAttachment>,
+    pub group: Option<String>,
+    pub note: Option<String>,
+    pub icon: Option<String>,
+    pub sort_order: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl FileEntry {
+    /// 旧数据只有顶层 sha256、没有 attachments 时，合成一份附件。
+    pub fn resolved_attachments(&self) -> Vec<FileAttachment> {
+        if !self.attachments.is_empty() {
+            return self.attachments.clone();
+        }
+        if self.sha256.is_empty() {
+            return Vec::new();
+        }
+        vec![FileAttachment {
+            id: self.sha256.clone(),
+            original_name: self.original_name.clone(),
+            mime: self.mime.clone(),
+            size: self.size,
+            sha256: self.sha256.clone(),
+        }]
+    }
+
+    pub fn blob_hashes(&self) -> Vec<String> {
+        if !self.attachments.is_empty() {
+            return self
+                .attachments
+                .iter()
+                .filter(|a| !a.sha256.is_empty())
+                .map(|a| a.sha256.clone())
+                .collect();
+        }
+        if self.sha256.is_empty() {
+            Vec::new()
+        } else {
+            vec![self.sha256.clone()]
+        }
+    }
+
+    pub fn total_size(&self) -> u64 {
+        if !self.attachments.is_empty() {
+            self.attachments
+                .iter()
+                .map(|a| a.size)
+                .fold(0u64, |a, b| a.saturating_add(b))
+        } else {
+            self.size
+        }
+    }
+
+    /// 把 attachments 写回摘要字段；空 attachments 且无旧 sha256 时保持为空。
+    pub fn sync_summary(&mut self) {
+        if self.attachments.is_empty() {
+            return;
+        }
+        self.size = self.total_size();
+        if let Some(first) = self.attachments.first() {
+            self.original_name = if self.attachments.len() == 1 {
+                first.original_name.clone()
+            } else {
+                self.attachments
+                    .iter()
+                    .map(|a| a.original_name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            self.mime = first.mime.clone();
+            self.sha256 = first.sha256.clone();
+        }
+    }
+}
+
+/// data/files.enc
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FileData {
+    pub entries: Vec<FileEntry>,
+    pub groups: Vec<GroupMeta>,
+    #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
+    pub deleted_entries: HashMap<String, String>,
+}
+
+/// 备忘录条目（元数据；正文与图片单独加密）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteEntry {
+    pub id: String,
+    pub title: String,
+    pub format: String,
+    pub group: Option<String>,
+    pub tags: Vec<String>,
+    pub icon: Option<String>,
+    pub pinned: bool,
+    pub sort_order: i32,
+    pub excerpt: Option<String>,
+    pub body_sha256: String,
+    pub asset_hashes: Vec<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// data/notes.enc
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteData {
+    pub entries: Vec<NoteEntry>,
     pub groups: Vec<GroupMeta>,
     #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
     pub deleted_entries: HashMap<String, String>,
@@ -458,6 +598,112 @@ pub fn merge_account_data(local: AccountData, remote: AccountData) -> AccountDat
         groups: merge_groups(local.groups, remote.groups),
         deleted_entries: deleted,
     }
+}
+
+fn merge_named_entries<T, FGetId, FGetUpdated>(
+    local_entries: Vec<T>,
+    remote_entries: Vec<T>,
+    deleted: &HashMap<String, String>,
+    get_id: FGetId,
+    get_updated: FGetUpdated,
+) -> Vec<T>
+where
+    FGetId: Fn(&T) -> &str,
+    FGetUpdated: Fn(&T) -> &str,
+{
+    let mut entries: HashMap<String, T> = HashMap::new();
+    for item in local_entries {
+        entries.insert(get_id(&item).to_string(), item);
+    }
+    for item in remote_entries {
+        match entries.get(get_id(&item)) {
+            Some(local_item) if timestamp_newer_or_eq(get_updated(local_item), get_updated(&item)) => {}
+            _ => {
+                entries.insert(get_id(&item).to_string(), item);
+            }
+        }
+    }
+    entries
+        .into_values()
+        .filter(|item| match deleted.get(get_id(item)) {
+            Some(ts) if timestamp_newer_or_eq(ts, get_updated(item)) => false,
+            _ => true,
+        })
+        .collect()
+}
+
+/// 文件保险库条目按 updated_at 取新，墓碑传播删除。
+pub fn merge_file_data(local: FileData, remote: FileData) -> FileData {
+    let deleted = merge_tombstones(local.deleted_entries, remote.deleted_entries);
+    FileData {
+        entries: merge_named_entries(
+            local.entries,
+            remote.entries,
+            &deleted,
+            |e| e.id.as_str(),
+            |e| e.updated_at.as_str(),
+        ),
+        groups: merge_groups(local.groups, remote.groups),
+        deleted_entries: deleted,
+    }
+}
+
+/// 备忘录条目按 updated_at 取新，墓碑传播删除。
+pub fn merge_note_data(local: NoteData, remote: NoteData) -> NoteData {
+    let deleted = merge_tombstones(local.deleted_entries, remote.deleted_entries);
+    NoteData {
+        entries: merge_named_entries(
+            local.entries,
+            remote.entries,
+            &deleted,
+            |e| e.id.as_str(),
+            |e| e.updated_at.as_str(),
+        ),
+        groups: merge_groups(local.groups, remote.groups),
+        deleted_entries: deleted,
+    }
+}
+
+/// 当前元数据仍引用的 blob 哈希（文件内容 + 备忘录正文/图片）。
+pub fn collect_blob_hashes(files: &FileData, notes: &NoteData) -> HashSet<String> {
+    let mut set = collect_note_body_hashes(notes);
+    for e in &files.entries {
+        for h in e.blob_hashes() {
+            set.insert(h);
+        }
+    }
+    for e in &notes.entries {
+        for h in &e.asset_hashes {
+            if !h.is_empty() {
+                set.insert(h.clone());
+            }
+        }
+    }
+    set
+}
+
+/// 备忘录正文文本 blob（即时发布可带上；附件/图片另走周期或手动同步）。
+pub fn collect_note_body_hashes(notes: &NoteData) -> HashSet<String> {
+    notes
+        .entries
+        .iter()
+        .filter_map(|e| {
+            if e.body_sha256.is_empty() {
+                None
+            } else {
+                Some(e.body_sha256.clone())
+            }
+        })
+        .collect()
+}
+
+/// 文件保险库已登记附件的明文总量（仅作展示，不拦截）。
+pub fn file_usage_bytes(files: &FileData) -> u64 {
+    files
+        .entries
+        .iter()
+        .map(FileEntry::total_size)
+        .fold(0, |a, b| a.saturating_add(b))
 }
 
 /// 机密并集：密钥口令/PAT 仍是本地优先补缺；TOTP/账号机密跟条目 `updated_at` 对齐。
@@ -922,5 +1168,156 @@ mod tests {
             },
         );
         assert!(!secrets_incomplete_for_entries(&filled, &totp, &accounts));
+    }
+
+    fn file_entry(id: &str, name: &str, sha: &str, updated_at: &str) -> FileEntry {
+        FileEntry {
+            id: id.into(),
+            name: name.into(),
+            original_name: format!("{name}.bin"),
+            mime: None,
+            size: 8,
+            sha256: sha.into(),
+            attachments: vec![],
+            group: None,
+            note: Some("备注".into()),
+            icon: None,
+            sort_order: 0,
+            created_at: updated_at.into(),
+            updated_at: updated_at.into(),
+        }
+    }
+
+    fn note_entry(id: &str, title: &str, body: &str, updated_at: &str) -> NoteEntry {
+        NoteEntry {
+            id: id.into(),
+            title: title.into(),
+            format: "markdown".into(),
+            group: None,
+            tags: vec![],
+            icon: None,
+            pinned: false,
+            sort_order: 0,
+            excerpt: Some(title.into()),
+            body_sha256: body.into(),
+            asset_hashes: vec!["pic1".into()],
+            created_at: updated_at.into(),
+            updated_at: updated_at.into(),
+        }
+    }
+
+    #[test]
+    fn merge_file_prefers_newer_and_tombstone() {
+        let local = FileData {
+            entries: vec![file_entry("a", "local-new", "sha-a", "2026-09-09T12:00:00Z")],
+            deleted_entries: HashMap::from([("c".into(), "2026-09-08T00:00:00Z".into())]),
+            ..FileData::default()
+        };
+        let remote = FileData {
+            entries: vec![
+                file_entry("a", "remote-old", "sha-old", "2026-09-08T00:00:00Z"),
+                file_entry("c", "should-drop", "sha-c", "2026-09-07T00:00:00Z"),
+                file_entry("d", "remote-only", "sha-d", "2026-09-09T11:00:00Z"),
+            ],
+            ..FileData::default()
+        };
+        let merged = merge_file_data(local, remote);
+        let names: HashMap<_, _> = merged.entries.iter().map(|e| (e.id.as_str(), e.name.as_str())).collect();
+        assert_eq!(names.get("a"), Some(&"local-new"));
+        assert_eq!(names.get("d"), Some(&"remote-only"));
+        assert!(!names.contains_key("c"));
+        assert!(merged.deleted_entries.contains_key("c"));
+    }
+
+    #[test]
+    fn merge_note_prefers_newer_and_tombstone() {
+        let local = NoteData {
+            entries: vec![note_entry("a", "local-new", "body-a", "2026-09-09T12:00:00Z")],
+            deleted_entries: HashMap::from([("c".into(), "2026-09-08T00:00:00Z".into())]),
+            ..NoteData::default()
+        };
+        let remote = NoteData {
+            entries: vec![
+                note_entry("a", "remote-old", "body-old", "2026-09-08T00:00:00Z"),
+                note_entry("c", "should-drop", "body-c", "2026-09-07T00:00:00Z"),
+                note_entry("d", "remote-only", "body-d", "2026-09-09T11:00:00Z"),
+            ],
+            ..NoteData::default()
+        };
+        let merged = merge_note_data(local, remote);
+        let titles: HashMap<_, _> = merged.entries.iter().map(|e| (e.id.as_str(), e.title.as_str())).collect();
+        assert_eq!(titles.get("a"), Some(&"local-new"));
+        assert_eq!(titles.get("d"), Some(&"remote-only"));
+        assert!(!titles.contains_key("c"));
+    }
+
+    #[test]
+    fn collect_blob_hashes_and_usage() {
+        let files = FileData {
+            entries: vec![
+                file_entry("a", "one", "sha-a", "t"),
+                file_entry("b", "two", "sha-b", "t"),
+            ],
+            ..FileData::default()
+        };
+        let notes = NoteData {
+            entries: vec![note_entry("n", "note", "body-n", "t")],
+            ..NoteData::default()
+        };
+        let hashes = collect_blob_hashes(&files, &notes);
+        assert!(hashes.contains("sha-a"));
+        assert!(hashes.contains("sha-b"));
+        assert!(hashes.contains("body-n"));
+        assert!(hashes.contains("pic1"));
+        let bodies = collect_note_body_hashes(&notes);
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies.contains("body-n"));
+        assert!(!bodies.contains("pic1"));
+        assert_eq!(file_usage_bytes(&files), 16);
+    }
+
+    #[test]
+    fn multi_attachment_hashes_and_usage() {
+        let mut e = file_entry("a", "pack", "sha-first", "t");
+        e.attachments = vec![
+            FileAttachment {
+                id: "1".into(),
+                original_name: "a.pdf".into(),
+                mime: None,
+                size: 10,
+                sha256: "sha-first".into(),
+            },
+            FileAttachment {
+                id: "2".into(),
+                original_name: "b.png".into(),
+                mime: None,
+                size: 5,
+                sha256: "sha-second".into(),
+            },
+        ];
+        e.sync_summary();
+        assert_eq!(e.size, 15);
+        assert_eq!(e.original_name, "a.pdf, b.png");
+        assert_eq!(e.sha256, "sha-first");
+        let files = FileData {
+            entries: vec![e],
+            ..FileData::default()
+        };
+        let hashes = collect_blob_hashes(&files, &NoteData::default());
+        assert!(hashes.contains("sha-first"));
+        assert!(hashes.contains("sha-second"));
+        assert_eq!(file_usage_bytes(&files), 15);
+    }
+
+    #[test]
+    fn file_data_json_is_deterministic_with_maps() {
+        let mut data = FileData::default();
+        data.deleted_entries.insert("b".into(), "t2".into());
+        data.deleted_entries.insert("a".into(), "t1".into());
+        let a = serde_json::to_vec(&data).unwrap();
+        let b = serde_json::to_vec(&data).unwrap();
+        assert_eq!(a, b);
+        let text = String::from_utf8(a).unwrap();
+        assert!(text.find("\"a\"").unwrap() < text.find("\"b\"").unwrap());
     }
 }

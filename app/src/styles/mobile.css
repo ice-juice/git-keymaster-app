@@ -1462,6 +1462,189 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   opacity: 0.45;
 }
 
+.m-vault-entry {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-vault-entry:active {
+  background: var(--card-hover, var(--gray-soft));
+}
+.m-vault-entry-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.m-vault-entry-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.m-vault-entry-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+.m-vault-entry-sub {
+  font-size: 12px;
+  color: var(--text-mute);
+}
+.m-vault-entry-arrow {
+  color: var(--text-mute);
+  flex-shrink: 0;
+}
+.m-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m-file-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  min-height: 64px;
+}
+.m-file-card-main {
+  min-width: 0;
+  flex: 1;
+}
+.m-file-card-name {
+  font-size: 15px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-file-card-sub {
+  font-size: 12px;
+  color: var(--text-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 3px;
+}
+.m-file-card-side {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.m-file-fab {
+  position: fixed;
+  right: 16px;
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  width: 56px;
+  height: 56px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent-gradient, var(--accent));
+  color: var(--accent-contrast, #fff);
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.22);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 20;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-file-fab:disabled {
+  opacity: 0.45;
+}
+.m-note-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.m-note-card {
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 14px;
+  padding: 12px;
+  color: inherit;
+  cursor: pointer;
+}
+.m-note-card-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 15px;
+  font-weight: 650;
+}
+.m-note-card-sub,
+.m-note-card-excerpt {
+  font-size: 12px;
+  color: var(--text-mute);
+  margin-top: 4px;
+}
+.m-note-card-excerpt {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.m-note-source {
+  min-height: 42vh;
+  font-size: 16px;
+}
+html[data-platform="mobile"] .notes-mobile-detail {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+html[data-platform="mobile"] .notes-mobile-detail .note-editor-card {
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+html[data-platform="mobile"] .note-editor-title-row {
+  padding: 10px 10px 8px;
+  align-items: flex-end;
+}
+html[data-platform="mobile"] .note-title-input {
+  font-size: 16px;
+  height: 40px;
+}
+html[data-platform="mobile"] .note-editor-meta {
+  padding: 0 10px 8px;
+}
+html[data-platform="mobile"] .note-editor-tools {
+  padding: 6px 8px;
+  gap: 6px;
+  align-items: flex-start;
+}
+html[data-platform="mobile"] .note-cm.is-mobile .cm-editor,
+html[data-platform="mobile"] .note-cm.is-mobile .cm-content {
+  font-size: 16px;
+}
+html[data-platform="mobile"] .note-preview {
+  padding: 14px 16px 24px;
+}
+
 
 
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, Copy, Eye, KeyRound, X } from "lucide-react";
 import { api, errMessage, type KeyRecord, type ScannedKey } from "../lib/ipc";
 import { writeClipboard } from "../lib/clipboard";
@@ -12,6 +13,7 @@ async function copyKeyText(text: string, secret = false) {
 }
 
 export function Keys() {
+  const { t } = useTranslation();
   const [tab, setTab] = useState<"vault" | "scan">("vault");
   const [keys, setKeys] = useState<KeyRecord[]>([]);
   const [scanned, setScanned] = useState<ScannedKey[]>([]);
@@ -51,7 +53,7 @@ export function Keys() {
     setBusy(true);
     try {
       const k = await api.generateKey(genComment || "git-keymaster", genName || undefined);
-      setMsg(`已生成密钥「${k.name}」，指纹 ${k.fingerprint}`);
+      setMsg(t("keys.generated", { name: k.name, fp: k.fingerprint }));
       setShowGen(false);
       setGenComment("");
       setGenName("");
@@ -69,7 +71,7 @@ export function Keys() {
     setBusy(true);
     try {
       const k = await api.importKeyFromPath(p);
-      setMsg(`已导入「${k.name}」`);
+      setMsg(t("keys.imported", { name: k.name }));
       await loadVault();
       await loadScan();
     } catch (e) {
@@ -89,12 +91,12 @@ export function Keys() {
   return (
     <div className="stack-lg">
       <PageHead
-        title="密钥管理"
-        desc="库内密钥全部加密存储；可扫描系统 ~/.ssh 并导入。查看私钥需再次输入工作空间密码。"
+        title={t("keys.title")}
+        desc={t("keys.desc")}
         actions={
           <>
             <button className="btn primary" disabled={writesLocked} onClick={() => setShowGen((v) => !v)}>
-              生成新密钥
+              {t("keys.generateNew")}
             </button>
           </>
         }
@@ -103,14 +105,14 @@ export function Keys() {
       {msg && <div className="callout info">{msg}</div>}
 
       {showGen && (
-        <Card title="生成 ed25519 密钥（自动强随机 passphrase 加密入库）">
+        <Card title={t("keys.generateTitle")}>
           <div className="stack">
             <div className="field">
-              <label className="field-label">名称（可选）</label>
+              <label className="field-label">{t("keys.nameOptional")}</label>
               <input className="input" value={genName} onChange={(e) => setGenName(e.target.value)} />
             </div>
             <div className="field">
-              <label className="field-label">注释 / comment</label>
+              <label className="field-label">{t("keys.comment")}</label>
               <input
                 className="input"
                 placeholder="nova.reyes@example.com"
@@ -120,10 +122,10 @@ export function Keys() {
             </div>
             <div className="row">
               <button className="btn primary" disabled={busy} onClick={doGenerate}>
-                {busy ? "生成中…" : "生成并入库"}
+                {busy ? t("keys.generating") : t("keys.generateSave")}
               </button>
               <button className="btn ghost" onClick={() => setShowGen(false)}>
-                取消
+                {t("common.cancel")}
               </button>
             </div>
           </div>
@@ -132,7 +134,7 @@ export function Keys() {
 
       <div className="tabs">
         <button className={"tab" + (tab === "vault" ? " active" : "")} onClick={() => setTab("vault")}>
-          库内密钥
+          {t("keys.vaultKeys")}
         </button>
         <button
           className={"tab" + (tab === "scan" ? " active" : "")}
@@ -141,14 +143,14 @@ export function Keys() {
             loadScan();
           }}
         >
-          系统扫描
+          {t("keys.systemScan")}
         </button>
       </div>
 
       {tab === "vault" && (
         <Card>
           {keys.length === 0 ? (
-            <Empty icon="🔑" text="库内还没有密钥。生成新密钥或从系统扫描导入。" />
+            <Empty icon="🔑" text={t("keys.emptyVault")} />
           ) : (
             <div className="list">
               {keys.map((k) => (
@@ -157,8 +159,8 @@ export function Keys() {
                     <div className="row" style={{ gap: 8 }}>
                       <strong>{k.name}</strong>
                       <Badge kind="info">{k.algorithm}</Badge>
-                      {k.hasPassphrase && <Badge kind="good">已加密</Badge>}
-                      {k.weak && <Badge kind="danger">弱密钥</Badge>}
+                      {k.hasPassphrase && <Badge kind="good">{t("keys.encrypted")}</Badge>}
+                      {k.weak && <Badge kind="danger">{t("keys.weak")}</Badge>}
                     </div>
                     <div className="mono muted sm">{k.fingerprint}</div>
                     {k.deployedPath && <div className="mono muted sm">{k.deployedPath}</div>}
@@ -169,23 +171,23 @@ export function Keys() {
                       className="btn sm"
                       onClick={() => copyPublic(k)}
                       disabled={!k.publicOpenssh.trim()}
-                      title="复制 OpenSSH 公钥"
+                      title={t("keys.copyOpenssh")}
                     >
                       {copiedId === k.id ? (
                         <>
                           <Check size={12} style={{ color: "var(--green)" }} />
-                          <span style={{ color: "var(--green)" }}>已复制</span>
+                          <span style={{ color: "var(--green)" }}>{t("common.copied")}</span>
                         </>
                       ) : (
                         <>
                           <Copy size={12} />
-                          <span>复制公钥</span>
+                          <span>{t("overview.copyPub")}</span>
                         </>
                       )}
                     </button>
-                    <button type="button" className="btn sm" onClick={() => setViewing(k)} title="查看公钥和私钥">
+                    <button type="button" className="btn sm" onClick={() => setViewing(k)} title={t("keys.viewKey")}>
                       <Eye size={12} />
-                      <span>查看</span>
+                      <span>{t("common.view")}</span>
                     </button>
                   </div>
                 </div>
@@ -196,9 +198,9 @@ export function Keys() {
       )}
 
       {tab === "scan" && (
-        <Card actions={<button className="btn ghost sm" onClick={loadScan}>重新扫描</button>}>
+        <Card actions={<button className="btn ghost sm" onClick={loadScan}>{t("keys.rescan")}</button>}>
           {scanned.length === 0 ? (
-            <Empty icon="📁" text="未在 ~/.ssh 发现密钥，或点击「重新扫描」。" />
+            <Empty icon="📁" text={t("keys.emptyScan")} />
           ) : (
             <div className="list">
               {scanned.map((s) => (
@@ -207,13 +209,13 @@ export function Keys() {
                     <div className="row" style={{ gap: 8 }}>
                       <strong className="mono sm">{s.path}</strong>
                       <Badge kind="info">{s.info.algorithm}</Badge>
-                      {s.inVault && <Badge kind="good">已入库</Badge>}
+                      {s.inVault && <Badge kind="good">{t("keys.inVault")}</Badge>}
                     </div>
                     <div className="mono muted sm">{s.info.fingerprint}</div>
                   </div>
                   {!s.inVault && (
                     <button className="btn sm" disabled={busy || writesLocked} onClick={() => importPath(s.path)}>
-                      导入
+                      {t("common.import")}
                     </button>
                   )}
                 </div>
@@ -229,6 +231,7 @@ export function Keys() {
 }
 
 function KeyViewDialog({ record, onClose }: { record: KeyRecord; onClose: () => void }) {
+  const { t } = useTranslation();
   const [password, setPassword] = useState("");
   const [privateText, setPrivateText] = useState("");
   const [passphrase, setPassphrase] = useState<string | null>(null);
@@ -276,23 +279,23 @@ function KeyViewDialog({ record, onClose }: { record: KeyRecord; onClose: () => 
         <div className="card-head">
           <div className="row" style={{ gap: 6 }}>
             <KeyRound size={15} style={{ color: "var(--accent)" }} />
-            <div className="card-title">查看密钥：{record.name}</div>
+            <div className="card-title">{t("keys.viewTitle", { name: record.name })}</div>
           </div>
-          <button type="button" className="btn ghost sm" onClick={close} aria-label="关闭">
+          <button type="button" className="btn ghost sm" onClick={close} aria-label={t("common.close")}>
             <X size={15} />
           </button>
         </div>
         <div className="card-body" style={{ overflow: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             <Badge kind="info">{record.algorithm}</Badge>
-            {record.hasPassphrase && <Badge kind="good">已加密</Badge>}
-            {record.weak && <Badge kind="danger">弱密钥</Badge>}
+            {record.hasPassphrase && <Badge kind="good">{t("keys.encrypted")}</Badge>}
+            {record.weak && <Badge kind="danger">{t("keys.weak")}</Badge>}
           </div>
           <div className="mono muted sm">{record.fingerprint}</div>
 
           <div className="field">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <label className="field-label">公钥</label>
+              <label className="field-label">{t("keys.publicKey")}</label>
               <button
                 type="button"
                 className="btn sm"
@@ -302,35 +305,35 @@ function KeyViewDialog({ record, onClose }: { record: KeyRecord; onClose: () => 
                 {copied === "pub" ? (
                   <>
                     <Check size={12} style={{ color: "var(--green)" }} />
-                    <span style={{ color: "var(--green)" }}>已复制</span>
+                    <span style={{ color: "var(--green)" }}>{t("common.copied")}</span>
                   </>
                 ) : (
                   <>
                     <Copy size={12} />
-                    <span>复制公钥</span>
+                    <span>{t("overview.copyPub")}</span>
                   </>
                 )}
               </button>
             </div>
             <div className="code" style={{ maxHeight: 90 }}>
-              {publicText || "（库内未保存公钥文本）"}
+              {publicText || t("keys.noPublic")}
             </div>
           </div>
 
           <div className="field">
             <div className="row" style={{ justifyContent: "space-between", alignItems: "center" }}>
-              <label className="field-label">私钥</label>
+              <label className="field-label">{t("keys.privateKey")}</label>
               {privateText && (
                 <button type="button" className="btn sm" onClick={() => copy("priv", privateText)}>
                   {copied === "priv" ? (
                     <>
                       <Check size={12} style={{ color: "var(--green)" }} />
-                      <span style={{ color: "var(--green)" }}>已复制</span>
+                      <span style={{ color: "var(--green)" }}>{t("common.copied")}</span>
                     </>
                   ) : (
                     <>
                       <Copy size={12} />
-                      <span>复制私钥</span>
+                      <span>{t("keys.copyPrivate")}</span>
                     </>
                   )}
                 </button>
@@ -341,32 +344,32 @@ function KeyViewDialog({ record, onClose }: { record: KeyRecord; onClose: () => 
                 <div className="code" style={{ maxHeight: 180 }}>
                   {privateText}
                 </div>
-                <div className="callout warn sm">关闭此窗口后将不再显示私钥。请勿把私钥发到聊天或邮件。</div>
+                <div className="callout warn sm">{t("keys.privateWarn")}</div>
                 {passphrase != null && passphrase !== "" && (
                   <div className="row" style={{ justifyContent: "space-between", alignItems: "center", marginTop: 6 }}>
-                    <div className="muted sm">此私钥带口令，复制到别处使用时还需要口令。</div>
+                    <div className="muted sm">{t("keys.passHint")}</div>
                     <button type="button" className="btn sm" onClick={() => copy("pass", passphrase)}>
-                      {copied === "pass" ? "已复制口令" : "复制密钥口令"}
+                      {copied === "pass" ? t("keys.copiedPass") : t("keys.copyPass")}
                     </button>
                   </div>
                 )}
               </>
             ) : (
               <div className="stack">
-                <div className="callout warn sm">显示私钥需要再次输入工作空间访问密码。</div>
+                <div className="callout warn sm">{t("keys.needReauth")}</div>
                 {err && <div className="err-text">{err}</div>}
                 <input
                   className="input"
                   type="password"
                   autoComplete="current-password"
-                  placeholder="工作空间访问密码"
+                  placeholder={t("keys.wsPassword")}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && password && revealPrivate()}
                 />
                 <div className="row">
                   <button type="button" className="btn primary sm" disabled={revealing || !password} onClick={revealPrivate}>
-                    {revealing ? "验证中…" : "显示私钥"}
+                    {revealing ? t("reauth.verifying") : t("keys.showPrivate")}
                   </button>
                 </div>
               </div>

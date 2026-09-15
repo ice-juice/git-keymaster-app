@@ -1,8 +1,10 @@
 //! 加密数据持久化：用 vault 派生的子密钥加密 identities/secrets/key 文件。
 //! 文件格式：`nonce(24) || XChaCha20-Poly1305 密文`。
 
+pub mod blob;
+
 use crate::error::{AppError, Result};
-use crate::model::{AccountData, Secrets, TotpData, VaultData};
+use crate::model::{AccountData, FileData, NoteData, Secrets, TotpData, VaultData};
 use crate::vault::atomic_write;
 use crate::vault::crypto::{self, KEY_LEN, LABEL_KEYFILE, LABEL_METADATA, XNONCE_LEN};
 use crate::vault::Vault;
@@ -42,6 +44,12 @@ fn totp_path(vault: &Vault) -> PathBuf {
 }
 fn accounts_path(vault: &Vault) -> PathBuf {
     vault.root().join("data").join("accounts.enc")
+}
+fn files_path(vault: &Vault) -> PathBuf {
+    vault.root().join("data").join("files.enc")
+}
+fn notes_path(vault: &Vault) -> PathBuf {
+    vault.root().join("data").join("notes.enc")
 }
 fn icon_path(vault: &Vault, hash: &str) -> PathBuf {
     vault.root().join("icons").join(format!("{hash}.webp"))
@@ -119,6 +127,28 @@ pub fn save_accounts(vault: &Vault, data: &AccountData) -> Result<()> {
     let json = serde_json::to_vec(data)?;
     let sealed = seal(&key, &json)?;
     atomic_write(&accounts_path(vault), &sealed)
+}
+
+pub fn load_files(vault: &Vault) -> Result<FileData> {
+    load_sealed(vault, &files_path(vault))
+}
+
+pub fn save_files(vault: &Vault, data: &FileData) -> Result<()> {
+    let key = vault.subkey(LABEL_METADATA)?;
+    let json = serde_json::to_vec(data)?;
+    let sealed = seal(&key, &json)?;
+    atomic_write(&files_path(vault), &sealed)
+}
+
+pub fn load_notes(vault: &Vault) -> Result<NoteData> {
+    load_sealed(vault, &notes_path(vault))
+}
+
+pub fn save_notes(vault: &Vault, data: &NoteData) -> Result<()> {
+    let key = vault.subkey(LABEL_METADATA)?;
+    let json = serde_json::to_vec(data)?;
+    let sealed = seal(&key, &json)?;
+    atomic_write(&notes_path(vault), &sealed)
 }
 
 pub fn save_icon(vault: &Vault, hash: &str, webp: &[u8]) -> Result<()> {
@@ -285,6 +315,54 @@ mod tests {
         assert!(!String::from_utf8_lossy(&raw).contains("techn4950"));
         let loaded = load_totp(&v).unwrap();
         assert_eq!(loaded.entries, data.entries);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn files_and_notes_roundtrip_encrypted() {
+        let (v, root) = unlocked_vault();
+        let mut files = FileData::default();
+        files.entries.push(crate::model::FileEntry {
+            id: "f1".into(),
+            name: "护照扫描件".into(),
+            original_name: "passport.png".into(),
+            mime: Some("image/png".into()),
+            size: 12,
+            sha256: "aa".repeat(32),
+            attachments: vec![],
+            group: None,
+            note: Some("secret-file-note".into()),
+            icon: None,
+            sort_order: 0,
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        });
+        save_files(&v, &files).unwrap();
+        let raw = std::fs::read(files_path(&v)).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("护照扫描件"));
+        assert!(!String::from_utf8_lossy(&raw).contains("secret-file-note"));
+        assert_eq!(load_files(&v).unwrap().entries, files.entries);
+
+        let mut notes = NoteData::default();
+        notes.entries.push(crate::model::NoteEntry {
+            id: "n1".into(),
+            title: "私密备忘".into(),
+            format: "markdown".into(),
+            group: None,
+            tags: vec!["ops".into()],
+            icon: None,
+            pinned: true,
+            sort_order: 0,
+            excerpt: Some("正文摘要".into()),
+            body_sha256: "bb".repeat(32),
+            asset_hashes: vec!["cc".repeat(32)],
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        });
+        save_notes(&v, &notes).unwrap();
+        let raw = std::fs::read(notes_path(&v)).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("私密备忘"));
+        assert_eq!(load_notes(&v).unwrap().entries, notes.entries);
         std::fs::remove_dir_all(&root).ok();
     }
 }

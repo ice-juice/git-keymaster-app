@@ -1,8 +1,9 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
 export function ReauthDialog({
-  title = "二次验证",
-  hint = "查看机密需要重新输入访问密码。",
+  title,
+  hint,
   onCancel,
   onConfirm,
 }: {
@@ -11,12 +12,13 @@ export function ReauthDialog({
   onCancel: () => void;
   onConfirm: (password: string) => Promise<void> | void;
 }) {
+  const { t } = useTranslation();
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   async function submit() {
-    if (!pw.trim()) return setErr("请输入访问密码");
+    if (!pw.trim()) return setErr(t("reauth.needPassword"));
     setBusy(true);
     setErr("");
     try {
@@ -32,12 +34,12 @@ export function ReauthDialog({
     <div className="wizard-overlay">
       <div className="card" style={{ width: 380, maxWidth: "94vw" }}>
         <div className="card-head">
-          <div className="card-title">{title}</div>
+          <div className="card-title">{title || t("reauth.title")}</div>
         </div>
         <div className="card-body stack">
-          <div className="muted">{hint}</div>
+          <div className="muted">{hint || t("reauth.hint")}</div>
           <div className="field">
-            <label className="field-label">访问密码</label>
+            <label className="field-label">{t("reauth.password")}</label>
             <input
               className="input"
               type="password"
@@ -50,10 +52,10 @@ export function ReauthDialog({
           {err && <div className="callout danger sm">{err}</div>}
           <div className="row" style={{ justifyContent: "flex-end" }}>
             <button type="button" className="btn ghost sm" onClick={onCancel}>
-              取消
+              {t("common.cancel")}
             </button>
             <button type="button" className="btn primary sm" disabled={busy} onClick={submit}>
-              {busy ? "验证中…" : "确认"}
+              {busy ? t("reauth.verifying") : t("reauth.confirm")}
             </button>
           </div>
         </div>

@@ -15,10 +15,12 @@ import { Badge, Empty } from "../ui/common";
 import { IconMark } from "../ui/IconMark";
 import { CountdownRing } from "../ui/CountdownRing";
 import { MobileListToolbar } from "../ui/MobileListToolbar";
+import { useTranslation } from "react-i18next";
 import { useAccountsModel, type AccountsModel } from "../shared/hooks/useAccountsModel";
 import { AccountsDialogs, AccountsFilters } from "./Accounts.shared";
 
 function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
+  const { t } = useTranslation();
   const linked = e.totpRef ? m.totpShown[e.totpRef] : undefined;
   const isCopiedUser = m.copiedKey === `user-${e.id}`;
   const isCopiedPw = m.copiedKey === `pw-${e.id}`;
@@ -31,9 +33,9 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
       <div className="m-account-card-user-row">
         <div className="m-account-user-title">
           <span className="m-account-username">{e.username}</span>
-          {e.pinned && <Badge kind="warn">置顶</Badge>}
-          {e.tags?.map((t) => (
-            <Badge key={t}>{t}</Badge>
+          {e.pinned && <Badge kind="warn">{t("accounts.pinned")}</Badge>}
+          {e.tags?.map((tag) => (
+            <Badge key={tag}>{tag}</Badge>
           ))}
         </div>
         <div className="m-account-meta-line">
@@ -42,8 +44,8 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
           {e.note && <span className="muted">{e.note}</span>}
           {(e.displayName || e.note) && e.lastUsedAt && <span>·</span>}
           {e.lastUsedAt && (
-            <span className="muted" title="最近使用时间">
-              使用: {e.lastUsedAt.slice(0, 16)}
+            <span className="muted" title={t("accounts.lastUsed")}>
+              {t("accounts.usedAt", { time: e.lastUsedAt.slice(0, 16) })}
             </span>
           )}
         </div>
@@ -51,7 +53,7 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
 
       {pwMissing && (
         <div className="callout danger sm" style={{ margin: 0 }}>
-          密码已丢失，请编辑并重新填入。
+          {t("accounts.pwLost")}
         </div>
       )}
 
@@ -66,7 +68,7 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
               type="button"
               className="btn ghost sm"
               style={{ padding: "4px 6px" }}
-              title="隐藏密码"
+              title={t("accounts.hidePw")}
               onClick={() => m.hidePw(e.id)}
             >
               <EyeOff size={14} />
@@ -76,7 +78,7 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
               type="button"
               className="btn ghost sm"
               style={{ padding: "4px 6px" }}
-              title={pwMissing ? "密码已丢失" : "显示明文"}
+              title={pwMissing ? t("accounts.pwLostShort") : t("accounts.showPw")}
               disabled={pwMissing}
               onClick={() => m.revealPw(e.id)}
             >
@@ -88,17 +90,17 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
             type="button"
             className={"btn sm " + (isCopiedPw ? "good" : "primary")}
             style={{ padding: "4px 10px", minHeight: 32 }}
-            title={pwMissing ? "密码已丢失" : "复制密码"}
+            title={pwMissing ? t("accounts.pwLostShort") : t("accounts.copyPw")}
             disabled={pwMissing}
             onClick={() => m.copyPw(e.id)}
           >
             {isCopiedPw ? (
               <>
-                <Check size={12} /> 已复制
+                <Check size={12} /> {t("common.copied")}
               </>
             ) : (
               <>
-                <Copy size={12} /> 密码
+                <Copy size={12} /> {t("accounts.password")}
               </>
             )}
           </button>
@@ -138,7 +140,7 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
                 onClick={() => m.copyLinkedTotp(e.totpRef!)}
               >
                 {isCopiedTotp ? <Check size={11} /> : <Copy size={11} />}
-                <span>{isCopiedTotp ? "已复制" : "复制 2FA"}</span>
+                <span>{isCopiedTotp ? t("common.copied") : t("accounts.copy2fa")}</span>
               </button>
             )}
           </div>
@@ -150,32 +152,32 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
         <button
           type="button"
           className={"btn sm " + (isCopiedUser ? "good" : "ghost")}
-          title="复制用户名"
+          title={t("accounts.copyUser")}
           onClick={() => m.copyUsername(e.id, e.username)}
         >
           {isCopiedUser ? <Check size={12} /> : <Copy size={12} />}
-          <span>{isCopiedUser ? "账号已复制" : "复制账号"}</span>
+          <span>{isCopiedUser ? t("accounts.copiedAccount") : t("accounts.copyAccount")}</span>
         </button>
 
         <button
           type="button"
           className="btn ghost sm"
-          title="查看密码历史版本"
+          title={t("accounts.history")}
           onClick={() => m.openHistory(e.id)}
         >
           <Clock size={12} />
-          <span>历史</span>
+          <span>{t("accounts.historyShort")}</span>
         </button>
 
         <button
           type="button"
           className="btn sm"
           disabled={m.writesLocked}
-          title="编辑账号"
+          title={t("accounts.edit")}
           onClick={() => m.setEditor({ ...e })}
         >
           <Edit3 size={12} />
-          <span>编辑</span>
+          <span>{t("common.edit")}</span>
         </button>
       </div>
     </div>
@@ -183,8 +185,9 @@ function AccountMobileCard({ e, m }: { e: AccountEntry; m: AccountsModel }) {
 }
 
 function AccountsMobileList({ m }: { m: AccountsModel }) {
+  const { t } = useTranslation();
   if (m.platforms.length === 0) {
-    return <Empty text={m.q ? "没有匹配的账密。" : "还没有账密。点击上方「添加」开始记录。"} />;
+    return <Empty text={m.q ? t("accounts.emptySearch") : t("accounts.emptyMobile")} />;
   }
 
   return (
@@ -220,7 +223,7 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
                     tabIndex={0}
                     className="btn ghost sm"
                     style={{ padding: "2px 4px", display: "inline-flex", alignItems: "center" }}
-                    title="打开官方网站"
+                    title={t("accounts.openSite")}
                     onClick={(ev) => {
                       ev.stopPropagation();
                       void api.openUrl(urlItem);
@@ -237,7 +240,7 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
                   type="button"
                   className="btn ghost sm"
                   style={{ padding: "4px 8px", fontSize: 12 }}
-                  title="统一修改该平台的名称和图标"
+                  title={t("accounts.editPlatform")}
                   onClick={() =>
                     m.setEditingPlatformModal({
                       platform,
@@ -246,7 +249,7 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
                   }
                 >
                   <Pencil size={12} />
-                  <span>改名</span>
+                  <span>{t("accounts.rename")}</span>
                 </button>
 
                 <button
@@ -263,7 +266,7 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
                   }
                 >
                   <Plus size={12} />
-                  <span>添加</span>
+                  <span>{t("pages.add")}</span>
                 </button>
               </div>
             </div>
@@ -284,6 +287,7 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
 }
 
 export function AccountsMobile() {
+  const { t } = useTranslation();
   const m = useAccountsModel();
 
   return (
@@ -291,8 +295,8 @@ export function AccountsMobile() {
       <MobileListToolbar
         query={m.q}
         onQueryChange={m.setQ}
-        placeholder="搜索平台 / 账号 / 标签"
-        addLabel="添加"
+        placeholder={t("accounts.searchShort")}
+        addLabel={t("pages.add")}
         addDisabled={m.writesLocked}
         onAdd={() => m.setEditor({})}
       />

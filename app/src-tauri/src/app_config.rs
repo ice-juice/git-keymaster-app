@@ -32,6 +32,13 @@ fn default_account_history_limit() -> u32 {
     10
 }
 
+pub const DEFAULT_ATTACHMENT_PER_FILE_LIMIT_MB: u32 = 100;
+pub const MAX_ATTACHMENT_PER_FILE_LIMIT_MB: u32 = 100;
+
+fn default_attachment_per_file_limit_mb() -> u32 {
+    DEFAULT_ATTACHMENT_PER_FILE_LIMIT_MB
+}
+
 fn default_biometric_method() -> String {
     "auto".into()
 }
@@ -57,6 +64,15 @@ pub fn clamp_clipboard_clear_seconds(seconds: u32) -> u32 {
 
 pub fn clamp_account_history_limit(n: u32) -> u32 {
     n.clamp(1, 50)
+}
+
+/// 单文件上限，默认且封顶 100 MB。
+pub fn clamp_attachment_per_file_limit_mb(n: u32) -> u32 {
+    n.clamp(1, MAX_ATTACHMENT_PER_FILE_LIMIT_MB)
+}
+
+pub fn attachment_per_file_limit_bytes(limit_mb: u32) -> u64 {
+    u64::from(clamp_attachment_per_file_limit_mb(limit_mb)) * 1024 * 1024
 }
 
 /// 0 表示关闭；其余夹到 5–1440 分钟。
@@ -152,6 +168,18 @@ pub struct AppConfig {
     /// 运行时界面语言：`system` | `zh` | `en`。只影响 React 文案，不写卸载项。
     #[serde(default = "default_ui_locale")]
     pub ui_locale: String,
+    /// 文件保险库 / 备忘录附件单文件上限（MiB）。默认 100，总量不设限。
+    #[serde(default = "default_attachment_per_file_limit_mb")]
+    pub attachment_per_file_limit_mb: u32,
+    /// 仅在 Wi-Fi / 以太网下同步附件与备忘录图片。默认开。
+    #[serde(default = "default_true")]
+    pub sync_attachments_wifi_only: bool,
+    /// 附件不参与自动同步，仅手动推送/拉取。默认关。
+    #[serde(default)]
+    pub sync_attachments_manual_only: bool,
+    /// 移动端主界面再按返回：true 回到系统桌面且不杀进程；false 退出应用。
+    #[serde(default)]
+    pub mobile_background_run: bool,
 }
 
 /// 本机 HTTP/HTTPS/SOCKS5 代理。
@@ -274,6 +302,10 @@ impl Default for AppConfig {
             biometric_reveal_secret: false,
             biometric_method: default_biometric_method(),
             ui_locale: default_ui_locale(),
+            attachment_per_file_limit_mb: default_attachment_per_file_limit_mb(),
+            sync_attachments_wifi_only: true,
+            sync_attachments_manual_only: false,
+            mobile_background_run: false,
         }
     }
 }
@@ -335,6 +367,12 @@ mod tests {
         assert_eq!(cfg.network_proxy, None);
         assert_eq!(cfg.biometric_method, "auto");
         assert_eq!(cfg.ui_locale, "system");
+        assert_eq!(
+            cfg.attachment_per_file_limit_mb,
+            DEFAULT_ATTACHMENT_PER_FILE_LIMIT_MB
+        );
+        assert!(cfg.sync_attachments_wifi_only);
+        assert!(!cfg.sync_attachments_manual_only);
         assert_eq!(clamp_ui_locale("ZH"), "zh");
         assert_eq!(clamp_ui_locale("en"), "en");
         assert_eq!(clamp_ui_locale("nope"), "system");
@@ -378,5 +416,17 @@ mod tests {
         assert_eq!(clamp_auto_sync_minutes(1), MIN_AUTO_SYNC_MINUTES);
         assert_eq!(clamp_auto_sync_minutes(30), 30);
         assert_eq!(clamp_auto_sync_minutes(9999), MAX_AUTO_SYNC_MINUTES);
+    }
+
+    #[test]
+    fn clamp_attachment_per_file_limit_caps_at_100() {
+        assert_eq!(clamp_attachment_per_file_limit_mb(0), 1);
+        assert_eq!(clamp_attachment_per_file_limit_mb(50), 50);
+        assert_eq!(clamp_attachment_per_file_limit_mb(100), 100);
+        assert_eq!(clamp_attachment_per_file_limit_mb(999), 100);
+        assert_eq!(
+            attachment_per_file_limit_bytes(100),
+            100 * 1024 * 1024
+        );
     }
 }

@@ -24,6 +24,8 @@ pub const LABEL_METADATA: &[u8] = b"gam-metadata-v1";
 pub const LABEL_SYNC_OBJECT: &[u8] = b"gam-sync-object-v1";
 /// 云对象名 HMAC（v1.1）
 pub const LABEL_SYNC_NAME: &[u8] = b"gam-sync-name-v1";
+/// 文件保险库 / 备忘录 blob 内容加密（v1.6）
+pub const LABEL_FILE_BLOB: &[u8] = b"gam-file-blob-v1";
 
 /// 32 字节主密钥，Drop 时自动清零。
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
@@ -81,17 +83,51 @@ pub fn random_vec(n: usize) -> Vec<u8> {
 
 /// XChaCha20-Poly1305 加密，返回 密文||tag。
 pub fn aead_encrypt(key: &[u8; KEY_LEN], nonce: &[u8; XNONCE_LEN], plaintext: &[u8]) -> Result<Vec<u8>> {
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
-    cipher
-        .encrypt(XNonce::from_slice(nonce), plaintext)
-        .map_err(|_| AppError::Crypto)
+    aead_encrypt_with_aad(key, nonce, plaintext, &[])
 }
 
 /// XChaCha20-Poly1305 解密（AEAD，tag 校验失败即返回错误）。
 pub fn aead_decrypt(key: &[u8; KEY_LEN], nonce: &[u8; XNONCE_LEN], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    aead_decrypt_with_aad(key, nonce, ciphertext, &[])
+}
+
+/// 带 AAD 的加密。AAD 参与认证但不写入密文，用于绑定块序号等上下文。
+pub fn aead_encrypt_with_aad(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; XNONCE_LEN],
+    plaintext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>> {
+    use chacha20poly1305::aead::Payload;
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     cipher
-        .decrypt(XNonce::from_slice(nonce), ciphertext)
+        .encrypt(
+            XNonce::from_slice(nonce),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|_| AppError::Crypto)
+}
+
+/// 带 AAD 的解密。AAD 必须与加密时完全一致。
+pub fn aead_decrypt_with_aad(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; XNONCE_LEN],
+    ciphertext: &[u8],
+    aad: &[u8],
+) -> Result<Vec<u8>> {
+    use chacha20poly1305::aead::Payload;
+    let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
+    cipher
+        .decrypt(
+            XNonce::from_slice(nonce),
+            Payload {
+                msg: ciphertext,
+                aad,
+            },
+        )
         .map_err(|_| AppError::Crypto)
 }
 
@@ -145,6 +181,28 @@ mod tests {
         let nonce = new_nonce();
         let ct = aead_encrypt(&[1u8; KEY_LEN], &nonce, b"data").unwrap();
         assert!(aead_decrypt(&[2u8; KEY_LEN], &nonce, &ct).is_err());
+    }
+
+    #[test]
+    fn aead_wrong_aad_rejected() {
+        let key = [4u8; KEY_LEN];
+        let nonce = new_nonce();
+        let ct = aead_encrypt_with_aad(&key, &nonce, b"chunk", &0u64.to_le_bytes()).unwrap();
+        assert!(aead_decrypt_with_aad(&key, &nonce, &ct, &1u64.to_le_bytes()).is_err());
+        assert_eq!(
+            aead_decrypt_with_aad(&key, &nonce, &ct, &0u64.to_le_bytes()).unwrap(),
+            b"chunk"
+        );
+    }
+
+    #[test]
+    fn file_blob_label_is_separated() {
+        let mk = MasterKey([9u8; KEY_LEN]);
+        let a = mk.subkey(LABEL_KEYFILE);
+        let b = mk.subkey(LABEL_METADATA);
+        let c = mk.subkey(LABEL_FILE_BLOB);
+        assert_ne!(a, c);
+        assert_ne!(b, c);
     }
 
     #[test]

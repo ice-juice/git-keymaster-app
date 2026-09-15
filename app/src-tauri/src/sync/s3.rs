@@ -11,7 +11,9 @@ use crate::error::{AppError, Result};
 use crate::net;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
-use std::time::Instant;
+use std::io::{Read, Write};
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -110,6 +112,80 @@ impl S3Client {
     pub fn put_object(&self, key: &str, data: &[u8]) -> Result<()> {
         let full_key = self.full_key(key);
         self.put_object_internal(&full_key, data)
+    }
+
+    /// 流式上传本地文件：先流式哈希再 PUT 文件句柄，避免整块进内存。
+    pub fn put_object_file(&self, key: &str, path: &Path) -> Result<()> {
+        let full_key = self.full_key(key);
+        let payload_hash = sha256_file(path)?;
+        let size = std::fs::metadata(path)?.len();
+        let (url, host, canonical_uri) = self.build_target(&full_key, "")?;
+        let (headers, _) = self.sign_request_hashed("PUT", &host, &canonical_uri, "", &payload_hash)?;
+        let file = std::fs::File::open(path)?;
+        let mut req = self
+            .client
+            .put(&url)
+            .body(file)
+            .header("content-length", size)
+            .timeout(Duration::from_secs(900));
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        let resp = req
+            .send()
+            .map_err(|e| AppError::Invalid(format!("连接云存储失败: {e}")))?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(AppError::Invalid(format!(
+                "上传失败 (HTTP {}): {}",
+                status,
+                extract_s3_error(&body)
+            )));
+        }
+        Ok(())
+    }
+
+    /// 流式下载对象到本地文件。不存在返回 Ok(false)。
+    pub fn get_object_to_file(&self, key: &str, dest: &Path) -> Result<bool> {
+        let full_key = self.full_key(key);
+        let (url, host, canonical_uri) = self.build_target(&full_key, "")?;
+        let (headers, _) = self.sign_request("GET", &host, &canonical_uri, "", &[])?;
+        let mut req = self.client.get(&url).timeout(Duration::from_secs(900));
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        let mut resp = req
+            .send()
+            .map_err(|e| AppError::Invalid(format!("连接云存储失败: {e}")))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            return Err(AppError::Invalid(format!(
+                "下载失败 (HTTP {}): {}",
+                status,
+                extract_s3_error(&body)
+            )));
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let tmp = dest.with_extension("part");
+        let mut out = std::fs::File::create(&tmp)?;
+        std::io::copy(&mut resp, &mut out)
+            .map_err(|e| AppError::Invalid(format!("写入下载文件失败: {e}")))?;
+        out.flush()?;
+        drop(out);
+        if let Err(e) = std::fs::rename(&tmp, dest) {
+            std::fs::copy(&tmp, dest).map_err(|copy_err| {
+                AppError::Io(format!("保存下载文件失败：{e} / {copy_err}"))
+            })?;
+            let _ = std::fs::remove_file(&tmp);
+        }
+        Ok(true)
     }
 
     /// 读取对象数据（若不存在返回 None）
@@ -294,6 +370,23 @@ impl S3Client {
         canonical_query_string: &str,
         payload: &[u8],
     ) -> Result<(Vec<(String, String)>, String)> {
+        self.sign_request_hashed(
+            method,
+            host,
+            canonical_uri,
+            canonical_query_string,
+            &sha256_hex(payload),
+        )
+    }
+
+    fn sign_request_hashed(
+        &self,
+        method: &str,
+        host: &str,
+        canonical_uri: &str,
+        canonical_query_string: &str,
+        payload_hash: &str,
+    ) -> Result<(Vec<(String, String)>, String)> {
         let now = time::OffsetDateTime::now_utc();
         let amz_date = format!(
             "{:04}{:02}{:02}T{:02}{:02}{:02}Z",
@@ -310,8 +403,6 @@ impl S3Client {
             now.month() as u8,
             now.day()
         );
-
-        let payload_hash = sha256_hex(payload);
 
         // Canonical Headers
         let canonical_headers = format!(
@@ -360,7 +451,7 @@ impl S3Client {
 
         let headers = vec![
             ("x-amz-date".to_string(), amz_date.clone()),
-            ("x-amz-content-sha256".to_string(), payload_hash),
+            ("x-amz-content-sha256".to_string(), payload_hash.to_string()),
             ("authorization".to_string(), auth_header),
             ("host".to_string(), host.to_string()),
         ];
@@ -373,6 +464,20 @@ fn sha256_hex(data: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(data);
     hex_encode(&hasher.finalize())
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(&hasher.finalize()))
 }
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Result<[u8; 32]> {

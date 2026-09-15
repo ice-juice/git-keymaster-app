@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 const VIEW_CACHE_TTL: Duration = Duration::from_secs(45);
 
@@ -305,12 +305,7 @@ pub fn get_cloud_sync_page(state: State<AppState>) -> Result<CloudSyncPageData> 
         let cfg = recover_lock(&state.config);
         (
             cfg.cloud_sync.clone(),
-            AutoSyncSettings {
-                minutes: cfg.auto_sync_minutes,
-                last_auto_sync_at: cfg.last_auto_sync_at.clone(),
-                last_auto_sync_message: cfg.last_auto_sync_message.clone(),
-                default_minutes: app_config::DEFAULT_AUTO_SYNC_MINUTES,
-            },
+            auto_sync_from_cfg(&cfg),
         )
     };
 
@@ -330,7 +325,7 @@ pub fn get_cloud_sync_page(state: State<AppState>) -> Result<CloudSyncPageData> 
 }
 
 #[tauri::command]
-pub async fn cloud_sync_push(state: State<'_, AppState>) -> Result<SyncResult> {
+pub async fn cloud_sync_push(app: AppHandle, state: State<'_, AppState>) -> Result<SyncResult> {
     crate::commands::ensure_writes_allowed(&state)?;
     let vault = clone_unlocked_vault(&state)?;
     let (sync_config, app_cfg) = {
@@ -346,7 +341,10 @@ pub async fn cloud_sync_push(state: State<'_, AppState>) -> Result<SyncResult> {
 
     let result = run_cloud_io(move || {
         let client = reuse_or_create_s3_client(sync_config, &app_cfg)?;
-        let result = engine::push_to_cloud(&vault, &client)?;
+        let progress = |p: engine::BlobSyncProgress| {
+            let _ = app.emit("blob-sync-progress", &p);
+        };
+        let result = engine::push_to_cloud_with(&vault, &client, engine::BlobSyncScope::All, Some(&progress))?;
         let _ = crate::commands::write::reconcile_ssh_hosts(&vault);
         Ok(result)
     })
@@ -356,7 +354,7 @@ pub async fn cloud_sync_push(state: State<'_, AppState>) -> Result<SyncResult> {
 }
 
 #[tauri::command]
-pub async fn cloud_sync_pull(state: State<'_, AppState>) -> Result<SyncResult> {
+pub async fn cloud_sync_pull(app: AppHandle, state: State<'_, AppState>) -> Result<SyncResult> {
     let vault = clone_unlocked_vault(&state)?;
     let (sync_config, app_cfg) = {
         let config = recover_lock(&state.config);
@@ -371,7 +369,10 @@ pub async fn cloud_sync_pull(state: State<'_, AppState>) -> Result<SyncResult> {
 
     let result = run_cloud_io(move || {
         let client = reuse_or_create_s3_client(sync_config, &app_cfg)?;
-        let result = engine::pull_from_cloud(&vault, &client)?;
+        let progress = |p: engine::BlobSyncProgress| {
+            let _ = app.emit("blob-sync-progress", &p);
+        };
+        let result = engine::pull_from_cloud_with(&vault, &client, engine::BlobSyncScope::All, Some(&progress))?;
         let _ = crate::commands::write::reconcile_ssh_hosts(&vault);
         Ok(result)
     })
@@ -387,17 +388,24 @@ pub struct AutoSyncSettings {
     pub last_auto_sync_at: Option<String>,
     pub last_auto_sync_message: Option<String>,
     pub default_minutes: u32,
+    pub sync_attachments_wifi_only: bool,
+    pub sync_attachments_manual_only: bool,
 }
 
-#[tauri::command]
-pub fn get_auto_sync_settings(state: State<AppState>) -> AutoSyncSettings {
-    let cfg = recover_lock(&state.config);
+fn auto_sync_from_cfg(cfg: &crate::app_config::AppConfig) -> AutoSyncSettings {
     AutoSyncSettings {
         minutes: cfg.auto_sync_minutes,
         last_auto_sync_at: cfg.last_auto_sync_at.clone(),
         last_auto_sync_message: cfg.last_auto_sync_message.clone(),
         default_minutes: app_config::DEFAULT_AUTO_SYNC_MINUTES,
+        sync_attachments_wifi_only: cfg.sync_attachments_wifi_only,
+        sync_attachments_manual_only: cfg.sync_attachments_manual_only,
     }
+}
+
+#[tauri::command]
+pub fn get_auto_sync_settings(state: State<AppState>) -> AutoSyncSettings {
+    auto_sync_from_cfg(&recover_lock(&state.config))
 }
 
 #[tauri::command]
@@ -407,6 +415,26 @@ pub fn set_auto_sync_minutes(state: State<AppState>, minutes: u32) -> Result<u32
     cfg.auto_sync_minutes = minutes;
     cfg.save()?;
     Ok(minutes)
+}
+
+#[tauri::command]
+pub fn set_attachment_sync_guards(
+    state: State<AppState>,
+    wifi_only: bool,
+    manual_only: bool,
+) -> Result<AutoSyncSettings> {
+    let mut cfg = recover_lock(&state.config);
+    cfg.sync_attachments_wifi_only = wifi_only;
+    cfg.sync_attachments_manual_only = manual_only;
+    cfg.save()?;
+    Ok(auto_sync_from_cfg(&cfg))
+}
+
+#[tauri::command]
+pub fn report_network_unmetered(state: State<AppState>, unmetered: bool) {
+    state
+        .network_unmetered
+        .store(unmetered, std::sync::atomic::Ordering::Relaxed);
 }
 
 fn require_client(state: &AppState) -> Result<S3Client> {

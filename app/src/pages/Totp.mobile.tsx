@@ -16,10 +16,12 @@ import { Badge, Empty } from "../ui/common";
 import { IconMark } from "../ui/IconMark";
 import { CountdownRing } from "../ui/CountdownRing";
 import { MobileListToolbar } from "../ui/MobileListToolbar";
+import { useTranslation } from "react-i18next";
 import { useTotpModel, clipNote, type TotpModel } from "../shared/hooks/useTotpModel";
 import { formatCode, TotpDialogs, TotpFilters } from "./Totp.shared";
 
 function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
+  const { t } = useTranslation();
   const shown = m.codes[e.id];
   const seedMissing = e.hasSeed === false;
   const isCopied = m.copiedId === e.id;
@@ -39,7 +41,7 @@ function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
                   type="button"
                   className="btn ghost sm"
                   style={{ padding: "0 2px" }}
-                  title="访问登录页面"
+                  title={t("totp.openSite")}
                   onClick={(ev) => {
                     ev.stopPropagation();
                     api.openUrl(e.url!);
@@ -64,7 +66,7 @@ function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
           <button
             type="button"
             className="m-totp-op-btn"
-            title="取回原始密钥"
+            title={t("totp.secretTitle")}
             onClick={() => m.openSecret(e.id)}
           >
             <KeyRound size={14} />
@@ -73,7 +75,7 @@ function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
             type="button"
             className="m-totp-op-btn"
             disabled={m.writesLocked}
-            title="编辑"
+            title={t("common.edit")}
             onClick={() => m.setEditor({ ...e })}
           >
             <Edit3 size={14} />
@@ -82,7 +84,7 @@ function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
             type="button"
             className="m-totp-op-btn danger"
             disabled={m.writesLocked}
-            title="删除"
+            title={t("common.delete")}
             onClick={() => m.deleteEntry(e)}
           >
             <Trash2 size={14} />
@@ -92,7 +94,7 @@ function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
 
       {seedMissing && (
         <div className="callout danger sm" style={{ margin: 0 }}>
-          种子已丢失，请编辑重新填入密钥。
+          {t("totp.seedLostShort")}
         </div>
       )}
 
@@ -120,11 +122,11 @@ function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
               <span className={"m-totp-copy-tag" + (isCopied ? " copied" : "")}>
                 {isCopied ? (
                   <>
-                    <Check size={12} /> 已复制
+                    <Check size={12} /> {t("totp.copied")}
                   </>
                 ) : (
                   <>
-                    <Copy size={12} /> 复制
+                    <Copy size={12} /> {t("common.copy")}
                   </>
                 )}
               </span>
@@ -143,7 +145,7 @@ function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
               }}
             >
               <Eye size={13} />
-              <span>查看验证码</span>
+              <span>{t("totp.viewCode")}</span>
             </button>
           </>
         )}
@@ -153,6 +155,7 @@ function TotpMobileCard({ e, m }: { e: TotpEntry; m: TotpModel }) {
 }
 
 export function TotpMobile() {
+  const { t } = useTranslation();
   const m = useTotpModel();
   const [sheetOpen, setSheetOpen] = useState(false);
 
@@ -161,30 +164,30 @@ export function TotpMobile() {
       <MobileListToolbar
         query={m.q}
         onQueryChange={m.setQ}
-        placeholder="搜索平台 / 账号"
-        addLabel="添加"
+        placeholder={t("totp.searchShort")}
+        addLabel={t("pages.add")}
         addDisabled={m.writesLocked || m.busy}
         sheetOpen={sheetOpen}
         onSheetOpenChange={setSheetOpen}
         addActions={[
           {
             key: "scan",
-            label: "扫码导入",
-            hint: "打开摄像头识别二维码",
+            label: t("totp.scanImport"),
+            hint: t("totp.scanImportHint"),
             icon: <Camera size={18} />,
             onClick: () => void m.scanCamera(),
           },
           {
             key: "image",
-            label: "导入图片",
-            hint: "从相册选择二维码截图",
+            label: t("pages.importImage"),
+            hint: t("totp.importImageHint"),
             icon: <ImagePlus size={18} />,
             onClick: () => void m.importImage(),
           },
           {
             key: "manual",
-            label: "手动添加",
-            hint: "填写平台、账号与密钥",
+            label: t("totp.manualAdd"),
+            hint: t("totp.manualAddHint"),
             icon: <Plus size={18} />,
             disabled: m.writesLocked,
             onClick: () => m.setEditor({}),
@@ -196,7 +199,7 @@ export function TotpMobile() {
 
       {m.filtered.length === 0 ? (
         <div className="card" style={{ padding: "30px 10px" }}>
-          <Empty icon="⏳" text={m.q ? "没有匹配的 2FA 条目。" : "还没有 2FA 密钥。点右上角「添加」扫码或手动录入。"} />
+          <Empty icon="⏳" text={m.q ? t("totp.emptySearch") : t("totp.emptyMobile")} />
         </div>
       ) : (
         <div className="m-totp-list">

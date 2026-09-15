@@ -1,4 +1,5 @@
 import { api, type ClipboardWriteResult } from "./ipc";
+import { i18n } from "./i18n";
 
 function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -56,7 +57,7 @@ export async function writeClipboard(text: string, secret = false): Promise<Clip
     }
   }
   if (syncOk || (await copyTextWeb(text))) return PLAIN;
-  throw new Error("复制失败，请检查系统剪贴板权限");
+  throw new Error(i18n.t("common.copyFailedPerm"));
 }
 
 export async function clearClipboard() {

@@ -76,7 +76,8 @@ pub fn run() {
         .plugin(camera_perm::init())
         .plugin(clipboard::init())
         .plugin(biometric::init())
-        .plugin(mobile::update::init());
+        .plugin(mobile::update::init())
+        .plugin(mobile::nav::init());
 
     // 官方 updater 只编进桌面三 OS。安卓侧载走 mobile::update，禁止把插件加进 APK。
     // 必须用 target_os，不能用 Tauri 的 `desktop`：交叉编译到 Android 时
@@ -103,6 +104,7 @@ pub fn run() {
             commands::vault::vault_try_grace_unlock,
             commands::vault::set_launch_at_login,
             commands::vault::set_grace_days,
+            commands::vault::set_mobile_background_run,
             commands::vault::factory_reset,
             commands::biometric::biometric_status,
             commands::biometric::biometric_enable,
@@ -173,6 +175,8 @@ pub fn run() {
             commands::sync::cloud_sync_pull,
             commands::sync::get_auto_sync_settings,
             commands::sync::set_auto_sync_minutes,
+            commands::sync::set_attachment_sync_guards,
+            commands::sync::report_network_unmetered,
             commands::sync::list_cloud_snapshots,
             commands::sync::restore_cloud_snapshot,
             commands::sync::run_auto_sync_now,
@@ -180,6 +184,7 @@ pub fn run() {
             commands::sync::restore_from_cloud,
             commands::locale::get_ui_locale,
             commands::locale::set_ui_locale,
+            commands::window::mobile_leave_app,
             commands::window::apply_close_choice,
             commands::window::get_close_preference,
             commands::window::clear_close_preference,
@@ -220,6 +225,23 @@ pub fn run() {
             commands::accounts::account_reveal_history,
             commands::accounts::account_rollback_history,
             commands::accounts::account_clear_history,
+            commands::files::file_list,
+            commands::files::file_add_from_path,
+            commands::files::file_add_from_paths,
+            commands::files::file_add_bytes,
+            commands::files::file_add_bytes_many,
+            commands::files::file_update,
+            commands::files::file_delete,
+            commands::files::file_export,
+            commands::files::file_save_groups,
+            commands::notes::note_list,
+            commands::notes::note_get_body,
+            commands::notes::note_upsert,
+            commands::notes::note_delete,
+            commands::notes::note_asset_add,
+            commands::notes::note_asset_get,
+            commands::notes::note_save_groups,
+            commands::notes::note_export,
             commands::secrets_ui::clipboard_write,
             commands::secrets_ui::clipboard_clear,
             commands::secrets_ui::get_reveal_settings,

@@ -13,6 +13,7 @@ import { resolvePlatform } from "../../platform/resolve";
 import { resolvePlatformBrand, platformFamily } from "../../lib/accountInput";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { useApp } from "../../store";
+import { i18n } from "../../lib/i18n";
 
 export function useAccountsModel() {
   const { writesLocked } = useApp();
@@ -104,7 +105,7 @@ export function useAccountsModel() {
     try {
       await copyWithClear(username, undefined, false);
     } catch (e) {
-      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || i18n.t("common.copyFailed"));
       return;
     }
     triggerCopied(`user-${id}`);
@@ -219,7 +220,7 @@ export function useAccountsModel() {
     try {
       await copyWithClear(pw);
     } catch (e) {
-      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || i18n.t("common.copyFailed"));
       return;
     }
     await api.accountTouch(id);
@@ -242,7 +243,7 @@ export function useAccountsModel() {
     try {
       await copyWithClear(item.code.replace(/\s/g, ""));
     } catch (e) {
-      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || i18n.t("common.copyFailed"));
       return;
     }
     triggerCopied(`totp-${totpId}`);
@@ -262,15 +263,15 @@ export function useAccountsModel() {
       const platformInput = (editor.platform || "").trim();
 
       if (!platformInput) {
-        setErr("平台名称不能为空");
+        setErr(i18n.t("accounts.needPlatform"));
         return;
       }
       if (!username) {
-        setErr("用户名不能为空");
+        setErr(i18n.t("accounts.needUser"));
         return;
       }
       if (!editor.id && !editor.password?.trim()) {
-        setErr("请填写密码");
+        setErr(i18n.t("accounts.needPassword"));
         return;
       }
 
@@ -287,11 +288,11 @@ export function useAccountsModel() {
           e.platform.trim().toLowerCase() === platform.toLowerCase() &&
           e.username.trim().toLowerCase() === username.toLowerCase(),
       );
-      if (dup && !window.confirm(`已存在 ${platform} / ${username}，仍要保存吗？`)) {
+      if (dup && !window.confirm(i18n.t("accounts.dupConfirm", { platform, username }))) {
         return;
       }
       if (editor.id && editor.hasPassword === false && !editor.password?.trim()) {
-        setErr("这条账号的密码已丢失，请重新填入密码。");
+        setErr(i18n.t("accounts.pwLostSave"));
         return;
       }
       const cleanPassword = editor.password?.trim() || undefined;
@@ -332,7 +333,7 @@ export function useAccountsModel() {
     if (!editor?.id) return;
     setPendingDelete({
       id: editor.id,
-      platform: editor.platform?.trim() || "未命名平台",
+      platform: editor.platform?.trim() || i18n.t("accounts.unnamed"),
       username: editor.username?.trim() || "",
     });
   }
@@ -365,7 +366,7 @@ export function useAccountsModel() {
 
   async function rollbackHistory(index: number, replacedAt: string) {
     if (!historyFor) return;
-    if (!window.confirm(`确认将密码回滚到此历史版本（${replacedAt}）？`)) return;
+    if (!window.confirm(i18n.t("accounts.rollbackConfirm", { at: replacedAt }))) return;
     await api.accountRollbackHistory(historyFor.id, index);
     setHistoryFor(null);
     await load();
@@ -373,7 +374,7 @@ export function useAccountsModel() {
 
   async function clearHistory() {
     if (!historyFor) return;
-    if (!window.confirm("确定要清空该账号的所有历史版本记录吗？此操作不可逆。")) return;
+    if (!window.confirm(i18n.t("accounts.clearHistConfirm"))) return;
     await api.accountClearHistory(historyFor.id);
     setHistoryFor({ id: historyFor.id, items: [] });
   }
@@ -381,7 +382,7 @@ export function useAccountsModel() {
   async function updatePlatformBrand(oldPlatform: string, newPlatformName: string, newIcon?: string) {
     const trimmedName = newPlatformName.trim();
     if (!trimmedName) {
-      setErr("平台名称不能为空");
+      setErr(i18n.t("accounts.needPlatform"));
       return;
     }
 

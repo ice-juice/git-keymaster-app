@@ -1,3 +1,5 @@
+import { i18n } from "./i18n";
+
 /** 识别账号表单里粘贴的是网址还是平台名，并尽量回填平台 / URL / 图标。 */
 
 export interface BuiltinHint {
@@ -16,7 +18,7 @@ export interface DetectedAccountSource {
 export function detectAccountSource(raw: string, builtins: BuiltinHint[]): DetectedAccountSource {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { kind: "empty", platform: "", message: "填网站名，或直接粘贴登录页网址。" };
+    return { kind: "empty", platform: "", message: i18n.t("accounts.detectEmpty") };
   }
 
   if (looksLikeUrl(trimmed)) {
@@ -34,7 +36,7 @@ export function detectAccountSource(raw: string, builtins: BuiltinHint[]): Detec
       platform,
       url,
       icon,
-      message: `已识别网址，平台填为「${platform}」。`,
+      message: i18n.t("accounts.urlDetected", { name: platform }),
     };
   }
 
@@ -43,7 +45,9 @@ export function detectAccountSource(raw: string, builtins: BuiltinHint[]): Detec
     kind: "name",
     platform: trimmed,
     icon,
-    message: icon ? `将使用「${builtins.find((b) => `builtin:${b.id}` === icon)?.name}」图标。` : "保存时会按平台名自动匹配图标。",
+    message: icon
+      ? i18n.t("accounts.detectIcon", { name: builtins.find((b) => `builtin:${b.id}` === icon)?.name ?? "" })
+      : i18n.t("accounts.detectName"),
   };
 }
 

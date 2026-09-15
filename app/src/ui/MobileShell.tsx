@@ -1,5 +1,5 @@
 import { type ReactNode } from "react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Cloud,
@@ -7,11 +7,13 @@ import {
   Lock,
   ShieldCheck,
   UserRound,
+  ChevronLeft,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AppLogo } from "./AppLogo";
 import { useApp } from "../store";
 import { useAppName } from "../lib/config";
+import { dispatchMobileHierarchyBack, useMobileHierarchyBack } from "../shared/useMobileHierarchyBack";
 
 /**
  * 移动端外壳：顶部精简标题 + 内容区 + 底部 Tab。
@@ -24,9 +26,12 @@ import { useAppName } from "../lib/config";
 
 export function MobileShell({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
-  const { lock, writesLocked, startupNote } = useApp();
+  const { lock, writesLocked, startupNote, status } = useApp();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const APP_NAME = useAppName();
+  const isSubpage = pathname !== "/";
+  useMobileHierarchyBack();
 
   const TABS = [
     { to: "/", label: t("mobileNav.overview"), icon: LayoutDashboard, end: true },
@@ -40,6 +45,8 @@ export function MobileShell({ children }: { children: ReactNode }) {
     "/": t("page.overview"),
     "/totp": t("page.totp"),
     "/accounts": t("page.accounts"),
+    "/files": t("page.files"),
+    "/notes": t("page.notes"),
     "/sync": t("page.sync"),
     "/settings": t("page.settings"),
   };
@@ -49,7 +56,20 @@ export function MobileShell({ children }: { children: ReactNode }) {
   return (
     <div className="m-shell">
       <header className="m-topbar">
-        <AppLogo size={22} />
+        {isSubpage ? (
+          <button
+            type="button"
+            className="m-icon-btn"
+            aria-label={t("common.back")}
+            onClick={() => {
+              dispatchMobileHierarchyBack(pathname, navigate, !!status?.unlocked, !!status?.mobileBackgroundRun);
+            }}
+          >
+            <ChevronLeft size={22} />
+          </button>
+        ) : (
+          <AppLogo size={22} />
+        )}
         <div className="m-topbar-copy">
           <div className="m-topbar-brand">{APP_NAME}</div>
           <div className="m-topbar-page">{pageTitle}</div>
@@ -83,6 +103,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
               key={tab.to}
               to={tab.to}
               end={tab.end}
+              replace
               className={({ isActive }) => "m-tab" + (isActive ? " active" : "")}
             >
               <Icon size={20} />

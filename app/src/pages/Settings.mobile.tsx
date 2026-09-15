@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { pushMobileBack } from "../shared/mobileBack";
 import { useTranslation } from "react-i18next";
 import {
   Languages,
@@ -54,6 +55,16 @@ export function SettingsMobile() {
   const { uiLocale } = useLocale();
   const m = useSettingsModel();
   const [subSection, setSubSection] = useState<SubSection>(null);
+
+  useEffect(() => {
+    if (subSection === null) return;
+    return pushMobileBack(() => {
+      m.setErr("");
+      m.setMsg("");
+      setSubSection(null);
+      return true;
+    });
+  }, [subSection]);
 
   const currentThemeName = t(`theme.options.${m.theme}.name`);
   const localeLabel = t(`settings.language.${uiLocale}`);
@@ -128,13 +139,13 @@ export function SettingsMobile() {
 
         {/* 2. 解锁动画 */}
         {subSection === "animation" && (
-          <Card title="开门过场动画">
+          <Card title={t("settings.doorAnim")}>
             <div className="stack">
               <div className="row between">
                 <div>
-                  <div style={{ fontWeight: 600, fontSize: 14 }}>解锁过场动画</div>
+                  <div style={{ fontWeight: 600, fontSize: 14 }}>{t("settings.unlockAnim")}</div>
                   <div className="hint" style={{ marginTop: 2 }}>
-                    密码验证成功后播放视觉过渡动画
+                    {t("settings.unlockAnimHint")}
                   </div>
                 </div>
                 <button
@@ -148,7 +159,7 @@ export function SettingsMobile() {
                 <div style={{ marginTop: 14, display: "flex", flexDirection: "column", gap: 12 }}>
                   <div className="row between">
                     <span className="hint" style={{ fontWeight: 600, color: "var(--text)" }}>
-                      动画风格
+                      {t("settings.animStyle")}
                     </span>
                     <button
                       type="button"
@@ -156,7 +167,7 @@ export function SettingsMobile() {
                       onClick={() => m.startUnlockAnim(m.unlockAnimStyle)}
                       style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
                     >
-                      <Play size={13} /> 预览动画
+                      <Play size={13} /> {t("settings.previewAnim")}
                     </button>
                   </div>
 
@@ -178,10 +189,10 @@ export function SettingsMobile() {
                           }}
                         >
                           <div className="row between" style={{ marginBottom: 3 }}>
-                            <span style={{ fontWeight: 650, fontSize: 13.5 }}>{st.label}</span>
-                            {active && <Badge kind="info">当前选中</Badge>}
+                            <span style={{ fontWeight: 650, fontSize: 13.5 }}>{t(`anim.${st.id}.label`)}</span>
+                            {active && <Badge kind="info">{t("settings.selected")}</Badge>}
                           </div>
-                          <div className="muted sm">{st.desc}</div>
+                          <div className="muted sm">{t(`anim.${st.id}.desc`)}</div>
                         </div>
                       );
                     })}
@@ -208,34 +219,34 @@ export function SettingsMobile() {
 
         {/* 4. 修改密码 */}
         {subSection === "password" && (
-          <Card title="更新主访问密码">
+          <Card title={t("settings.changePwTitle")}>
             <div className="stack">
               <div className="field">
-                <label className="field-label">当前密码</label>
+                <label className="field-label">{t("settings.currentPw")}</label>
                 <input
                   className="input"
                   type="password"
-                  placeholder="请输入当前生效的密码"
+                  placeholder={t("settings.currentPwPh")}
                   value={m.oldPw}
                   onChange={(e) => m.setOldPw(e.target.value)}
                 />
               </div>
               <div className="field">
-                <label className="field-label">新密码（至少 8 位）</label>
+                <label className="field-label">{t("settings.newPw")}</label>
                 <input
                   className="input"
                   type="password"
-                  placeholder="新访问密码"
+                  placeholder={t("settings.newPwPh")}
                   value={m.newPw}
                   onChange={(e) => m.setNewPw(e.target.value)}
                 />
               </div>
               <div className="field">
-                <label className="field-label">确认新密码</label>
+                <label className="field-label">{t("settings.confirmPw")}</label>
                 <input
                   className="input"
                   type="password"
-                  placeholder="再次输入以确认"
+                  placeholder={t("settings.confirmPwPh")}
                   value={m.newPw2}
                   onChange={(e) => m.setNewPw2(e.target.value)}
                 />
@@ -248,7 +259,7 @@ export function SettingsMobile() {
                   disabled={m.busy || !m.oldPw || !m.newPw}
                   onClick={m.changePassword}
                 >
-                  {m.busy ? "正在更新…" : "确认修改密码"}
+                  {m.busy ? t("settings.updatingPw") : t("settings.updatePw")}
                 </button>
               </div>
             </div>
@@ -257,20 +268,20 @@ export function SettingsMobile() {
 
         {/* 5. 生物识别解锁 */}
         {subSection === "biometric" && (
-          <Card title="解锁方式">
+          <Card title={t("settings.bioCell")}>
             <div className="stack">
               <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                用访问密码解锁，或改用本机已录入的指纹。恢复密钥随时可兜底。
+                {t("settings.bioIntroMobile")}
               </div>
 
               {m.bio?.stale && (
                 <div className="callout warn">
-                  指纹凭据已失效，请改用访问密码，或重新输入访问密码开启指纹。
+                  {t("settings.bioStale")}
                 </div>
               )}
 
               <div className="field">
-                <FieldLabel name="解锁方式" tip="指纹需本机已录入，并先用访问密码绑定一次。" />
+                <FieldLabel name={t("settings.bioCell")} tip={t("settings.bioMethodTip")} />
                 <div className="m-bio-methods">
                   <button
                     type="button"
@@ -279,7 +290,7 @@ export function SettingsMobile() {
                     onClick={() => void m.setBioMethod("fingerprint")}
                   >
                     <Fingerprint size={18} />
-                    <span>指纹</span>
+                    <span>{t("settings.fingerprint")}</span>
                   </button>
                   <button
                     type="button"
@@ -288,23 +299,23 @@ export function SettingsMobile() {
                     onClick={() => void m.setBioMethod("password")}
                   >
                     <KeyRound size={18} />
-                    <span>密码</span>
+                    <span>{t("settings.password")}</span>
                   </button>
                 </div>
                 {m.bio?.available === false && (
                   <div className="hint" style={{ marginTop: 6 }}>
-                    这台设备没有可用指纹，只能用访问密码解锁。
+                    {t("settings.bioUnavailableMobile")}
                   </div>
                 )}
               </div>
 
               {m.bio?.available && !m.bio.enabled && (
                 <div className="stack" style={{ marginTop: 8 }}>
-                  <label className="field-label">输入访问密码以启用指纹</label>
+                  <label className="field-label">{t("settings.bioPasswordPh")}</label>
                   <input
                     className="input"
                     type="password"
-                    placeholder="输入当前访问密码"
+                    placeholder={t("reauth.password")}
                     value={m.bioPw}
                     onChange={(e) => m.setBioPw(e.target.value)}
                   />
@@ -315,17 +326,17 @@ export function SettingsMobile() {
                     onClick={() => m.enableBio(m.bioPw)}
                   >
                     <Fingerprint size={15} />
-                    启用指纹解锁
+                    {t("settings.bioEnable")}
                   </button>
                 </div>
               )}
 
               {m.bio?.enabled && (
                 <div className="stack" style={{ marginTop: 6 }}>
-                  <div className="callout good">已启用指纹解锁。启动与查看凭据时可验证指纹。</div>
+                  <div className="callout good">{t("settings.bioEnabledHint")}</div>
 
                   <div className="field">
-                    <FieldLabel name="查看验证码 / 账密时允许指纹" tip="金库已解锁后，查看一次性验证码或账户密码可用指纹代替访问密码。" />
+                    <FieldLabel name={t("settings.bioReveal")} tip={t("settings.bioRevealTip")} />
                     <label className="row" style={{ marginTop: 6, gap: 8 }}>
                       <input
                         type="checkbox"
@@ -333,12 +344,12 @@ export function SettingsMobile() {
                         disabled={m.busy}
                         onChange={(e) => m.toggleBioReveal(e.target.checked)}
                       />
-                      <span className="hint">允许免输密码直接验证后查看凭据</span>
+                      <span className="hint">{t("settings.bioRevealDefault")}</span>
                     </label>
                   </div>
 
                   <div className="field">
-                    <FieldLabel name="取回 TOTP 原始密钥也允许指纹" tip="这是导出级操作，默认建议关闭以确保最高安全性。" />
+                    <FieldLabel name={t("settings.bioExport")} tip={t("settings.bioExportTip")} />
                     <label className="row" style={{ marginTop: 6, gap: 8 }}>
                       <input
                         type="checkbox"
@@ -346,7 +357,7 @@ export function SettingsMobile() {
                         disabled={m.busy}
                         onChange={(e) => m.toggleBioSecret(e.target.checked)}
                       />
-                      <span className="hint">导出级操作，默认建议关闭</span>
+                      <span className="hint">{t("settings.bioExportRisk")}</span>
                     </label>
                   </div>
                 </div>
@@ -357,10 +368,10 @@ export function SettingsMobile() {
 
         {/* 6. 时效与剪贴板 */}
         {subSection === "timeout" && (
-          <Card title="安全时效与剪贴板保护">
+          <Card title={t("settings.timeoutCell")}>
             <div className="stack">
               <div className="field">
-                <FieldLabel name="免密查看凭据时效" tip="验证后在该时间内查看验证码或账号密码不重复询问密码。" />
+                <FieldLabel name={t("settings.revealGrace")} tip={t("settings.revealGraceTip")} />
                 <div className="row" style={{ marginTop: 6 }}>
                   <select
                     className="input"
@@ -368,11 +379,11 @@ export function SettingsMobile() {
                     value={m.revealGrace}
                     onChange={(e) => m.setRevealGrace(e.target.value)}
                   >
-                    <option value="0">每次都验证（最严格）</option>
-                    <option value="1">1 分钟</option>
-                    <option value="5">5 分钟（推荐）</option>
-                    <option value="15">15 分钟</option>
-                    <option value="30">30 分钟</option>
+                    <option value="0">{t("settings.everyTime")}</option>
+                    <option value="1">{t("settings.min1")}</option>
+                    <option value="5">{t("settings.min5")}</option>
+                    <option value="15">{t("settings.min15")}</option>
+                    <option value="30">{t("settings.min30")}</option>
                   </select>
                   <button
                     type="button"
@@ -380,7 +391,7 @@ export function SettingsMobile() {
                     disabled={m.busy}
                     onClick={() => m.saveRevealGrace()}
                   >
-                    保存
+                    {t("common.save")}
                   </button>
                 </div>
               </div>
@@ -388,7 +399,7 @@ export function SettingsMobile() {
               <hr className="sep" />
 
               <div className="field">
-                <FieldLabel name="复制后清空剪贴板" tip="防止密码在系统剪贴板中被其他恶意应用偷窥。" />
+                <FieldLabel name={t("settings.clipClear")} tip={t("settings.clipClearTip")} />
                 <div className="row" style={{ marginTop: 6 }}>
                   <select
                     className="input"
@@ -396,10 +407,10 @@ export function SettingsMobile() {
                     value={m.clipSec}
                     onChange={(e) => m.setClipSec(e.target.value)}
                   >
-                    <option value="0">不清空</option>
-                    <option value="10">10 秒后清空</option>
-                    <option value="20">20 秒后清空（推荐）</option>
-                    <option value="60">60 秒后清空</option>
+                    <option value="0">{t("settings.clipNever")}</option>
+                    <option value="10">{t("settings.sec10")}</option>
+                    <option value="20">{t("settings.sec20")}</option>
+                    <option value="60">{t("settings.sec60")}</option>
                   </select>
                   <button
                     type="button"
@@ -407,7 +418,7 @@ export function SettingsMobile() {
                     disabled={m.busy}
                     onClick={() => m.saveClipSec()}
                   >
-                    保存
+                    {t("common.save")}
                   </button>
                 </div>
               </div>
@@ -415,7 +426,7 @@ export function SettingsMobile() {
               <hr className="sep" />
 
               <div className="field">
-                <FieldLabel name="密码历史保留条数" tip="修改密码时自动保存的历史旧密码数量上限。" />
+                <FieldLabel name={t("settings.histLimit")} tip={t("settings.histLimitTip")} />
                 <div className="row" style={{ marginTop: 6 }}>
                   <select
                     className="input"
@@ -423,9 +434,9 @@ export function SettingsMobile() {
                     value={m.histLimit}
                     onChange={(e) => m.setHistLimit(e.target.value)}
                   >
-                    <option value="5">保留 5 条</option>
-                    <option value="10">保留 10 条（默认）</option>
-                    <option value="20">保留 20 条</option>
+                    <option value="5">{t("settings.histN", { n: 5 })}</option>
+                    <option value="10">{t("settings.histN", { n: 10 })}</option>
+                    <option value="20">{t("settings.histN", { n: 20 })}</option>
                   </select>
                   <button
                     type="button"
@@ -433,7 +444,7 @@ export function SettingsMobile() {
                     disabled={m.busy}
                     onClick={() => m.saveHistLimit()}
                   >
-                    保存
+                    {t("common.save")}
                   </button>
                 </div>
               </div>
@@ -443,16 +454,16 @@ export function SettingsMobile() {
 
         {/* 7. 恢复密钥 */}
         {subSection === "recovery" && (
-          <Card title="灾难恢复密钥 (Emergency Key)">
+          <Card title={t("settings.rotateTitle")}>
             <div className="stack">
               <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                灾难恢复密钥可用于在遗忘主访问密码时解密金库并重新设置密码。生成新密钥后旧密钥立即失效。
+                {t("settings.rotateIntro")}
               </div>
 
               {m.newRecovery ? (
                 <div className="stack" style={{ marginTop: 6 }}>
                   <div className="callout danger">
-                    ⚠️ <strong>仅显示一次，请务必妥善记录或存入安全位置：</strong>
+                    {t("settings.rotateOnce")}
                   </div>
                   <div className="reckey" style={{ fontSize: 13, wordBreak: "break-all" }}>
                     {m.newRecovery}
@@ -464,14 +475,14 @@ export function SettingsMobile() {
                       style={{ flex: 1 }}
                       onClick={() => writeClipboard(m.newRecovery, true)}
                     >
-                      复制密钥
+                      {t("common.copy")}
                     </button>
                     <button
                       type="button"
                       className="btn ghost sm"
                       onClick={() => m.setNewRecovery("")}
                     >
-                      我已安全保存
+                      {t("settings.rotateSaved")}
                     </button>
                   </div>
                 </div>
@@ -484,7 +495,7 @@ export function SettingsMobile() {
                     disabled={m.busy}
                     onClick={m.rotate}
                   >
-                    <RefreshCw size={14} /> 轮换生成新的灾难恢复密钥
+                    <RefreshCw size={14} /> {t("settings.rotateBtn")}
                   </button>
                 </div>
               )}
@@ -494,27 +505,27 @@ export function SettingsMobile() {
 
         {/* 8. 工作空间信息 */}
         {subSection === "workspace" && (
-          <Card title="工作空间存储详情">
+          <Card title={t("settings.wsTitle")}>
             <div className="stack">
               <div className="kv">
-                <span className="muted">存储路径</span>
+                <span className="muted">{t("settings.wsPath")}</span>
                 <span className="mono" style={{ wordBreak: "break-all", fontSize: 12 }}>
-                  {m.status?.workspacePath ?? "—"}
+                  {m.status?.workspacePath ?? t("common.emDash")}
                 </span>
               </div>
               <div className="kv">
-                <span className="muted">工作空间 ID</span>
+                <span className="muted">{t("settings.wsId")}</span>
                 <span className="mono" style={{ fontSize: 12 }}>
-                  {m.status?.workspaceId ?? "—"}
+                  {m.status?.workspaceId ?? t("common.emDash")}
                 </span>
               </div>
               <div className="kv">
-                <span className="muted">自动锁定</span>
-                <span>{m.status?.autoLockMinutes ?? 0} 分钟</span>
+                <span className="muted">{t("settings.wsAutoLock")}</span>
+                <span>{t("settings.wsMinutes", { n: m.status?.autoLockMinutes ?? 0 })}</span>
               </div>
               <div className="kv">
-                <span className="muted">写入锁定</span>
-                <span>{m.status?.writesLocked ? "是 (只读)" : "否 (正常)"}</span>
+                <span className="muted">{t("settings.wsWrites")}</span>
+                <span>{m.status?.writesLocked ? t("settings.wsWritesYes") : t("settings.wsWritesNo")}</span>
               </div>
             </div>
           </Card>
@@ -522,7 +533,7 @@ export function SettingsMobile() {
 
         {/* 9. GitHub PAT */}
         {subSection === "pat" && (
-          <Card title="GitHub 个人访问令牌">
+          <Card title={t("settings.patTitle")}>
             <GithubPatSettings writesLocked={!!m.status?.writesLocked} />
           </Card>
         )}
@@ -536,7 +547,7 @@ export function SettingsMobile() {
             <div className="card-head">
               <div className="card-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <AlertTriangle size={15} />
-                高危操作 · 出厂清空还原
+                {t("settings.dangerTitle")}
               </div>
             </div>
             <div className="card-body">
@@ -684,6 +695,18 @@ export function SettingsMobile() {
         <button
           type="button"
           className="m-settings-cell"
+          onClick={() => void m.toggleMobileBackgroundRun(!m.status?.mobileBackgroundRun)}
+        >
+          <div className="m-settings-cell-icon" style={{ background: "rgba(16, 185, 129, 0.12)", color: "var(--green)" }}>
+            <Rocket size={16} />
+          </div>
+          <span className="m-settings-cell-title" title={t("settings.backgroundRunTip")}>{t("settings.backgroundRun")}</span>
+          <span className="m-settings-cell-value">{m.status?.mobileBackgroundRun ? t("common.on") : t("common.off")}</span>
+        </button>
+
+        <button
+          type="button"
+          className="m-settings-cell"
           onClick={() => setSubSection("workspace")}
         >
           <div className="m-settings-cell-icon" style={{ background: "rgba(107, 114, 128, 0.14)", color: "var(--text)" }}>
@@ -708,7 +731,7 @@ export function SettingsMobile() {
         <button
           type="button"
           className="m-settings-cell"
-          onClick={() => m.navigate("/sync")}
+          onClick={() => m.navigate("/sync", { replace: true })}
         >
           <div className="m-settings-cell-icon" style={{ background: "rgba(16, 185, 129, 0.12)", color: "var(--green)" }}>
             <Cloud size={16} />

@@ -10,7 +10,9 @@ import { IconMark } from "../ui/IconMark";
 import { CountdownRing } from "../ui/CountdownRing";
 import { GroupDialog } from "../ui/GroupDialog";
 import { GroupPicker } from "../ui/GroupPicker";
+import { useTranslation } from "react-i18next";
 import { clipNote, NOTE_MAX, type TotpModel } from "../shared/hooks/useTotpModel";
+import { useOverlayBack } from "../shared/mobileBack";
 
 export function formatCode(code: string) {
   if (code.length === 6) return `${code.slice(0, 3)} ${code.slice(3)}`;
@@ -19,29 +21,32 @@ export function formatCode(code: string) {
 }
 
 export function TotpViewSwitcher({ view, setViewMode }: { view: "grid" | "list"; setViewMode: (m: "grid" | "list") => void }) {
+  const { t } = useTranslation();
   return (
     <div className="view-switcher">
       <button type="button" className={"view-btn" + (view === "grid" ? " on" : "")} onClick={() => setViewMode("grid")}>
-        <LayoutGrid size={13} /> 卡片
+        <LayoutGrid size={13} /> {t("totp.cards")}
       </button>
       <button type="button" className={"view-btn" + (view === "list" ? " on" : "")} onClick={() => setViewMode("list")}>
-        <List size={13} /> 列表
+        <List size={13} /> {t("totp.list")}
       </button>
     </div>
   );
 }
 
 export function TotpFilters({ m, hideSearch }: { m: TotpModel; hideSearch?: boolean }) {
+  const { t } = useTranslation();
   return (
     <div className="row between">
       <div className="group-tabs">
         {m.groupTabs.map((g) => {
           const count = g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length;
           const color = m.groups.find((item) => item.name === g)?.color;
+          const label = g === "全部" ? t("common.all") : g === "未分组" ? t("common.ungrouped") : g;
           return (
             <button key={g} type="button" className={"group-tab" + (m.group === g ? " on" : "")} onClick={() => m.setGroup(g)}>
               {color && <span className="group-tab-dot" style={{ background: color }} />}
-              <span>{g}</span>
+              <span>{label}</span>
               <span className="group-tab-count">{count}</span>
             </button>
           );
@@ -52,17 +57,18 @@ export function TotpFilters({ m, hideSearch }: { m: TotpModel; hideSearch?: bool
           disabled={m.writesLocked}
           onClick={() => m.setGroupDlg(true)}
         >
-          + 新建分组
+          {t("totp.newGroup")}
         </button>
       </div>
       {!hideSearch && (
-        <input className="input" style={{ maxWidth: 260 }} placeholder="搜索平台 / 账号 / 备注" value={m.q} onChange={(e) => m.setQ(e.target.value)} />
+        <input className="input" style={{ maxWidth: 260 }} placeholder={t("totp.search")} value={m.q} onChange={(e) => m.setQ(e.target.value)} />
       )}
     </div>
   );
 }
 
 export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolean }) {
+  const { t } = useTranslation();
   if (!forceList && m.view === "grid") {
     return (
       <div className="totp-grid">
@@ -105,7 +111,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
                       type="button"
                       className="btn ghost sm"
                       style={{ padding: "0 2px" }}
-                      title="访问登录页面"
+                      title={t("totp.openSite")}
                       onClick={() => api.openUrl(e.url!)}
                     >
                       <Link2 size={12} />
@@ -132,7 +138,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
                     gap: 10,
                     cursor: "pointer",
                   }}
-                  title="点击快速复制验证码"
+                  title={t("totp.copyCodeQuick")}
                   onClick={() => m.copyCode(e.id)}
                 >
                   <span className="totp-code" style={{ fontSize: "18px" }}>
@@ -146,7 +152,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
                 </div>
               ) : (
                 <button type="button" className="btn sm" onClick={() => m.reveal(e.id)}>
-                  <Eye size={12} /> 查看验证码
+                  <Eye size={12} /> {t("totp.viewCode")}
                 </button>
               )}
             </div>
@@ -155,7 +161,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
               <button
                 type="button"
                 className={"btn sm " + (isCopied ? "good" : "primary")}
-                title={seedMissing ? "种子已丢失" : "复制验证码"}
+                title={seedMissing ? t("totp.secretLost") : t("totp.copyCode")}
                 disabled={seedMissing}
                 onClick={() => m.copyCode(e.id)}
               >
@@ -165,7 +171,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
                 <button
                   type="button"
                   className="btn sm"
-                  title="隐藏验证码"
+                  title={t("totp.hideCode")}
                   onClick={() => m.hideCode(e.id)}
                 >
                   <EyeOff size={12} />
@@ -174,7 +180,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
               <button
                 type="button"
                 className="btn sm"
-                title={seedMissing ? "种子已丢失，无法取回" : "密钥 / 二维码"}
+                title={seedMissing ? t("totp.secretLostHint") : t("totp.showSecret")}
                 disabled={seedMissing}
                 onClick={() => m.openSecret(e.id)}
               >
@@ -184,16 +190,16 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
                 type="button"
                 className="btn sm"
                 disabled={m.writesLocked}
-                title="编辑条目"
+                title={t("totp.edit")}
                 onClick={() => m.setEditor({ ...e })}
               >
-                编辑
+                {t("common.edit")}
               </button>
               <button
                 type="button"
                 className="btn sm danger"
                 disabled={m.writesLocked}
-                title="删除条目"
+                title={t("totp.delete")}
                 onClick={() => m.deleteEntry(e)}
               >
                 <Trash2 size={12} />
@@ -207,6 +213,12 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
 }
 
 export function TotpDialogs({ m, includeScanHits }: { m: TotpModel; includeScanHits?: boolean }) {
+  const { t } = useTranslation();
+  useOverlayBack(!!m.editor, () => m.setEditor(null));
+  useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(false));
+  useOverlayBack(!!m.reauth, () => m.reauthCancel.current?.());
+  useOverlayBack(!!m.secretDlg, () => m.setSecretDlg(null));
+  useOverlayBack(!!m.pendingDelete, () => m.setPendingDelete(null));
   return (
     <>
       <ErrorDialog message={m.err} onClose={() => m.setErr("")} />
@@ -251,13 +263,9 @@ export function TotpDialogs({ m, includeScanHits }: { m: TotpModel; includeScanH
 
       {m.pendingDelete && (
         <ConfirmDangerDialog
-          title="删除 2FA 确认"
-          message={
-            <>
-              确定要删除「<strong>{m.pendingDelete.issuer}</strong> / {m.pendingDelete.account}」吗？
-            </>
-          }
-          detail="删除后本机不再保存这条验证器种子，也无法用访问密码找回。云端要再推送一次才会同步到其他设备。"
+          title={t("totp.deleteTitle")}
+          message={t("totp.deleteMsg", { name: `${m.pendingDelete.issuer} / ${m.pendingDelete.account}` })}
+          detail={t("totp.deleteDetail")}
           busy={m.busy}
           onCancel={() => m.setPendingDelete(null)}
           onConfirm={() => void m.confirmDeleteEntry()}
@@ -276,31 +284,32 @@ function SecretDialog({
   onConfirm: (pw: string) => Promise<void>;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="wizard-overlay">
       <div className="card" style={{ width: 420 }}>
-        <div className="card-head"><div className="card-title">取回原始密钥</div></div>
+        <div className="card-head"><div className="card-title">{t("totp.secretTitle")}</div></div>
         <div className="card-body stack">
           {!dlg.secret ? (
-            <ReauthInner hint="导出种子不走免密时效，必须重新输入访问密码。" onConfirm={onConfirm} onCancel={onClose} />
+            <ReauthInner hint={t("totp.secretReauth")} onConfirm={onConfirm} onCancel={onClose} />
           ) : (
             <>
               {dlg.qr && <img alt="otpauth qr" src={`data:image/png;base64,${dlg.qr}`} style={{ width: 180, height: 180, margin: "0 auto", display: "block" }} />}
               <div className="field">
-                <label className="field-label">Base32 密钥</label>
+                <label className="field-label">{t("totp.base32")}</label>
                 <div className="row">
                   <input className="input mono" readOnly value={dlg.secret} />
-                  <button type="button" className="btn sm" onClick={() => copyWithClear(dlg.secret!)}>复制</button>
+                  <button type="button" className="btn sm" onClick={() => copyWithClear(dlg.secret!)}>{t("common.copy")}</button>
                 </div>
               </div>
               <div className="field">
-                <label className="field-label">otpauth 链接</label>
+                <label className="field-label">{t("totp.otpauth")}</label>
                 <div className="row">
                   <input className="input mono" readOnly value={dlg.uri} />
-                  <button type="button" className="btn sm" onClick={() => copyWithClear(dlg.uri!)}>复制</button>
+                  <button type="button" className="btn sm" onClick={() => copyWithClear(dlg.uri!)}>{t("common.copy")}</button>
                 </div>
               </div>
-              <button type="button" className="btn primary sm" onClick={onClose}>关闭</button>
+              <button type="button" className="btn primary sm" onClick={onClose}>{t("common.close")}</button>
             </>
           )}
         </div>
@@ -318,19 +327,20 @@ function ScanHitsDialog({
   onPick: (h: ScreenHit) => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="wizard-overlay">
       <div className="card" style={{ width: 480 }}>
-        <div className="card-head"><div className="card-title">屏幕识别结果</div></div>
+        <div className="card-head"><div className="card-title">{t("totp.scanHits")}</div></div>
         <div className="card-body stack">
           {hits.map((h, i) => (
             <button key={i} type="button" className="choice" onClick={() => onPick(h)}>
               <b>{h.parsed.issuer}</b> · {h.parsed.account}
-              <div className="muted">{h.display} · {h.parsed.algorithm} {h.parsed.digits}位</div>
+              <div className="muted">{h.display} · {h.parsed.algorithm} {t("totp.digits", { n: h.parsed.digits })}</div>
             </button>
           ))}
           <div className="row" style={{ justifyContent: "flex-end" }}>
-            <button type="button" className="btn ghost sm" onClick={onCancel}>取消</button>
+            <button type="button" className="btn ghost sm" onClick={onCancel}>{t("common.cancel")}</button>
           </div>
         </div>
       </div>
@@ -363,6 +373,7 @@ function TotpCard({
   onDelete: () => void;
   locked: boolean;
 }) {
+  const { t } = useTranslation();
   const seedMissing = e.hasSeed === false;
   return (
     <div className="totp-card">
@@ -389,7 +400,7 @@ function TotpCard({
             <button
               type="button"
               className="btn ghost sm"
-              title="访问登录页面"
+              title={t("totp.openSite")}
               onClick={() => api.openUrl(e.url!)}
             >
               <Link2 size={13} />
@@ -399,12 +410,12 @@ function TotpCard({
       </div>
 
       {seedMissing && (
-        <div className="callout danger sm">种子已丢失，请编辑并重新填入密钥，或删除后重新导入。</div>
+        <div className="callout danger sm">{t("totp.secretLostEdit")}</div>
       )}
 
       <div
         className={"totp-code-box" + (shown ? " revealed" : "")}
-        title={shown ? "点击快捷复制验证码" : undefined}
+        title={shown ? t("totp.copyQuick") : undefined}
         onClick={shown ? onCopy : undefined}
       >
         {shown ? (
@@ -424,7 +435,7 @@ function TotpCard({
                 onReveal();
               }}
             >
-              <Eye size={13} /> 查看
+              <Eye size={13} /> {t("totp.view")}
             </button>
           </>
         )}
@@ -440,11 +451,11 @@ function TotpCard({
         >
           {copied ? (
             <>
-              <Check size={13} /> 已复制
+              <Check size={13} /> {t("totp.copied")}
             </>
           ) : (
             <>
-              <Copy size={13} /> 复制验证码
+              <Copy size={13} /> {t("totp.copyCode")}
             </>
           )}
         </button>
@@ -452,7 +463,7 @@ function TotpCard({
           <button
             type="button"
             className="btn sm"
-            title="隐藏验证码"
+            title={t("totp.hideCode")}
             onClick={onHide}
           >
             <EyeOff size={13} />
@@ -461,7 +472,7 @@ function TotpCard({
         <button
           type="button"
           className="btn sm"
-          title={seedMissing ? "种子已丢失，无法取回" : "取回原始密钥或导出二维码"}
+          title={seedMissing ? t("totp.secretLostHint") : t("totp.secretExportTip")}
           disabled={seedMissing || locked}
           onClick={onSecret}
         >
@@ -471,16 +482,16 @@ function TotpCard({
           type="button"
           className="btn sm"
           disabled={locked}
-          title="编辑条目"
+          title={t("totp.edit")}
           onClick={onEdit}
         >
-          编辑
+          {t("common.edit")}
         </button>
         <button
           type="button"
           className="btn sm danger"
           disabled={locked}
-          title="删除条目"
+          title={t("totp.delete")}
           onClick={onDelete}
         >
           <Trash2 size={13} />
@@ -491,6 +502,7 @@ function TotpCard({
 }
 
 function ReauthInner({ hint, onConfirm, onCancel }: { hint: string; onConfirm: (pw: string) => Promise<void>; onCancel: () => void }) {
+  const { t } = useTranslation();
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
   const [allowBio, setAllowBio] = useState(false);
@@ -500,10 +512,10 @@ function ReauthInner({ hint, onConfirm, onCancel }: { hint: string; onConfirm: (
   return (
     <div className="stack">
       <div className="muted">{hint}</div>
-      <input className="input" type="password" placeholder="访问密码" value={pw} onChange={(e) => setPw(e.target.value)} />
+      <input className="input" type="password" placeholder={t("reauth.password")} value={pw} onChange={(e) => setPw(e.target.value)} />
       {err && <div className="callout danger sm">{err}</div>}
       <div className="row">
-        <button type="button" className="btn ghost sm" onClick={onCancel}>取消</button>
+        <button type="button" className="btn ghost sm" onClick={onCancel}>{t("common.cancel")}</button>
         {allowBio && (
           <button
             type="button"
@@ -516,7 +528,7 @@ function ReauthInner({ hint, onConfirm, onCancel }: { hint: string; onConfirm: (
               }
             }}
           >
-            用生物识别验证
+            {t("totp.useBio")}
           </button>
         )}
         <button
@@ -530,7 +542,7 @@ function ReauthInner({ hint, onConfirm, onCancel }: { hint: string; onConfirm: (
             }
           }}
         >
-          验证并显示
+          {t("totp.verifyShow")}
         </button>
       </div>
     </div>
@@ -548,6 +560,7 @@ function Editor({
   onClose: () => void;
   onSave: () => void;
 }) {
+  const { t } = useTranslation();
   const [secretDraft, setSecretDraft] = useState(value.secret || "");
   const detected = detectTotpInput(secretDraft);
   const nonDefaultAlgo =
@@ -581,7 +594,7 @@ function Editor({
   }
 
   async function pickIcon() {
-    const path = await open({ filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "ico", "bmp"] }] });
+    const path = await open({ filters: [{ name: t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "ico", "bmp"] }] });
     if (typeof path !== "string") return;
     const info = await api.iconUploadCustom(path);
     onChange({ ...value, icon: info.iconRef });
@@ -592,74 +605,74 @@ function Editor({
   return (
     <div className="wizard-overlay">
       <div className="card totp-editor dialog-card">
-        <div className="card-head"><div className="card-title">{value.id ? "编辑 TOTP" : "添加 TOTP"}</div></div>
+        <div className="card-head"><div className="card-title">{value.id ? t("totp.editTitle") : t("totp.addTitle")}</div></div>
         <div className="card-body stack">
           <div className="field">
             <FieldLabel
-              name={value.id ? (value.hasSeed === false ? "重新填入密钥（必填）" : "更换密钥（可选）") : "密钥"}
-              tip="otpauth 链接和 Base32 密钥只需填一种。粘贴后会自动识别：链接会顺带填好平台、账号和算法；密钥则只需再补平台和账号。"
+              name={value.id ? (value.hasSeed === false ? t("totp.secretRefill") : t("totp.secretChange")) : t("totp.secretLabel")}
+              tip={t("totp.secretTip")}
             />
             <textarea
               className="input mono totp-secret-box"
               rows={3}
               autoFocus={!value.id}
               value={secretDraft}
-              placeholder={value.id ? "留空则不改原密钥" : "在此粘贴 otpauth 链接或 Base32 密钥"}
+              placeholder={value.id ? t("totp.secretKeep") : t("totp.secretPh")}
               onChange={(e) => applySecretDraft(e.target.value)}
             />
             <div className={"hint" + (detectKind ? "" : "")}>{detected.message}</div>
             {detectKind && (
               <div className={"callout sm " + detectKind} style={{ marginTop: 6 }}>
-                {detected.kind === "otpauth" && "二选一 · 已按链接识别，不必再单独填 Base32"}
-                {detected.kind === "base32" && "二选一 · 已按密钥识别，不必再贴 otpauth 链接"}
-                {detected.kind === "unknown" && "请改贴完整链接或密钥"}
+                {detected.kind === "otpauth" && t("totp.detectedOtpauth")}
+                {detected.kind === "base32" && t("totp.detectedBase32")}
+                {detected.kind === "unknown" && t("totp.detectedUnknown")}
               </div>
             )}
             <div className="field-example">
-              示例密钥：<code>JBSW Y3DP EHPK 3PXP</code>
+              {t("totp.exampleSecret")}<code>JBSW Y3DP EHPK 3PXP</code>
               <br />
-              示例链接：<code>otpauth://totp/GitHub:you@mail.com?secret=JBSWY3DPEHPK3PXP</code>
+              {t("totp.exampleUri")}<code>otpauth://totp/GitHub:you@mail.com?secret=JBSWY3DPEHPK3PXP</code>
             </div>
           </div>
 
           <div className="grid-sum">
             <div className="field">
-              <FieldLabel name="平台" tip="这个验证码属于哪个网站或服务，会出现在卡片标题上。" />
+              <FieldLabel name={t("totp.issuer")} tip={t("totp.issuerTip")} />
               <input
                 className="input"
                 value={value.issuer || ""}
-                placeholder="例如 GitHub、Google、Cloudflare"
+                placeholder={t("totp.issuerPh")}
                 onChange={(e) => onChange({ ...value, issuer: e.target.value })}
               />
             </div>
             <div className="field">
-              <FieldLabel name="账号" tip="用来区分同一平台的多个号，可以填邮箱、用户名或备注名。" />
+              <FieldLabel name={t("totp.account")} tip={t("totp.accountTip")} />
               <input
                 className="input"
                 value={value.account || ""}
-                placeholder="例如 you@mail.com"
+                placeholder={t("totp.accountPh")}
                 onChange={(e) => onChange({ ...value, account: e.target.value })}
               />
             </div>
           </div>
 
           <div className="field">
-            <label className="field-label">图标</label>
+            <label className="field-label">{t("totp.icon")}</label>
             <div className="row">
               <IconMark icon={value.icon} builtins={builtins} label={value.issuer} size={36} />
               <select className="input" value={value.icon?.startsWith("builtin:") ? value.icon : ""} onChange={(e) => onChange({ ...value, icon: e.target.value || undefined })}>
-                <option value="">按平台名自动匹配</option>
+                <option value="">{t("totp.iconAuto")}</option>
                 {builtins.map((b) => (
                   <option key={b.id} value={`builtin:${b.id}`}>{b.name}</option>
                 ))}
               </select>
-              <button type="button" className="btn sm" onClick={pickIcon}>上传</button>
+              <button type="button" className="btn sm" onClick={pickIcon}>{t("totp.upload")}</button>
             </div>
-            <div className="hint">可不选。保存时会按平台名自动猜一个；也可上传自己的图标。</div>
+            <div className="hint">{t("totp.iconHint")}</div>
           </div>
 
           <div className="field">
-            <FieldLabel name="分组" tip="点选已有分组，或直接输入新名称。留空表示不分组。" />
+            <FieldLabel name={t("totp.group")} tip={t("totp.groupTip")} />
             <GroupPicker
               groups={groups}
               value={value.group}
@@ -667,15 +680,15 @@ function Editor({
             />
           </div>
           <div className="field">
-            <FieldLabel name="登录网址" tip="可选。填了之后卡片上能一键打开该网站。" />
+            <FieldLabel name={t("totp.url")} tip={t("totp.urlTip")} />
             <input className="input" placeholder="https://github.com/login" value={value.url || ""} onChange={(e) => onChange({ ...value, url: e.target.value })} />
           </div>
           <div className="field">
-            <FieldLabel name="备注" tip="会显示在主界面卡片和列表上。为保持版面整洁，最多 32 个字。" />
+            <FieldLabel name={t("totp.note")} tip={t("totp.noteTip")} />
             <input
               className="input"
               maxLength={NOTE_MAX}
-              placeholder="例如 公司号、备用邮箱"
+              placeholder={t("totp.notePh")}
               value={value.note || ""}
               onChange={(e) => onChange({ ...value, note: e.target.value.slice(0, NOTE_MAX) })}
             />
@@ -683,26 +696,26 @@ function Editor({
           </div>
 
           <button type="button" className="btn ghost sm" onClick={() => setShowAdvanced((v) => !v)}>
-            {showAdvanced ? "收起高级选项" : "高级选项（一般不用改）"}
+            {showAdvanced ? t("totp.less") : t("totp.more")}
           </button>
           {showAdvanced && (
             <div className="totp-advanced">
-              <div className="hint" style={{ marginBottom: 6 }}>绝大多数网站都是 SHA1、6 位、30 秒，链接里带了这些参数时会自动填好。</div>
+              <div className="hint" style={{ marginBottom: 6 }}>{t("totp.advHint")}</div>
               <div className="row">
                 <div className="field" style={{ flex: 1 }}>
-                  <label className="field-label">算法</label>
+                  <label className="field-label">{t("totp.algo")}</label>
                   <select className="input" value={value.algorithm || "SHA1"} onChange={(e) => onChange({ ...value, algorithm: e.target.value })}>
                     <option>SHA1</option><option>SHA256</option><option>SHA512</option>
                   </select>
                 </div>
                 <div className="field" style={{ flex: 1 }}>
-                  <label className="field-label">位数</label>
+                  <label className="field-label">{t("totp.digitsLabel")}</label>
                   <select className="input" value={value.digits || 6} onChange={(e) => onChange({ ...value, digits: Number(e.target.value) })}>
-                    <option value={6}>6 位</option><option value={8}>8 位</option>
+                    <option value={6}>{t("totp.digits6")}</option><option value={8}>{t("totp.digits8")}</option>
                   </select>
                 </div>
                 <div className="field" style={{ flex: 1 }}>
-                  <label className="field-label">周期（秒）</label>
+                  <label className="field-label">{t("totp.period")}</label>
                   <input className="input" type="number" min={1} value={value.period || 30} onChange={(e) => onChange({ ...value, period: Number(e.target.value) })} />
                 </div>
               </div>
@@ -713,8 +726,8 @@ function Editor({
         <div className="card-foot">
           <span />
           <div className="row">
-            <button type="button" className="btn ghost sm" onClick={onClose}>取消</button>
-            <button type="button" className="btn primary sm" disabled={busy} onClick={onSave}>保存</button>
+            <button type="button" className="btn ghost sm" onClick={onClose}>{t("common.cancel")}</button>
+            <button type="button" className="btn primary sm" disabled={busy} onClick={onSave}>{t("common.save")}</button>
           </div>
         </div>
       </div>

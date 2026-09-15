@@ -151,6 +151,20 @@ export function useSettingsModel() {
     }
   }
 
+  async function toggleMobileBackgroundRun(enabled: boolean) {
+    setErr("");
+    setBusy(true);
+    try {
+      await api.setMobileBackgroundRun(enabled);
+      setMsg(enabled ? t("settings.backgroundRunOn") : t("settings.backgroundRunOff"));
+      await refresh();
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleLaunch(enabled: boolean) {
     setErr("");
     setBusy(true);
@@ -364,6 +378,7 @@ export function useSettingsModel() {
     toggleBioReveal,
     toggleBioSecret,
     toggleLaunch,
+    toggleMobileBackgroundRun,
     clearCloseAction,
   };
 }

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { GroupMeta } from "../lib/ipc";
 import { GROUP_COLORS } from "./GroupDialog";
 
@@ -30,6 +31,7 @@ export function GroupPicker({
   value?: string | null;
   onChange: (name: string) => void;
 }) {
+  const { t } = useTranslation();
   const current = (value || "").trim();
   const matched = groups.find((g) => g.name.toLowerCase() === current.toLowerCase());
   const isNew = current.length > 0 && !matched;
@@ -42,7 +44,7 @@ export function GroupPicker({
           className={"choice" + (!current ? " on" : "")}
           onClick={() => onChange("")}
         >
-          不分组
+          {t("group.none")}
         </button>
         {groups.map((g) => (
           <button
@@ -58,11 +60,11 @@ export function GroupPicker({
       </div>
       <input
         className="input"
-        placeholder={groups.length ? "或输入新分组名称" : "输入新分组名称，例如 工作"}
+        placeholder={groups.length ? t("group.orNew") : t("group.newPh")}
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
       />
-      {isNew && <div className="hint">保存时将新建分组「{current}」</div>}
+      {isNew && <div className="hint">{t("group.willCreate", { name: current })}</div>}
     </div>
   );
 }

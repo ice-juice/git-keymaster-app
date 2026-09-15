@@ -19,6 +19,7 @@ export interface VaultStatus {
   graceActive: boolean;
   graceExpiresAt: string | null;
   closeAction: "tray" | "quit" | null;
+  mobileBackgroundRun?: boolean;
   writesLocked?: boolean;
   startupNote?: string | null;
 }
@@ -346,6 +347,14 @@ export interface AutoSyncSettings {
   lastAutoSyncAt?: string | null;
   lastAutoSyncMessage?: string | null;
   defaultMinutes: number;
+  syncAttachmentsWifiOnly: boolean;
+  syncAttachmentsManualOnly: boolean;
+}
+
+export interface BlobSyncProgress {
+  phase: "upload" | "download" | string;
+  current: number;
+  total: number;
 }
 
 export interface CloudSnapshot {
@@ -450,6 +459,9 @@ export const api = {
   vaultTryGraceUnlock: () => invoke<boolean>("vault_try_grace_unlock"),
   setLaunchAtLogin: (enabled: boolean) => invoke<void>("set_launch_at_login", { enabled }),
   setGraceDays: (days: number) => invoke<void>("set_grace_days", { days }),
+  setMobileBackgroundRun: (enabled: boolean) =>
+    invoke<void>("set_mobile_background_run", { enabled }),
+  mobileLeaveApp: (keepAlive: boolean) => invoke<void>("mobile_leave_app", { keepAlive }),
   factoryReset: (confirmed: boolean, confirmPhrase: string) =>
     invoke<{ steps: string[] }>("factory_reset", { confirmed, confirmPhrase }),
   applyCloseChoice: (action: "tray" | "quit" | "cancel", remember: boolean) =>
@@ -559,6 +571,10 @@ export const api = {
   cloudSyncPull: () => invoke<SyncResult>("cloud_sync_pull"),
   getAutoSyncSettings: () => invoke<AutoSyncSettings>("get_auto_sync_settings"),
   setAutoSyncMinutes: (minutes: number) => invoke<number>("set_auto_sync_minutes", { minutes }),
+  setAttachmentSyncGuards: (wifiOnly: boolean, manualOnly: boolean) =>
+    invoke<AutoSyncSettings>("set_attachment_sync_guards", { wifiOnly, manualOnly }),
+  reportNetworkUnmetered: (unmetered: boolean) =>
+    invoke<void>("report_network_unmetered", { unmetered }),
   listCloudSnapshots: (force?: boolean) =>
     invoke<CloudSnapshot[]>("list_cloud_snapshots", force === undefined ? {} : { force }),
   restoreCloudSnapshot: (snapshotId: string) =>
@@ -626,6 +642,37 @@ export const api = {
     invoke<void>("account_rollback_history", { id, index }),
   accountClearHistory: (id: string) => invoke<void>("account_clear_history", { id }),
 
+  fileList: () => invoke<FileVaultList>("file_list"),
+  fileAddFromPath: (path: string, args?: FileAddArgs) =>
+    invoke<FileEntry>("file_add_from_path", { path, args: args ?? null }),
+  fileAddFromPaths: (paths: string[], args?: FileAddArgs) =>
+    invoke<FileEntry>("file_add_from_paths", { paths, args: args ?? null }),
+  fileAddBytes: (originalName: string, bytes: number[], args?: FileAddArgs) =>
+    invoke<FileEntry>("file_add_bytes", { originalName, bytes, args: args ?? null }),
+  fileAddBytesMany: (items: FileBytesItem[], args?: FileAddArgs) =>
+    invoke<FileEntry>("file_add_bytes_many", { items, args: args ?? null }),
+  fileUpdate: (id: string, args: FileUpdateArgs) => invoke<FileEntry>("file_update", { id, args }),
+  fileDelete: (id: string) => invoke<void>("file_delete", { id }),
+  fileExport: (id: string, destPath: string, password?: string, attachmentId?: string) =>
+    invoke<void>("file_export", {
+      id,
+      destPath,
+      password: password ?? null,
+      attachmentId: attachmentId ?? null,
+    }),
+  fileSaveGroups: (groups: GroupMeta[]) => invoke<void>("file_save_groups", { groups }),
+
+  noteList: () => invoke<NoteList>("note_list"),
+  noteGetBody: (id: string) => invoke<NoteBody>("note_get_body", { id }),
+  noteUpsert: (args: NoteUpsertArgs) => invoke<NoteEntry>("note_upsert", { args }),
+  noteDelete: (id: string) => invoke<void>("note_delete", { id }),
+  noteAssetAdd: (args: { path?: string; bytes?: number[] }) =>
+    invoke<NoteAssetAddResult>("note_asset_add", { path: args.path ?? null, bytes: args.bytes ?? null }),
+  noteAssetGet: (hash: string) => invoke<string>("note_asset_get", { hash }),
+  noteSaveGroups: (groups: GroupMeta[]) => invoke<void>("note_save_groups", { groups }),
+  noteExport: (id: string, destPath: string, mode?: string) =>
+    invoke<void>("note_export", { id, destPath, mode: mode ?? null }),
+
   clipboardWrite: (text: string, secret = false) =>
     invoke<ClipboardWriteResult>("clipboard_write", { text, secret }),
   clipboardClear: () => invoke<void>("clipboard_clear"),
@@ -672,6 +719,115 @@ export interface TotpEntry {
   createdAt: string;
   updatedAt: string;
   hasSeed?: boolean;
+}
+
+export interface FileAttachment {
+  id: string;
+  originalName: string;
+  mime?: string | null;
+  size: number;
+  sha256: string;
+}
+
+export interface FileEntry {
+  id: string;
+  name: string;
+  originalName: string;
+  mime?: string | null;
+  size: number;
+  sha256: string;
+  attachments?: FileAttachment[];
+  group?: string | null;
+  note?: string | null;
+  icon?: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FileVaultList {
+  entries: FileEntry[];
+  groups: GroupMeta[];
+  usageBytes: number;
+}
+
+export interface FileAddArgs {
+  name?: string;
+  note?: string;
+  group?: string;
+}
+
+export interface FileBytesItem {
+  originalName: string;
+  bytes: number[];
+}
+
+export interface FileUpdateArgs {
+  name?: string;
+  note?: string;
+  group?: string;
+  icon?: string;
+  sortOrder?: number;
+  keepAttachmentIds?: string[];
+  addPaths?: string[];
+  addBytes?: FileBytesItem[];
+}
+
+export function entryAttachments(e: FileEntry): FileAttachment[] {
+  if (e.attachments && e.attachments.length > 0) return e.attachments;
+  if (e.sha256) {
+    return [
+      {
+        id: e.sha256,
+        originalName: e.originalName,
+        mime: e.mime,
+        size: e.size,
+        sha256: e.sha256,
+      },
+    ];
+  }
+  return [];
+}
+
+export interface NoteEntry {
+  id: string;
+  title: string;
+  format: string;
+  group?: string | null;
+  tags: string[];
+  icon?: string | null;
+  pinned: boolean;
+  sortOrder: number;
+  excerpt?: string | null;
+  bodySha256: string;
+  assetHashes: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoteList {
+  entries: NoteEntry[];
+  groups: GroupMeta[];
+}
+
+export interface NoteBody {
+  format: string;
+  markdown: string;
+}
+
+export interface NoteUpsertArgs {
+  id?: string;
+  title: string;
+  format?: string;
+  tags?: string[];
+  group?: string;
+  icon?: string;
+  pinned?: boolean;
+  markdown: string;
+}
+
+export interface NoteAssetAddResult {
+  hash: string;
 }
 
 export interface AccountEntry {

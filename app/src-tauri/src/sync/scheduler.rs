@@ -84,7 +84,7 @@ pub fn run(app: &AppHandle, trigger: &str) -> Result<Option<SyncResult>> {
     if state.auto_sync_busy.swap(true, Ordering::SeqCst) {
         return Ok(None);
     }
-    let outcome = run_locked(&state, trigger);
+    let outcome = run_locked(app, &state, trigger);
     state.auto_sync_busy.store(false, Ordering::SeqCst);
 
     match &outcome {
@@ -116,7 +116,7 @@ pub fn run(app: &AppHandle, trigger: &str) -> Result<Option<SyncResult>> {
     outcome
 }
 
-fn run_locked(state: &AppState, trigger: &str) -> Result<Option<SyncResult>> {
+fn run_locked(app: &AppHandle, state: &AppState, trigger: &str) -> Result<Option<SyncResult>> {
     if trigger == "startup" {
         if let Ok(last) = state.last_periodic_sync.lock() {
             if last.is_some_and(|t| t.elapsed() < STARTUP_DEDUP) {
@@ -145,10 +145,20 @@ fn run_locked(state: &AppState, trigger: &str) -> Result<Option<SyncResult>> {
     };
 
     let client = S3Client::from_app(sync_config, &app_cfg)?;
+    let unmetered = state.network_unmetered.load(Ordering::Relaxed);
+    let blob_scope = engine::resolve_blob_scope(
+        trigger,
+        app_cfg.sync_attachments_wifi_only,
+        app_cfg.sync_attachments_manual_only,
+        unmetered,
+    );
+    let progress = |p: engine::BlobSyncProgress| {
+        let _ = app.emit("blob-sync-progress", &p);
+    };
     let result = if trigger == "edit" {
-        engine::publish_after_edit(&vault, &client)?
+        engine::publish_after_edit_with(&vault, &client, blob_scope, Some(&progress))?
     } else {
-        engine::pull_then_maybe_push(&vault, &client)?
+        engine::pull_then_maybe_push_with(&vault, &client, blob_scope, Some(&progress))?
     };
     crate::commands::sync::remember_view_after_sync(&vault, &client);
     if let Ok(mut last) = state.last_periodic_sync.lock() {

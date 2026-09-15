@@ -141,7 +141,7 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
           className="input mono"
           type="password"
           autoComplete="off"
-          placeholder="ghp_… 或 github_pat_…"
+          placeholder={t("settings.patTokenPh")}
           value={token}
           onChange={(e) => setToken(e.target.value)}
         />
@@ -219,7 +219,7 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
             <button
               type="button"
               className="btn danger sm"
-              disabled={busy || phrase.trim() !== "清空"}
+              disabled={busy || phrase.trim() !== t("factory.phrase")}
               onClick={run}
             >
               {busy ? t("factory.running") : t("factory.confirm")}
@@ -1068,12 +1068,12 @@ export function SettingsView() {
   async function changePassword() {
     setErr("");
     setMsg("");
-    if (newPw.length < 8) return setErr("新密码至少 8 位");
-    if (newPw !== newPw2) return setErr("两次输入的新密码不一致");
+    if (newPw.length < 8) return setErr(t("settings.pwMin"));
+    if (newPw !== newPw2) return setErr(t("settings.pwMismatch"));
     setBusy(true);
     try {
       await api.changePassword(oldPw, newPw);
-      setMsg("访问密码已更新");
+      setMsg(t("settings.pwUpdated"));
       setOldPw("");
       setNewPw("");
       setNewPw2("");
@@ -1104,7 +1104,7 @@ export function SettingsView() {
     setBusy(true);
     try {
       await api.setLaunchAtLogin(enabled);
-      setMsg(enabled ? "已打开开机自启动" : "已关闭开机自启动");
+      setMsg(enabled ? t("settings.launchOn") : t("settings.launchOff"));
       await refresh();
     } catch (e) {
       setErr(errMessage(e));
@@ -1116,11 +1116,11 @@ export function SettingsView() {
   async function saveGrace() {
     setErr("");
     const n = Number(graceDays);
-    if (!Number.isFinite(n) || n < 0 || n > 30) return setErr("免验证天数请填写 0 到 30");
+    if (!Number.isFinite(n) || n < 0 || n > 30) return setErr(t("settings.graceRange"));
     setBusy(true);
     try {
       await api.setGraceDays(Math.floor(n));
-      setMsg(n === 0 ? "已关闭免验证，下次启动需要访问密码" : `已设置 ${Math.floor(n)} 天内开机免验证`);
+      setMsg(n === 0 ? t("settings.graceOff") : t("settings.graceOn", { days: Math.floor(n) }));
       await refresh();
     } catch (e) {
       setErr(errMessage(e));
@@ -1146,7 +1146,7 @@ export function SettingsView() {
 
       <div className="settings-layout">
         {/* 左侧/顶部 分栏导航Tab */}
-        <nav className="settings-nav" aria-label="设置导航">
+        <nav className="settings-nav" aria-label={t("settings.navAria")}>
           {NAV_ITEMS.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
@@ -1218,11 +1218,11 @@ export function SettingsView() {
                   <div className="between">
                     <div>
                       <FieldLabel
-                        name="解锁过场动画"
-                        tip="每次手动输入访问密码/恢复密钥解锁成功后播放开门过场动画。免验证静默解锁不会触发。"
+                        name={t("settings.unlockAnim")}
+                        tip={t("settings.unlockAnimTip")}
                       />
                       <div className="hint">
-                        关闭后解锁将直接进入主界面。播放中可点击任意处或按 Esc / 空格 / 回车跳过。
+                        {t("settings.unlockAnimHintDesktop")}
                       </div>
                     </div>
                     <button
@@ -1236,16 +1236,16 @@ export function SettingsView() {
                     <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                         <span className="hint" style={{ fontWeight: 600, color: "var(--text-1)" }}>
-                          选择动画风格
+                          {t("settings.pickAnimStyle")}
                         </span>
                         <button
                           type="button"
                           className="btn ghost sm"
                           onClick={() => startUnlockAnim(unlockAnimStyle)}
-                          title="预览当前选中的动画风格"
+                          title={t("settings.previewStyle")}
                           style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
                         >
-                          <Play size={13} /> 预览当前动画
+                          <Play size={13} /> {t("settings.previewCurrent")}
                         </button>
                       </div>
 
@@ -1284,7 +1284,7 @@ export function SettingsView() {
                                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                                   <span style={{ fontSize: 18 }}>{st.icon}</span>
                                   <span style={{ fontWeight: 600, fontSize: 13, color: active ? "var(--accent)" : "var(--text-1)" }}>
-                                    {st.label}
+                                    {t(`anim.${st.id}.label`)}
                                   </span>
                                 </div>
                                 <button
@@ -1296,13 +1296,13 @@ export function SettingsView() {
                                     setUnlockAnimStyle(st.id);
                                     startUnlockAnim(st.id);
                                   }}
-                                  title={`试看${st.label}`}
+                                  title={t("settings.tryLookNamed", { name: t(`anim.${st.id}.label`) })}
                                 >
-                                  试看
+                                  {t("settings.tryLook")}
                                 </button>
                               </div>
                               <div style={{ fontSize: 11, color: "var(--text-3)", lineHeight: 1.4 }}>
-                                {st.desc}
+                                {t(`anim.${st.id}.desc`)}
                               </div>
                             </div>
                           );
@@ -1319,13 +1319,13 @@ export function SettingsView() {
                     <div className="between">
                       <div>
                         <FieldLabel
-                          name="开机自启动"
-                          tip="登录系统后自动打开本软件。Windows 写入当前用户启动项，macOS 写入登录启动项。若同时开启了免验证，会尝试把密钥加载进 ssh-agent。"
+                          name={t("settings.launchAtLogin")}
+                          tip={t("settings.launchTip")}
                         />
                         <div className="hint">
                           {status?.launchAtLoginSupported === false
-                            ? "当前系统暂不支持开机自启动。"
-                            : "示例：出差换电脑后重新装好，再打开此项；默认关闭。"}
+                            ? t("settings.launchUnsupported")
+                            : t("settings.launchHint")}
                         </div>
                       </div>
                       <button
@@ -1340,7 +1340,7 @@ export function SettingsView() {
                   <hr className="sep" style={{ margin: "4px 0" }} />
 
                   <div className="field">
-                    <FieldLabel name="关闭主窗口动作" tip="点击主界面右上方关闭按钮时的响应规则。" />
+                    <FieldLabel name={t("settings.closeAction")} tip={t("settings.closeActionTip")} />
                     <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
                       {t("settings.closeCurrent", { action: closeActionLabel(status?.closeAction, t) })}
                     </div>
@@ -1355,7 +1355,7 @@ export function SettingsView() {
                             setBusy(true);
                             try {
                               await api.clearClosePreference();
-                              setMsg("已恢复为每次关闭都询问");
+                              setMsg(t("settings.closeReset"));
                               await refresh();
                             } catch (e) {
                               setErr(errMessage(e));
@@ -1364,7 +1364,7 @@ export function SettingsView() {
                             }
                           }}
                         >
-                          恢复为每次询问
+                          {t("settings.restoreAsk")}
                         </button>
                       </div>
                     )}
@@ -1379,12 +1379,12 @@ export function SettingsView() {
             <>
               <SecurityChecklistCard refreshNonce={checklistNonce} onJump={jumpToSetting} />
 
-              <Card title="开机免验证 (Windows DPAPI)">
+              <Card title={t("settings.graceTitle")}>
                 <div className="stack">
                   <div className="field">
                     <FieldLabel
-                      name="免验证天数"
-                      tip="0 表示每次启动都要访问密码。1–30 表示在该天数内，本机可用 Windows DPAPI 记住解锁状态：开机后自动解锁并加载 agent。过期必须重新输入密码。换 Windows 用户或改密码会失效。"
+                      name={t("settings.graceDays")}
+                      tip={t("settings.graceTip")}
                     />
                     <div className="row" style={{ marginTop: 4 }}>
                       <input
@@ -1397,49 +1397,49 @@ export function SettingsView() {
                         onChange={(e) => setGraceDays(e.target.value)}
                       />
                       <button type="button" className="btn primary sm" disabled={busy} onClick={saveGrace}>
-                        保存设置
+                        {t("settings.saveSetting")}
                       </button>
                     </div>
                     <div className="hint" style={{ marginTop: 4 }}>
-                      示例：填 7 表示一周内开机不用输密码；填 0 则每次都验证。
+                      {t("settings.graceHint")}
                     </div>
                   </div>
                   {status?.graceActive && status.graceExpiresAt && (
                     <div className="callout info" style={{ marginTop: 4 }}>
-                      当前免验证有效至 {formatExpiry(status.graceExpiresAt)}，之后需重新输入访问密码。
+                      {t("settings.graceValidUntil", { when: formatExpiry(status.graceExpiresAt) })}
                     </div>
                   )}
                   {!status?.graceActive && (status?.graceDays ?? 0) > 0 && (
                     <div className="callout warn" style={{ marginTop: 4 }}>
-                      已设置免验证天数，但本机会话尚未建立或已过期。下次用访问密码解锁后会重新生效。
+                      {t("settings.gracePending")}
                     </div>
                   )}
                 </div>
               </Card>
 
-              <Card title="指纹 / 生物识别解锁">
+              <Card title={t("settings.bioTitle")}>
                 <div className="stack">
                   <div className="muted">
-                    使用系统已录入的 Windows Hello / Touch ID，应用不会采集或保存指纹。开启须先输入访问密码。
+                    {t("settings.bioIntro")}
                   </div>
                   {!bio?.available && (
                     <div className="callout warn" style={{ marginTop: 4 }}>
-                      本机未检测到可用的指纹 / 人脸 / Windows Hello 硬件。
+                      {t("settings.bioUnavailable")}
                     </div>
                   )}
                   {bio?.stale && (
                     <div className="callout warn" style={{ marginTop: 4 }}>
-                      指纹凭据已失效，请用访问密码解锁后重新开启。
+                      {t("settings.bioStale")}
                     </div>
                   )}
                   <div className="field">
-                    <FieldLabel name="启用指纹解锁" tip="开启后解锁工作空间可刷系统指纹，不必再输访问密码。密码与恢复密钥始终可回落。" />
+                    <FieldLabel name={t("settings.bioEnable")} tip={t("settings.bioEnableTip")} />
                     {bio?.available && !bio.enabled && (
                       <div className="row" style={{ marginTop: 4 }}>
                         <input
                           className="input"
                           type="password"
-                          placeholder="输入访问密码以开启"
+                          placeholder={t("settings.bioPasswordPh")}
                           value={bioPw}
                           onChange={(e) => setBioPw(e.target.value)}
                           style={{ flex: 1 }}
@@ -1455,7 +1455,7 @@ export function SettingsView() {
                               await api.biometricEnable(bioPw);
                               setBioPw("");
                               setBio(await api.biometricStatus());
-                              setMsg("已开启指纹解锁");
+                              setMsg(t("settings.bioOn"));
                             } catch (e) {
                               setErr(errMessage(e));
                             } finally {
@@ -1463,13 +1463,13 @@ export function SettingsView() {
                             }
                           }}
                         >
-                          <Fingerprint size={14} /> 开启
+                          <Fingerprint size={14} /> {t("settings.bioEnableBtn")}
                         </button>
                       </div>
                     )}
                     {bio?.enabled && (
                       <div className="row" style={{ marginTop: 4 }}>
-                        <span className="hint">已开启，解锁与查看验证码/账密可用系统指纹。</span>
+                        <span className="hint">{t("settings.bioEnabledHint")}</span>
                         <button
                           type="button"
                           className="btn ghost sm"
@@ -1480,7 +1480,7 @@ export function SettingsView() {
                             try {
                               await api.biometricDisable();
                               setBio(await api.biometricStatus());
-                              setMsg("已关闭指纹解锁");
+                              setMsg(t("settings.bioOff"));
                             } catch (e) {
                               setErr(errMessage(e));
                             } finally {
@@ -1488,13 +1488,13 @@ export function SettingsView() {
                             }
                           }}
                         >
-                          关闭
+                          {t("common.close")}
                         </button>
                       </div>
                     )}
                   </div>
                   <div className="field">
-                    <FieldLabel name="查看验证码 / 账密时允许指纹" tip="vault 已解锁后，查看一次性验证码或账户密码可用指纹代替访问密码。" />
+                    <FieldLabel name={t("settings.bioReveal")} tip={t("settings.bioRevealTip")} />
                     <label className="row" style={{ marginTop: 4, gap: 8 }}>
                       <input
                         type="checkbox"
@@ -1512,11 +1512,11 @@ export function SettingsView() {
                           }
                         }}
                       />
-                      <span className="hint">默认随主开关打开</span>
+                      <span className="hint">{t("settings.bioRevealDefault")}</span>
                     </label>
                   </div>
                   <div className="field">
-                    <FieldLabel name="取回 TOTP 原始密钥也允许指纹" tip="这是导出级操作。默认仍要求访问密码，打开后可用指纹替代。" />
+                    <FieldLabel name={t("settings.bioExport")} tip={t("settings.bioExportTip")} />
                     <label className="row" style={{ marginTop: 4, gap: 8 }}>
                       <input
                         type="checkbox"
@@ -1534,24 +1534,24 @@ export function SettingsView() {
                           }
                         }}
                       />
-                      <span className="hint">有风险，默认关闭</span>
+                      <span className="hint">{t("settings.bioExportRisk")}</span>
                     </label>
                   </div>
                 </div>
               </Card>
 
-              <Card title="查看 OTP / 密码的免密时效">
+              <Card title={t("settings.revealTitle")}>
                 <div className="stack">
-                  <div className="muted">独立于开机免验证。锁定或退出后立即失效。取回 TOTP 原始密钥仍每次都要密码。</div>
+                  <div className="muted">{t("settings.revealIntro")}</div>
                   <div className="field" id="setting-reveal-grace">
-                    <FieldLabel name="免密查看时效" tip="首次验证后，在该时间内再看验证码或账号密码不用重复输入。0 表示每次都验。" />
+                    <FieldLabel name={t("settings.revealGrace")} tip={t("settings.revealGraceTip")} />
                     <div className="row" style={{ marginTop: 4 }}>
                       <select className="input" style={{ width: 160 }} value={revealGrace} onChange={(e) => setRevealGrace(e.target.value)}>
-                        <option value="0">每次都验证</option>
-                        <option value="1">1 分钟</option>
-                        <option value="5">5 分钟（推荐）</option>
-                        <option value="15">15 分钟</option>
-                        <option value="30">30 分钟</option>
+                        <option value="0">{t("settings.everyTime")}</option>
+                        <option value="1">{t("settings.min1")}</option>
+                        <option value="5">{t("settings.min5")}</option>
+                        <option value="15">{t("settings.min15")}</option>
+                        <option value="30">{t("settings.min30")}</option>
                       </select>
                       <button
                         type="button"
@@ -1561,7 +1561,7 @@ export function SettingsView() {
                           setBusy(true);
                           try {
                             await api.setRevealGraceMinutes(Number(revealGrace));
-                            setMsg("已保存免密查看时效");
+                            setMsg(t("settings.revealSaved"));
                             setChecklistNonce((n) => n + 1);
                           } catch (e) {
                             setErr(errMessage(e));
@@ -1570,18 +1570,18 @@ export function SettingsView() {
                           }
                         }}
                       >
-                        保存
+                        {t("common.save")}
                       </button>
                     </div>
                   </div>
                   <div className="field" id="setting-clipboard-clear">
-                    <label className="field-label">复制后清空剪贴板</label>
+                    <label className="field-label">{t("settings.clipClear")}</label>
                     <div className="row">
                       <select className="input" style={{ width: 140 }} value={clipSec} onChange={(e) => setClipSec(e.target.value)}>
-                        <option value="0">不清空</option>
-                        <option value="10">10 秒</option>
-                        <option value="20">20 秒</option>
-                        <option value="60">60 秒</option>
+                        <option value="0">{t("settings.clipNever")}</option>
+                        <option value="10">{t("settings.sec10")}</option>
+                        <option value="20">{t("settings.sec20")}</option>
+                        <option value="60">{t("settings.sec60")}</option>
                       </select>
                       <button
                         type="button"
@@ -1589,21 +1589,21 @@ export function SettingsView() {
                         disabled={busy}
                         onClick={async () => {
                           await api.setClipboardClearSeconds(Number(clipSec));
-                          setMsg("已保存剪贴板清空时间");
+                          setMsg(t("settings.clipSaved"));
                           setChecklistNonce((n) => n + 1);
                         }}
                       >
-                        保存
+                        {t("common.save")}
                       </button>
                     </div>
                   </div>
                   <div className="field">
-                    <label className="field-label">密码历史保留条数</label>
+                    <label className="field-label">{t("settings.histLimit")}</label>
                     <div className="row">
                       <select className="input" style={{ width: 120 }} value={histLimit} onChange={(e) => setHistLimit(e.target.value)}>
-                        <option value="5">5 条</option>
-                        <option value="10">10 条</option>
-                        <option value="20">20 条</option>
+                        <option value="5">{t("settings.histN", { n: 5 })}</option>
+                        <option value="10">{t("settings.histN", { n: 10 })}</option>
+                        <option value="20">{t("settings.histN", { n: 20 })}</option>
                       </select>
                       <button
                         type="button"
@@ -1611,58 +1611,58 @@ export function SettingsView() {
                         disabled={busy}
                         onClick={async () => {
                           await api.setAccountHistoryLimit(Number(histLimit));
-                          setMsg("已保存历史条数上限");
+                          setMsg(t("settings.histSaved"));
                         }}
                       >
-                        保存
+                        {t("common.save")}
                       </button>
                     </div>
                   </div>
                 </div>
               </Card>
 
-              <Card title="修改主访问密码">
+              <Card title={t("settings.changePwTitle")}>
                 <div className="stack" style={{ maxWidth: 420 }}>
                   <div className="field">
-                    <label className="field-label">当前密码</label>
+                    <label className="field-label">{t("settings.currentPw")}</label>
                     <input className="input" type="password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} />
                   </div>
                   <div className="field">
-                    <label className="field-label">新密码</label>
+                    <label className="field-label">{t("settings.newPw")}</label>
                     <input className="input" type="password" value={newPw} onChange={(e) => setNewPw(e.target.value)} />
                   </div>
                   <div className="field">
-                    <label className="field-label">确认新密码</label>
+                    <label className="field-label">{t("settings.confirmPw")}</label>
                     <input className="input" type="password" value={newPw2} onChange={(e) => setNewPw2(e.target.value)} />
                   </div>
                   <div style={{ marginTop: 4 }}>
                     <button className="btn primary sm" disabled={busy} onClick={changePassword}>
-                      更新密码
+                      {t("settings.updatePw")}
                     </button>
                   </div>
                 </div>
               </Card>
 
-              <Card title="轮换灾难恢复密钥">
+              <Card title={t("settings.rotateTitle")}>
                 <div className="stack">
-                  <div className="muted">生成新的恢复密钥并作废旧的。请务必重新保存。</div>
+                  <div className="muted">{t("settings.rotateIntro")}</div>
                   {newRecovery ? (
                     <>
-                      <div className="callout danger">⚠️ 仅显示一次，请立即保存：</div>
+                      <div className="callout danger">{t("settings.rotateOnce")}</div>
                       <div className="reckey">{newRecovery}</div>
                       <div className="row">
                         <button className="btn sm" onClick={() => writeClipboard(newRecovery, true)}>
-                          复制
+                          {t("common.copy")}
                         </button>
                         <button className="btn ghost sm" onClick={() => setNewRecovery("")}>
-                          我已保存
+                          {t("settings.rotateSaved")}
                         </button>
                       </div>
                     </>
                   ) : (
                     <div>
                       <button className="btn danger sm" disabled={busy} onClick={rotate}>
-                        轮换恢复密钥
+                        {t("settings.rotateBtn")}
                       </button>
                     </div>
                   )}
@@ -1674,46 +1674,46 @@ export function SettingsView() {
           {/* TAB 3: 工作空间与服务 */}
           {activeTab === "workspace" && (
             <>
-              <Card title="工作空间信息">
+              <Card title={t("settings.wsTitle")}>
                 <div className="stack">
                   <div className="kv" id="setting-workspace-path">
-                    <span className="muted">存储路径</span>
-                    <span className="mono">{status?.workspacePath ?? "—"}</span>
+                    <span className="muted">{t("settings.wsPath")}</span>
+                    <span className="mono">{status?.workspacePath ?? t("common.emDash")}</span>
                   </div>
                   <div className="kv">
-                    <span className="muted">SSH 配置</span>
+                    <span className="muted">{t("settings.wsSsh")}</span>
                     <span>
                       <button type="button" className="btn ghost sm" onClick={() => navigate("/config")}>
                         <FileCog size={13} style={{ marginRight: 3 }} />
-                        查看 / 用记事本编辑 →
+                        {t("settings.wsEditSsh")}
                       </button>
                     </span>
                   </div>
                   <div className="kv">
-                    <span className="muted">空间 ID</span>
-                    <span className="mono">{status?.workspaceId ?? "—"}</span>
+                    <span className="muted">{t("settings.wsId")}</span>
+                    <span className="mono">{status?.workspaceId ?? t("common.emDash")}</span>
                   </div>
                   <div className="kv" id="setting-auto-lock">
-                    <span className="muted">自动锁定</span>
-                    <span>{status?.autoLockMinutes ?? 0} 分钟</span>
+                    <span className="muted">{t("settings.wsAutoLock")}</span>
+                    <span>{t("settings.wsMinutes", { n: status?.autoLockMinutes ?? 0 })}</span>
                   </div>
                   <div className="kv" id="setting-lock-on-sleep">
-                    <span className="muted">休眠/锁屏锁定</span>
+                    <span className="muted">{t("settings.wsSleepLock")}</span>
                     <span className="muted" style={{ fontSize: 12 }}>
-                      由本机配置 lockOnSleep 控制，见上方安全自查建议
+                      {t("settings.wsSleepLockHint")}
                     </span>
                   </div>
                 </div>
               </Card>
 
-              <Card title="GitHub PAT 个人访问令牌">
+              <Card title={t("settings.patTitle")}>
                 <GithubPatSettings writesLocked={!!status?.writesLocked} />
               </Card>
 
-              <Card title="数据备份与云端同步">
+              <Card title={t("settings.backupTitle")}>
                 <div className="stack">
                   <div className="muted" style={{ fontSize: 12 }}>
-                    支持本地离线加密备份导出 (.gambackup) 与换机还原，以及 S3 / Cloudflare R2 兼容的端到端零知识加密云端同步。
+                    {t("settings.backupIntro")}
                   </div>
                   <div>
                     <button
@@ -1722,7 +1722,7 @@ export function SettingsView() {
                       onClick={() => navigate("/sync")}
                     >
                       <Cloud size={13} style={{ marginRight: 3 }} />
-                      前往云端同步与备份管理 →
+                      {t("settings.gotoSync")}
                     </button>
                   </div>
                 </div>
@@ -1739,7 +1739,7 @@ export function SettingsView() {
               <div className="card-head">
                 <div className="card-title" style={{ display: "flex", alignItems: "center", gap: 5 }}>
                   <AlertTriangle size={14} />
-                  高危操作区 · 出厂清空还原
+                  {t("settings.dangerTitle")}
                 </div>
               </div>
               <div className="card-body">

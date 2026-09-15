@@ -66,7 +66,7 @@ impl Vault {
             return Err(AppError::AlreadyInitialized(root.display().to_string()));
         }
         std::fs::create_dir_all(root)?;
-        for sub in ["data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons"] {
+        for sub in ["data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons", "blobs"] {
             std::fs::create_dir_all(root.join(sub))?;
         }
 
@@ -286,7 +286,7 @@ impl Vault {
             return Err(AppError::AlreadyInitialized(root.display().to_string()));
         }
         std::fs::create_dir_all(root)?;
-        for sub in ["data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons"] {
+        for sub in ["data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons", "blobs"] {
             std::fs::create_dir_all(root.join(sub))?;
         }
         header.kdf.clamp_to_safe_bounds();

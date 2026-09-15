@@ -5,7 +5,8 @@
 //! 适合换机离线迁移、冷备份以及故障恢复。
 
 use crate::error::{AppError, Result};
-use crate::model::{AccountData, KeyRecord, Secrets, TotpData, VaultData};
+use crate::model::{collect_blob_hashes, AccountData, FileData, KeyRecord, NoteData, Secrets, TotpData, VaultData};
+use crate::store::blob;
 use crate::platform::PlatformOps;
 use crate::store;
 use crate::vault::crypto::{self, SALT_LEN, XNONCE_LEN};
@@ -37,6 +38,13 @@ pub struct BackupPayload {
     /// iconHash -> base64(webp)
     #[serde(default)]
     pub icons: HashMap<String, String>,
+    #[serde(default)]
+    pub file_data: FileData,
+    #[serde(default)]
+    pub note_data: NoteData,
+    /// sha256 -> base64(明文 blob)
+    #[serde(default)]
+    pub blobs: HashMap<String, String>,
 }
 
 /// 前端展示的备份摘要
@@ -96,10 +104,21 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
 
     let totp_data = store::load_totp(vault).unwrap_or_default();
     let account_data = store::load_accounts(vault).unwrap_or_default();
+    let file_data = store::load_files(vault).unwrap_or_default();
+    let note_data = store::load_notes(vault).unwrap_or_default();
     let mut icons = HashMap::new();
     for hash in store::list_icon_hashes(vault) {
         if let Ok(raw) = store::load_icon(vault, &hash) {
             icons.insert(hash, B64.encode(raw));
+        }
+    }
+    let mut blobs = HashMap::new();
+    for hash in collect_blob_hashes(&file_data, &note_data) {
+        match blob::read_blob_bytes(vault, &hash) {
+            Ok(raw) => {
+                blobs.insert(hash, B64.encode(raw));
+            }
+            Err(e) => log::warn!("导出备份时读取 blob {hash} 失败: {e}"),
         }
     }
 
@@ -113,6 +132,9 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
         totp_data,
         account_data,
         icons,
+        file_data,
+        note_data,
+        blobs,
     };
 
     let payload_bytes = serde_json::to_vec(&payload)?;
@@ -246,6 +268,31 @@ pub fn import_backup(
         vault,
         &crate::model::merge_account_data(current_acc, payload.account_data.clone()),
     )?;
+    let current_files = if merge {
+        store::load_files(vault).unwrap_or_default()
+    } else {
+        FileData::default()
+    };
+    let current_notes = if merge {
+        store::load_notes(vault).unwrap_or_default()
+    } else {
+        NoteData::default()
+    };
+    store::save_files(
+        vault,
+        &crate::model::merge_file_data(current_files, payload.file_data.clone()),
+    )?;
+    store::save_notes(
+        vault,
+        &crate::model::merge_note_data(current_notes, payload.note_data.clone()),
+    )?;
+    for (hash, b64) in &payload.blobs {
+        if let Ok(bytes) = B64.decode(b64) {
+            if let Err(e) = blob::write_blob(vault, std::io::Cursor::new(bytes)) {
+                log::warn!("导入备份时写入 blob {hash} 失败: {e}");
+            }
+        }
+    }
 
     for (hash, b64) in &payload.icons {
         if let Ok(bytes) = B64.decode(b64) {

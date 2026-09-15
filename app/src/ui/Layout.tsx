@@ -13,6 +13,8 @@ import {
   Lock,
   Timer,
   UserRound,
+  FileLock2,
+  NotebookPen,
 } from "lucide-react";
 import { api } from "../lib/ipc";
 import { useApp } from "../store";
@@ -24,16 +26,30 @@ export function Layout({ children }: { children: ReactNode }) {
   const [idCount, setIdCount] = useState<number | null>(null);
   const [keyCount, setKeyCount] = useState<number | null>(null);
   const [repoCount, setRepoCount] = useState<number | null>(null);
+  const [totpCount, setTotpCount] = useState<number | null>(null);
+  const [accountCount, setAccountCount] = useState<number | null>(null);
+  const [fileCount, setFileCount] = useState<number | null>(null);
+  const [noteCount, setNoteCount] = useState<number | null>(null);
 
   useEffect(() => {
     let unmounted = false;
     (async () => {
       try {
-        const counts = await api.workspaceNavCounts();
+        const [counts, totp, accounts, files, notes] = await Promise.all([
+          api.workspaceNavCounts(),
+          api.totpList(),
+          api.accountList(),
+          api.fileList(),
+          api.noteList(),
+        ]);
         if (!unmounted) {
           setIdCount(counts.identities);
           setKeyCount(counts.keys);
           setRepoCount(counts.repos);
+          setTotpCount(totp.entries.length);
+          setAccountCount(accounts.entries.length);
+          setFileCount(files.entries.length);
+          setNoteCount(notes.entries.length);
         }
       } catch {
         /* 忽略 */
@@ -51,8 +67,10 @@ export function Layout({ children }: { children: ReactNode }) {
     { to: "/agent", label: t("nav.agent"), icon: Cpu },
     { to: "/repos", label: t("nav.repos"), icon: FolderGit2, badge: repoCount },
     { to: "/clone", label: t("nav.clone"), icon: Download },
-    { to: "/totp", label: t("nav.totp"), icon: Timer },
-    { to: "/accounts", label: t("nav.accounts"), icon: UserRound },
+    { to: "/totp", label: t("nav.totp"), icon: Timer, badge: totpCount },
+    { to: "/accounts", label: t("nav.accounts"), icon: UserRound, badge: accountCount },
+    { to: "/files", label: t("nav.files"), icon: FileLock2, badge: fileCount },
+    { to: "/notes", label: t("nav.notes"), icon: NotebookPen, badge: noteCount },
     { to: "/sync", label: t("nav.sync"), icon: Cloud },
   ];
 

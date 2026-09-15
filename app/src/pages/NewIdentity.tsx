@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Sun, Moon, Palette } from "lucide-react";
 import {
   api,
@@ -14,7 +15,6 @@ import { useApp } from "../store";
 import { FieldLabel } from "../ui/common";
 import { writeClipboard } from "../lib/clipboard";
 
-const STEPS = ["填信息", "密钥", "上传公钥", "验证", "归属标识"];
 const DRAFT_KEY = "gam.newIdentity.draft";
 
 const PLATFORMS = [
@@ -117,8 +117,16 @@ export function suggestKeyComment(email: string, name: string, gitUserName: stri
 }
 
 export function NewIdentity() {
+  const { t } = useTranslation();
   const nav = useNavigate();
   const { status, theme, toggleTheme, writesLocked, startupNote } = useApp();
+  const STEPS = [
+    t("identity.stepInfo"),
+    t("identity.stepKey"),
+    t("identity.stepUpload"),
+    t("identity.stepVerify"),
+    t("identity.stepOwners"),
+  ];
   const workspacePath = status?.workspacePath;
   const [d, setDraft] = useState<Draft>(loadDraft);
   const [identities, setIdentities] = useState<Identity[]>([]);
@@ -170,10 +178,10 @@ export function NewIdentity() {
   );
 
   const identityFileHint = useMemo(() => {
-    const root = (workspacePath || "<工作空间>").replace(/\\/g, "/");
-    const stem = d.name.trim() ? `id_ed25519_${d.name.trim()}` : "id_ed25519_<备注名>";
+    const root = (workspacePath || t("identity.wsPlaceholder")).replace(/\\/g, "/");
+    const stem = d.name.trim() ? `id_ed25519_${d.name.trim()}` : t("identity.keyStemPh");
     return `${root}/ssh-keys/${stem}${d.strictMode ? ".pub" : ""}`;
-  }, [workspacePath, d.name, d.strictMode]);
+  }, [workspacePath, d.name, d.strictMode, t]);
 
   const publicKey = d.created?.publicOpenssh || d.pendingPub || keys.find((k) => k.id === d.keyId)?.publicOpenssh || "";
 
@@ -258,12 +266,12 @@ export function NewIdentity() {
   }, [d.step, d.hostAlias, d.realHost, d.user, identityFileHint]);
 
   function validateInfo(): string | null {
-    if (!d.name.trim()) return "请填写备注名";
-    if (!d.hostAlias.trim()) return "请填写 Host 别名";
-    if (!/^[A-Za-z0-9._-]+$/.test(d.hostAlias.trim())) return "Host 别名只能包含字母、数字、点、下划线和连字符";
-    if (!d.realHost.trim()) return "请填写真实主机名";
-    if (aliasClash) return `Host 别名「${d.hostAlias}」已被占用`;
-    if (nameClash) return `备注名「${d.name}」已存在`;
+    if (!d.name.trim()) return t("identity.needName");
+    if (!d.hostAlias.trim()) return t("identity.needAlias");
+    if (!/^[A-Za-z0-9._-]+$/.test(d.hostAlias.trim())) return t("identity.aliasChars");
+    if (!d.realHost.trim()) return t("identity.needHost");
+    if (aliasClash) return t("identity.aliasClash", { alias: d.hostAlias });
+    if (nameClash) return t("identity.nameClash", { name: d.name });
     return null;
   }
 
@@ -276,7 +284,7 @@ export function NewIdentity() {
     }
     if (d.keyMode === "reuse") {
       const k = keys.find((x) => x.id === d.keyId);
-      if (!k) throw new Error("请选择要复用的密钥");
+      if (!k) throw new Error(t("identity.pickReuse"));
       set({ pendingKeyId: k.id, pendingPub: k.publicOpenssh });
       return { keyId: k.id, pub: k.publicOpenssh };
     }
@@ -326,7 +334,7 @@ export function NewIdentity() {
     if (target >= 2) {
       if (d.keyMode === "reuse" && !d.keyId && !d.pendingKeyId) {
         set({ step: 1 });
-        return setErr("请选择要复用的密钥");
+        return setErr(t("identity.pickReuse"));
       }
       setBusy(true);
       try {
@@ -354,7 +362,7 @@ export function NewIdentity() {
 
   async function openKeysPage() {
     setErr("");
-    if (!plat.keysUrl) return setErr("该平台请自行打开 SSH 公钥设置页");
+    if (!plat.keysUrl) return setErr(t("identity.noKeysUrl"));
     try {
       await api.openUrl(plat.keysUrl);
     } catch (e) {
@@ -364,7 +372,7 @@ export function NewIdentity() {
 
   async function savePat() {
     const token = patInput.trim();
-    if (!token) return setErr("请粘贴 GitHub PAT");
+    if (!token) return setErr(t("pat.needToken"));
     setErr("");
     setMsg("");
     setBusy(true);
@@ -374,7 +382,7 @@ export function NewIdentity() {
       setPatConfigured(true);
       setPatLogin(login);
       setPatInput("");
-      setMsg(`PAT 已保存，当前 GitHub 账号 ${login}`);
+      setMsg(t("pat.saved", { name: login }));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -385,14 +393,14 @@ export function NewIdentity() {
   async function uploadViaPat() {
     const keyId = d.created?.identity.keyId || d.pendingKeyId || d.keyId;
     if (!keyId) return;
-    if (!patConfigured) return setErr("请先在下方保存 GitHub PAT，或改用复制公钥手动添加");
+    if (!patConfigured) return setErr(t("identity.needPatFirst"));
     setErr("");
     setMsg("");
     setBusy(true);
     try {
-      await api.uploadPublicKey(keyId, d.name.trim() || "git-keymaster");
+      await api.uploadPublicKey(keyId, d.name.trim() || t("brand.name"));
       set({ uploaded: true });
-      setMsg("公钥已通过 PAT 上传到 GitHub");
+      setMsg(t("identity.uploadedMsg"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -447,7 +455,7 @@ export function NewIdentity() {
       const extra = orgs.filter((o) => !have.has(o.toLowerCase()));
       const cur = d.ownersText.trim();
       set({ ownersText: extra.length ? (cur ? `${cur}\n${extra.join("\n")}` : extra.join("\n")) : cur });
-      setMsg(orgs.length ? `已拉取 ${orgs.length} 个组织，可再编辑` : "该账号下没有组织");
+      setMsg(orgs.length ? t("identity.orgsImported", { count: orgs.length }) : t("identity.noOrgs"));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -492,11 +500,11 @@ export function NewIdentity() {
         <div className="wizard-head">
           <div className="between">
             <div>
-              <div className="title-lg">新建身份</div>
-              <div className="muted">未点「完成」前可随时返回修改；填写内容会自动记住。点「开始验证」才会临时写入 Host 并把私钥加载进 agent。</div>
+              <div className="title-lg">{t("identity.title")}</div>
+              <div className="muted">{t("identity.subtitle")}</div>
               {writesLocked && (
                 <div className="callout warn sm" style={{ marginTop: 8 }}>
-                  {startupNote || "正在同步云端数据，请稍后再创建身份。"}
+                  {startupNote || t("identity.syncLocked")}
                 </div>
               )}
             </div>
@@ -506,17 +514,17 @@ export function NewIdentity() {
               className="btn ghost sm"
               onClick={exitWizard}
             >
-              退出
+              {t("identity.exit")}
             </button>
             <button
               type="button"
               className="btn ghost sm"
               style={{ display: "inline-flex", gap: 5, padding: "2px 7px" }}
-              title="切换界面风格"
+              title={t("theme.toggle")}
               onClick={toggleTheme}
             >
               {theme === "light" ? <Sun size={13} /> : theme === "dark" ? <Moon size={13} /> : <Palette size={13} />}
-              <span style={{ fontSize: 11 }}>{theme === "light" ? "浅色" : theme === "dark" ? "深色" : "黛蓝"}</span>
+              <span style={{ fontSize: 11 }}>{theme === "light" ? t("theme.light") : theme === "dark" ? t("theme.dark") : t("theme.navy")}</span>
             </button>
             </div>
           </div>
@@ -538,12 +546,12 @@ export function NewIdentity() {
         <div className="wizard-body">
           {d.step === 0 && (
             <div className="stack">
-              {d.created && <div className="callout warn">⚠️ 身份与 SSH 配置已写入，平台 / 备注名 / 别名 / 主机 / SSH User 不可再改。其它步骤仍可返回查看。</div>}
-              {d.staged && !d.created && <div className="callout warn">已临时写入 Host 并加载密钥，平台 / 备注名 / 别名 / 主机不可再改。取消创建会撤回 Host，并从 agent 卸下这把尚未绑定的密钥。</div>}
+              {d.created && <div className="callout warn">{t("identity.createdLocked")}</div>}
+              {d.staged && !d.created && <div className="callout warn">{t("identity.stagedLocked")}</div>}
               <div className="field">
                 <FieldLabel
-                  name="平台"
-                  tip="决定默认主机和公钥设置页。GitHub / GitLab 会自动填 HostName；自建 Gitea 需自己填真实主机。"
+                  name={t("identity.platform")}
+                  tip={t("identity.platformTip")}
                 />
                 <div className="choice-row">
                   {PLATFORMS.map((p) => (
@@ -554,91 +562,91 @@ export function NewIdentity() {
                       disabled={locked}
                       onClick={() => applyPlatform(p.id)}
                     >
-                      {p.label}
+                      {p.id === "gitea" ? t("identity.platGitea") : p.id === "other" ? t("identity.platOther") : p.label}
                     </button>
                   ))}
                 </div>
-                <div className="hint">示例：个人 GitHub 选 GitHub；公司自建选 Gitea / 自建。</div>
+                <div className="hint">{t("identity.platformHint")}</div>
               </div>
               <div className="grid c2">
                 <div className="field">
                   <FieldLabel
-                    name="备注名"
-                    tip="只在本软件里区分身份，也会用作工作空间 ssh-keys/ 下的文件名 id_ed25519_<备注名>。不是 GitHub 登录名，可以和账号名不同。"
+                    name={t("identity.name")}
+                    tip={t("identity.nameTip")}
                   />
-                  <input className="input" value={d.name} disabled={locked} onChange={(e) => onName(e.target.value)} placeholder="例如 nova-labs" />
-                  <div className="hint">示例：nova-labs、kiln-ops、polar-box</div>
+                  <input className="input" value={d.name} disabled={locked} onChange={(e) => onName(e.target.value)} placeholder={t("identity.namePh")} />
+                  <div className="hint">{t("identity.nameHint")}</div>
                 </div>
                 <div className="field">
                   <FieldLabel
-                    name="提交邮箱（可选）"
-                    tip="写入该仓库的 git config user.email，只影响 commit 作者邮箱，不影响 SSH 登录。克隆或切换身份时自动带上。"
+                    name={t("identity.email")}
+                    tip={t("identity.emailTip")}
                   />
                   <input
                     className="input"
                     value={d.email}
                     disabled={locked}
                     onChange={(e) => onEmail(e.target.value)}
-                    placeholder="例如 nova.reyes@example.com"
+                    placeholder={t("identity.emailPh")}
                   />
-                  <div className="hint">示例：nova.reyes@example.com（建议与平台账号邮箱一致）</div>
+                  <div className="hint">{t("identity.emailHint")}</div>
                 </div>
                 <div className="field">
                   <FieldLabel
-                    name="提交姓名 user.name（可选）"
-                    tip="写入该仓库的 git config user.name，是 commit 上显示的作者名。不是 SSH 用户，也不是 Host 别名。不填则沿用本机全局 git 配置。"
+                    name={t("identity.gitUserName")}
+                    tip={t("identity.gitUserNameTip")}
                   />
                   <input
                     className="input"
                     value={d.gitUserName}
                     disabled={locked}
                     onChange={(e) => onGitUserName(e.target.value)}
-                    placeholder="例如 Nova Reyes"
+                    placeholder={t("identity.gitUserNamePh")}
                   />
-                  <div className="hint">示例：Nova Reyes（commit 里看到的名字）</div>
+                  <div className="hint">{t("identity.gitUserNameHint")}</div>
                 </div>
                 <div className="field">
                   <FieldLabel
-                    name="SSH User"
-                    tip="写入 ~/.ssh/config 的 User。GitHub / GitLab / Gitea 必须填 git，不是你的账号名。填错会导致连不上。只有自建服务器要求系统用户名时才改。"
+                    name={t("identity.sshUser")}
+                    tip={t("identity.sshUserTip")}
                   />
                   <input
                     className="input mono"
                     value={d.user}
                     disabled={locked}
                     onChange={(e) => set({ user: e.target.value })}
-                    placeholder="例如 git"
+                    placeholder={t("identity.sshUserPh")}
                   />
-                  <div className="hint">示例：git（GitHub/GitLab 保持这个即可）</div>
+                  <div className="hint">{t("identity.sshUserHint")}</div>
                 </div>
                 <div className="field">
                   <FieldLabel
-                    name="Host 别名"
-                    tip="SSH config 里的 Host 短名。以后用 git@别名:owner/repo.git 克隆，就会自动用这把密钥。多账号靠不同别名区分，不要都写成 github.com。"
+                    name={t("identity.hostAlias")}
+                    tip={t("identity.hostAliasTip")}
                   />
                   <input
                     className="input mono"
                     value={d.hostAlias}
                     disabled={locked}
-                    placeholder="例如 github-nova-labs"
+                    placeholder={t("identity.hostAliasPh")}
                     onChange={(e) => set({ aliasTouched: true, hostAlias: e.target.value })}
                   />
-                  <div className="hint">示例：github-nova-labs、gitlab-kiln</div>
-                  {aliasClash && <div className="hint" style={{ color: "var(--red)" }}>此别名已被占用</div>}
+                  <div className="hint">{t("identity.hostAliasHint")}</div>
+                  {aliasClash && <div className="hint" style={{ color: "var(--red)" }}>{t("identity.aliasTaken")}</div>}
                 </div>
                 <div className="field">
                   <FieldLabel
-                    name="真实主机 HostName"
-                    tip="SSH 真正连接的服务器地址。别名只是本地称呼，HostName 才是 github.com 或你的自建域名。"
+                    name={t("identity.realHost")}
+                    tip={t("identity.realHostTip")}
                   />
                   <input
                     className="input mono"
                     value={d.realHost}
                     disabled={locked}
-                    placeholder="例如 github.com"
+                    placeholder={t("identity.realHostPh")}
                     onChange={(e) => set({ hostTouched: true, realHost: e.target.value })}
                   />
-                  <div className="hint">示例：github.com、gitlab.com、git.example.com</div>
+                  <div className="hint">{t("identity.realHostHint")}</div>
                 </div>
               </div>
             </div>
@@ -646,11 +654,11 @@ export function NewIdentity() {
 
           {d.step === 1 && (
             <div className="stack">
-              {locked && <div className="callout info">密钥与 config 已写入，密钥选项已锁定。可返回查看，不会重复创建。</div>}
+              {locked && <div className="callout info">{t("identity.keyLocked")}</div>}
               <div className="field">
                 <FieldLabel
-                  name="密钥来源"
-                  tip="新建会生成一把带随机强口令的 ed25519 并加密入库。复用则使用「密钥管理」里已导入的钥匙，适合收编现有 id_ed25519。"
+                  name={t("identity.keySource")}
+                  tip={t("identity.keySourceTip")}
                 />
                 <div className="choice-row">
                   <button
@@ -659,8 +667,8 @@ export function NewIdentity() {
                     disabled={locked}
                     onClick={() => set({ keyMode: "new", pendingKeyId: "", pendingPub: "" })}
                   >
-                    <strong>新建 ed25519</strong>
-                    <div className="muted sm">自动生成强随机口令，保存到工作空间 ssh-keys/</div>
+                    <strong>{t("identity.newKey")}</strong>
+                    <div className="muted sm">{t("identity.newKeyDesc")}</div>
                   </button>
                   <button
                     type="button"
@@ -668,38 +676,38 @@ export function NewIdentity() {
                     disabled={locked}
                     onClick={() => set({ keyMode: "reuse", pendingKeyId: "", pendingPub: "" })}
                   >
-                    <strong>复用库内密钥</strong>
-                    <div className="muted sm">在「密钥管理」导入后可在此选择</div>
+                    <strong>{t("identity.reuseKey")}</strong>
+                    <div className="muted sm">{t("identity.reuseKeyDesc")}</div>
                   </button>
                 </div>
-                <div className="hint">示例：第一次用这个账号选「新建」；已有 ~/.ssh 钥匙则先导入再选「复用」。</div>
+                <div className="hint">{t("identity.keySourceHint")}</div>
               </div>
               {d.keyMode === "new" && (
                 <div className="field">
                   <FieldLabel
-                    name="密钥注释 comment"
-                    tip="写在公钥末尾的备注，方便在 GitHub SSH keys 列表里认出是哪把钥匙。不影响认证。"
+                    name={t("identity.keyComment")}
+                    tip={t("identity.keyCommentTip")}
                   />
                   <input
                     className="input"
                     value={d.keyComment}
                     disabled={locked}
-                    placeholder="例如 nova.reyes@example.com"
+                    placeholder={t("identity.keyCommentPh")}
                     onChange={(e) => set({ commentTouched: true, keyComment: e.target.value })}
                   />
                   <div className="hint">
-                    默认取提交邮箱；未填邮箱则用备注名@gam，再否则用提交姓名。可手动改。
+                    {t("identity.keyCommentHint")}
                   </div>
                 </div>
               )}
               {d.keyMode === "reuse" && (
                 <div className="field">
-                  <FieldLabel name="选择密钥" tip="从工作空间已入库的密钥里挑一把绑定到这个身份。指纹应和你要使用的账号公钥一致。" />
+                  <FieldLabel name={t("identity.pickKey")} tip={t("identity.pickKeyTip")} />
                   {keys.length === 0 ? (
-                    <div className="muted">库内还没有密钥，请先到「密钥管理」导入，或改选新建。</div>
+                    <div className="muted">{t("identity.noKeys")}</div>
                   ) : (
                     <select className="input" value={d.keyId} disabled={locked} onChange={(e) => set({ keyId: e.target.value, pendingPub: "", pendingKeyId: "" })}>
-                      <option value="">请选择…</option>
+                      <option value="">{t("identity.pickKeyPh")}</option>
                       {keys.map((k) => (
                         <option key={k.id} value={k.id}>
                           {k.name} · {k.algorithm} · {k.fingerprint.slice(0, 24)}
@@ -707,17 +715,17 @@ export function NewIdentity() {
                       ))}
                     </select>
                   )}
-                  <div className="hint">示例：选择指纹与 GitHub 上已登记公钥相同的那一把</div>
+                  <div className="hint">{t("identity.pickKeyHint")}</div>
                 </div>
               )}
               <div className="field">
                 <div className="between">
                   <div>
                     <FieldLabel
-                      name="严格模式"
-                      tip="关闭（默认）：带口令的私钥和公钥都写到工作空间 ssh-keys/，IdentityFile 指向私钥。开启：该目录只留 .pub，私钥只在解锁后注入 ssh-agent；Git 通过 ssh 向 agent 要签名，不直接读私钥文件。未解锁或未加载 agent 时 git 会失败。"
+                      name={t("identity.strict")}
+                      tip={t("identity.strictTip")}
                     />
-                    <div className="hint">示例：日常用默认关闭；对高敏感账号可开启</div>
+                    <div className="hint">{t("identity.strictHint")}</div>
                   </div>
                   <button
                     type="button"
@@ -727,10 +735,10 @@ export function NewIdentity() {
                   />
                 </div>
               </div>
-              <div className="callout info">IdentityFile 将指向真实路径 {identityFileHint}。点「开始验证」才会备份并写入 config。</div>
+              <div className="callout info">{t("identity.identityFile", { path: identityFileHint })}</div>
               {preview?.diff && (
                 <div>
-                  <div className="section-title">将写入的 diff（预览，尚未落盘）</div>
+                  <div className="section-title">{t("identity.diffTitle")}</div>
                   <pre className="code">{preview.diff}</pre>
                 </div>
               )}
@@ -741,56 +749,56 @@ export function NewIdentity() {
             <div className="stack">
               <div className="field">
                 <FieldLabel
-                  name="公钥"
-                  tip="把整行公钥添加到对应平台的 SSH keys。平台只需要公钥；私钥留在本地/工作空间。添加后才能通过 ssh -T 验证。"
+                  name={t("identity.pubKey")}
+                  tip={t("identity.pubKeyTip")}
                 />
-                <div className="code">{publicKey || "（尚未生成，请返回上一步）"}</div>
-                <div className="hint">示例：ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… nova.reyes@example.com</div>
+                <div className="code">{publicKey || t("identity.noPub")}</div>
+                <div className="hint">{t("identity.pubHint")}</div>
               </div>
               <div className="row" style={{ flexWrap: "wrap" }}>
                 <button className="btn" onClick={copyPub} disabled={!publicKey}>
-                  {copied ? "已复制" : "复制公钥"}
+                  {copied ? t("common.copied") : t("identity.copyPub")}
                 </button>
                 {plat.keysUrl && (
                   <button className="btn" onClick={openKeysPage}>
-                    打开 {plat.label} SSH 设置页
+                    {t("identity.openSshSettings", { label: plat.label })}
                   </button>
                 )}
                 {d.platform === "github" && (
                   <button className="btn primary" disabled={busy || d.uploaded || !publicKey || !patConfigured} onClick={uploadViaPat}>
-                    {d.uploaded ? "已上传" : "用 PAT 自动上传"}
+                    {d.uploaded ? t("identity.uploaded") : t("identity.uploadPat")}
                   </button>
                 )}
               </div>
               {d.platform === "github" && (
                 <div className="field">
                   <FieldLabel
-                    name="GitHub PAT"
-                    tip="classic token 需要 write:public_key 或 admin:public_key，才能代你把公钥添加到 GitHub。令牌只进加密库，界面不会回显。也可跳过，改用上方「复制公钥」手动添加。"
+                    name={t("identity.pat")}
+                    tip={t("identity.patTip")}
                   />
                   {patConfigured ? (
                     <div className="callout good sm">
-                      已保存 PAT{patLogin ? `（GitHub 账号 ${patLogin}）` : ""}，可直接自动上传。也可到「设置」里更换或清除。
+                      {patLogin ? t("identity.patSavedAccount", { login: patLogin }) : t("identity.patSaved")}
                     </div>
                   ) : (
                     <div className="stack" style={{ gap: 8 }}>
                       <div className="muted sm">
-                        还没配置 PAT。到 GitHub → Settings → Developer settings → Personal access tokens 新建 classic token，勾选 <code>write:public_key</code>（或 <code>admin:public_key</code>），粘贴到下面保存。
+                        {t("identity.patNeed")}
                       </div>
                       <input
                         className="input mono"
                         type="password"
                         autoComplete="off"
-                        placeholder="ghp_… 或 github_pat_…"
+                        placeholder="ghp_… / github_pat_…"
                         value={patInput}
                         onChange={(e) => setPatInput(e.target.value)}
                       />
                       <div className="row" style={{ flexWrap: "wrap" }}>
                         <button type="button" className="btn primary sm" disabled={busy || !patInput.trim()} onClick={savePat}>
-                          保存 PAT
+                          {t("identity.savePat")}
                         </button>
                         <button type="button" className="btn ghost sm" onClick={() => api.openUrl("https://github.com/settings/tokens")}>
-                          打开 GitHub 令牌页
+                          {t("pat.openGithub")}
                         </button>
                       </div>
                     </div>
@@ -800,25 +808,25 @@ export function NewIdentity() {
               <hr className="sep" />
               <div className="grid-sum">
                 <div>
-                  <div className="muted">备注名</div>
-                  <div style={{ fontWeight: 600 }}>{d.name || "—"}</div>
+                  <div className="muted">{t("identity.summaryName")}</div>
+                  <div style={{ fontWeight: 600 }}>{d.name || t("common.emDash")}</div>
                 </div>
                 <div>
-                  <div className="muted">Host 别名</div>
+                  <div className="muted">{t("identity.summaryAlias")}</div>
                   <div className="mono" style={{ fontWeight: 600 }}>
-                    {d.hostAlias || "—"}
+                    {d.hostAlias || t("common.emDash")}
                   </div>
                 </div>
                 <div>
-                  <div className="muted">私钥策略</div>
-                  <div style={{ fontWeight: 600 }}>{d.strictMode ? "严格模式 · ssh-keys 只留公钥，私钥进 agent" : "默认 · 带口令私钥保存在工作空间 ssh-keys/"}</div>
+                  <div className="muted">{t("identity.summaryPolicy")}</div>
+                  <div style={{ fontWeight: 600 }}>{d.strictMode ? t("identity.policyStrict") : t("identity.policyDefault")}</div>
                 </div>
                 <div>
-                  <div className="muted">config</div>
-                  <div style={{ fontWeight: 600 }}>{d.created ? (d.created.configVerified ? "已写入，ssh -G 通过" : "已写入，ssh -G 未通过") : d.staged ? "已临时写入，待完成登记" : "尚未写入，点开始验证才会落盘"}</div>
+                  <div className="muted">{t("identity.summaryConfig")}</div>
+                  <div style={{ fontWeight: 600 }}>{d.created ? (d.created.configVerified ? t("identity.configWrittenOk") : t("identity.configWrittenFail")) : d.staged ? t("identity.configStaged") : t("identity.configPending")}</div>
                 </div>
               </div>
-              {d.created?.configBackup && <div className="muted sm">已备份原 config：{d.created.configBackup}</div>}
+              {d.created?.configBackup && <div className="muted sm">{t("identity.configBackup", { path: d.created.configBackup })}</div>}
             </div>
           )}
 
@@ -826,15 +834,15 @@ export function NewIdentity() {
             <div className="stack">
               <div className="field">
                 <FieldLabel
-                  name="连接验证"
-                  tip="此时尚未登记身份。会临时写入 Host、把私钥加载进 ssh-agent，再执行 ssh -T。点「完成」才真正创建身份；取消则撤回 Host 并从 agent 卸下这把尚未绑定的密钥。"
+                  name={t("identity.connVerify")}
+                  tip={t("identity.connVerifyTip")}
                 />
-                <div className="muted">将执行 ssh -T git@{d.hostAlias || "别名"}。严格模式会先把私钥注入 agent，取消创建时再卸下。</div>
-                <div className="hint">示例：成功时类似「Hi nova-labs! You've successfully authenticated」</div>
+                <div className="muted">{t("identity.willRun", { alias: d.hostAlias || t("identity.aliasFallback") })}</div>
+                <div className="hint">{t("identity.verifyHint")}</div>
               </div>
               <div className="row">
                 <button className="btn primary" disabled={busy} onClick={verify}>
-                  {busy ? "验证中…" : d.auth ? "重新验证" : "开始验证"}
+                  {busy ? t("identity.verifying") : d.auth ? t("identity.reverify") : t("identity.startVerify")}
                 </button>
               </div>
               {d.auth && (
@@ -843,9 +851,9 @@ export function NewIdentity() {
                     <div>{d.auth.message}</div>
                     {d.auth.account && (
                       <div className="muted sm" style={{ marginTop: 6 }}>
-                        实测账号 {d.auth.account}
-                        {nameMatch === false && " · 与备注名/提交姓名不一致，请确认是否连到了正确账号"}
-                        {nameMatch === true && " · 与填写信息一致"}
+                        {t("identity.measuredAccount", { account: d.auth.account })}
+                        {nameMatch === false && t("identity.nameMismatch")}
+                        {nameMatch === true && t("identity.nameMatch")}
                       </div>
                     )}
                   </div>
@@ -858,21 +866,21 @@ export function NewIdentity() {
             <div className="stack">
               <div className="field">
                 <FieldLabel
-                  name="归属标识"
-                  tip="这个身份名下的 owner / 组织 / 路径前缀。粘贴仓库地址时优先按这里查表，精确匹配置信度最高。支持通配 acme-*，以及自建多段路径 git.internal/platform。一行一条。"
+                  name={t("identity.owners")}
+                  tip={t("identity.ownersTip")}
                 />
                 <textarea
                   className="input mono"
-                  placeholder={"例如：\nnova-labs\nacme-*\ngit.internal/platform"}
+                  placeholder={t("identity.ownersPh")}
                   value={d.ownersText}
                   onChange={(e) => set({ ownersText: e.target.value })}
                 />
-                <div className="hint">示例：nova-labs（账号）、kiln-org（组织）、acme-*（通配）、git.internal/platform（多段路径）</div>
+                <div className="hint">{t("identity.ownersHint")}</div>
               </div>
               {d.platform === "github" && (
                 <div>
                   <button className="btn" disabled={busy} onClick={importOrgs}>
-                    从 GitHub 组织列表导入（需已配置 PAT）
+                    {t("identity.importOrgs")}
                   </button>
                 </div>
               )}
@@ -886,22 +894,22 @@ export function NewIdentity() {
         <div className="wizard-foot">
           <div className="row" style={{ gap: 8 }}>
           <button type="button" className="btn ghost" onClick={exitWizard}>
-            取消并返回
+            {t("identity.cancelBack")}
           </button>
           {d.step > 0 && (
             <button type="button" className="btn ghost" onClick={() => goTo(d.step - 1)}>
-              上一步
+              {t("init.prev")}
             </button>
           )}
           </div>
           {d.step < 4 && (
             <button type="button" className="btn primary" disabled={busy || writesLocked} onClick={() => goTo(d.step + 1)}>
-              {busy ? "处理中…" : d.step === 2 ? "下一步验证" : d.step === 3 ? (d.auth ? "下一步" : "跳过验证") : "下一步"}
+              {busy ? t("common.busy") : d.step === 2 ? t("identity.nextVerify") : d.step === 3 ? (d.auth ? t("common.next") : t("identity.skipVerify")) : t("common.next")}
             </button>
           )}
           {d.step === 4 && (
             <button type="button" className="btn primary" disabled={busy || writesLocked} onClick={finish}>
-              {busy ? "保存中…" : "完成"}
+              {busy ? t("repos.saving") : t("identity.finish")}
             </button>
           )}
         </div>

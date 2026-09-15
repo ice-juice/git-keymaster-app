@@ -3,6 +3,8 @@
 
 pub mod accounts;
 pub mod agent;
+pub mod files;
+pub mod notes;
 pub mod assets;
 pub mod biometric;
 pub mod locale;
@@ -94,6 +96,8 @@ pub struct AppState {
     pub update_busy: AtomicBool,
     /// 查看 OTP/密码的内存级免密窗口到期时刻。
     pub reveal_grace: Mutex<Option<Instant>>,
+    /// 前端上报的当前网络是否非按量（Wi-Fi / 以太网）。默认按非按量处理。
+    pub network_unmetered: AtomicBool,
 }
 
 impl AppState {
@@ -112,6 +116,7 @@ impl AppState {
             startup_note: Mutex::new(None),
             update_busy: AtomicBool::new(false),
             reveal_grace: Mutex::new(None),
+            network_unmetered: AtomicBool::new(true),
         }
     }
 }

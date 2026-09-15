@@ -19,11 +19,15 @@ import { SyncPage } from "./pages/Sync";
 import { Settings } from "./pages/Settings";
 import { TotpPage } from "./pages/Totp";
 import { AccountsPage } from "./pages/Accounts";
+import { FilesPage } from "./pages/Files";
+import { NotesPage } from "./pages/Notes";
 import { CloseConfirmHost } from "./ui/CloseConfirm";
 import { ToastHost } from "./ui/Toast";
 import UnlockAnimation from "./ui/UnlockAnimation";
 import { MobileShell } from "./ui/MobileShell";
-import { useIsCompact, supportsLocalGitTools } from "./lib/platform";
+import { isAndroid, useIsCompact, supportsLocalGitTools } from "./lib/platform";
+import { decideMobileRootBack } from "./shared/mobileBack";
+import { startNetworkGuard } from "./shared/networkGuard";
 
 function AppShell({ compact }: { compact: boolean }) {
   if (compact) {
@@ -67,6 +71,27 @@ export default function App() {
       onDone={endUnlockAnim}
     />
   ) : null;
+
+  useEffect(() => startNetworkGuard(), []);
+
+  useEffect(() => {
+    if (!compact || status?.unlocked) return;
+    const run = () => {
+      const { decision } = decideMobileRootBack({
+        overlayConsumed: false,
+        pathname: "/",
+        unlocked: false,
+        backgroundRun: !!status?.mobileBackgroundRun,
+        android: isAndroid(),
+      });
+      if (decision !== "stay") void api.mobileLeaveApp(decision === "home").catch(() => {});
+      return decision;
+    };
+    window.__kmAndroidBack = run;
+    return () => {
+      if (window.__kmAndroidBack === run) delete window.__kmAndroidBack;
+    };
+  }, [compact, status?.unlocked, status?.mobileBackgroundRun]);
 
   useEffect(() => {
     (async () => {
@@ -151,6 +176,8 @@ export default function App() {
             {localTools && <Route path="/clone" element={<ClonePage />} />}
             <Route path="/totp" element={<TotpPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
+            <Route path="/files" element={<FilesPage />} />
+            <Route path="/notes" element={<NotesPage />} />
             <Route path="/sync" element={<SyncPage />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />

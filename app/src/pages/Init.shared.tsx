@@ -344,7 +344,7 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                     </div>
                     <div className="field">
                       <label className="field-label">{t("init.region")}</label>
-                      <input className="input" placeholder="auto 或 us-east-1" value={s3.region} onChange={(e) => setS3({ ...s3, region: e.target.value })} />
+                      <input className="input" placeholder={t("init.regionPh")} value={s3.region} onChange={(e) => setS3({ ...s3, region: e.target.value })} />
                     </div>
                     <div className="field">
                       <label className="field-label">{t("init.prefix")}</label>
@@ -415,11 +415,11 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                   {preview && preview.hasManifest && (
                     <div className="stack" style={{ gap: 10 }}>
                       <div className="callout good">
-                        已解开工作空间 {preview.workspaceId.slice(0, 8)}…
-                        {preview.updatedAt ? ` · 云端更新于 ${new Date(preview.updatedAt).toLocaleString()}` : ""}
+                        {t("init.unlockedWs", { id: preview.workspaceId.slice(0, 8) })}
+                        {preview.updatedAt ? t("init.cloudUpdated", { when: new Date(preview.updatedAt).toLocaleString() }) : ""}
                         <br />
-                        {preview.identityCount} 个身份 · {preview.keyCount} 把密钥
-                        {preview.repoCount > 0 ? ` · 云端另有 ${preview.repoCount} 条其他机器的仓库登记` : ""}
+                        {t("init.previewCounts", { identities: preview.identityCount, keys: preview.keyCount })}
+                        {preview.repoCount > 0 ? t("init.previewRepos", { count: preview.repoCount }) : ""}
                       </div>
                       <RestoreScope includeRepos={includeRepos} setIncludeRepos={setIncludeRepos} repoCount={preview.repoCount} />
                     </div>
@@ -432,28 +432,28 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                   {preview && (
                     <div className="stack" style={{ gap: 10 }}>
                       <div className="callout info">
-                        即将还原 {preview.identityCount} 个身份、{preview.keyCount} 把密钥到「{path}」。
+                        {t("init.willRestore", { identities: preview.identityCount, keys: preview.keyCount, path })}
                         {includeRepos
-                          ? ` 并导入 ${preview.repoCount} 条仓库登记（路径按本机重写归属）。`
-                          : " 不会导入其他机器上的仓库登记。"}
+                          ? t("init.willImportRepos", { count: preview.repoCount })
+                          : t("init.noImportRepos")}
                       </div>
                       <RestoreScope includeRepos={includeRepos} setIncludeRepos={setIncludeRepos} repoCount={preview.repoCount} />
                     </div>
                   )}
                   <PasswordFields pw={pw} pw2={pw2} setPw={setPw} setPw2={setPw2} strength={strength} onEnter={doRestore} />
-                  <div className="callout info">本机访问密码可以重新设置；旧恢复密钥保持有效，请继续妥善保存。</div>
+                  <div className="callout info">{t("init.localPwHint")}</div>
                 </div>
               )}
 
               {mode === "restore" && step === 4 && (
                 <div className="stack" style={{ textAlign: "center", padding: "16px 0", gap: 6 }}>
                   <div style={{ fontSize: 36, marginBottom: 2 }}>🎉</div>
-                  <div className="title-lg" style={{ fontSize: 16 }}>已从云端恢复</div>
-                  <div className="muted">{restoreResult || "工作空间已用同一把主密钥重建。"}</div>
+                  <div className="title-lg" style={{ fontSize: 16 }}>{t("init.restoredTitle")}</div>
+                  <div className="muted">{restoreResult || t("init.restoredFallback")}</div>
                   {preview && (
                     <div className="muted">
-                      {preview.identityCount} 个身份 · {preview.keyCount} 把密钥
-                      {includeRepos ? ` · ${preview.repoCount} 个仓库` : " · 未导入仓库登记"}
+                      {t("init.restoredCounts", { identities: preview.identityCount, keys: preview.keyCount })}
+                      {includeRepos ? t("init.restoredRepos", { count: preview.repoCount }) : t("init.restoredNoRepos")}
                     </div>
                   )}
                 </div>

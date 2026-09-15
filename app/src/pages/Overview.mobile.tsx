@@ -1,6 +1,10 @@
-import { Check, Copy, Edit3, KeyRound, Shield } from "lucide-react";
+import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Check, ChevronRight, Copy, Edit3, FileLock2, KeyRound, NotebookPen, Shield } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { api } from "../lib/ipc";
 import { Badge, Empty } from "../ui/common";
+import { formatBytes } from "../shared/hooks/useFilesModel";
 import { useOverviewModel } from "../shared/hooks/useOverviewModel";
 import { OverviewIdentityDialogs } from "./Overview.modals";
 
@@ -22,7 +26,21 @@ function getAvatarBg(name: string): string {
 
 export function OverviewMobile() {
   const { t } = useTranslation();
+  const nav = useNavigate();
   const m = useOverviewModel();
+  const [vault, setVault] = useState({ count: 0, usage: 0 });
+  const [notes, setNotes] = useState({ count: 0, pinned: 0 });
+
+  useEffect(() => {
+    api
+      .fileList()
+      .then((r) => setVault({ count: r.entries.length, usage: r.usageBytes }))
+      .catch(() => {});
+    api
+      .noteList()
+      .then((r) => setNotes({ count: r.entries.length, pinned: r.entries.filter((e) => e.pinned).length }))
+      .catch(() => {});
+  }, [m.writesLocked]);
 
   return (
     <div className="stack-lg">
@@ -53,6 +71,32 @@ export function OverviewMobile() {
         </div>
       </div>
 
+      <button type="button" className="m-vault-entry" onClick={() => nav("/files", { replace: true })}>
+        <span className="m-vault-entry-icon">
+          <FileLock2 size={18} />
+        </span>
+        <span className="m-vault-entry-copy">
+          <span className="m-vault-entry-title">{t("pages.filesEntry")}</span>
+          <span className="m-vault-entry-sub">
+            {t("pages.filesEntrySub", { count: vault.count, size: formatBytes(vault.usage) })}
+          </span>
+        </span>
+        <ChevronRight size={18} className="m-vault-entry-arrow" />
+      </button>
+
+      <button type="button" className="m-vault-entry" onClick={() => nav("/notes", { replace: true })}>
+        <span className="m-vault-entry-icon">
+          <NotebookPen size={18} />
+        </span>
+        <span className="m-vault-entry-copy">
+          <span className="m-vault-entry-title">{t("pages.notesEntry")}</span>
+          <span className="m-vault-entry-sub">
+            {t("pages.notesEntrySub", { count: notes.count, pinned: notes.pinned })}
+          </span>
+        </span>
+        <ChevronRight size={18} className="m-vault-entry-arrow" />
+      </button>
+
       {m.identities.length === 0 ? (
         <div className="card" style={{ padding: "30px 10px" }}>
           <Empty icon="🧑‍💻" text={t("pages.noIdentities")} />
@@ -76,8 +120,8 @@ export function OverviewMobile() {
                   <div className="m-id-head-meta">
                     <div className="m-id-name-line">
                       <span className="m-id-name">{id.name}</span>
-                      {isDefault && <Badge kind="info">默认</Badge>}
-                      {id.strictMode && <Badge kind="warn">严格</Badge>}
+                      {isDefault && <Badge kind="info">{t("pages.default")}</Badge>}
+                      {id.strictMode && <Badge kind="warn">{t("overview.strict")}</Badge>}
                     </div>
                     <div className="m-id-route" title={`${id.hostAlias} → ${id.realHost}`}>
                       {id.hostAlias === id.realHost ? id.realHost : `${id.hostAlias} → ${id.realHost}`}
@@ -89,7 +133,7 @@ export function OverviewMobile() {
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <div className="m-id-key-pill">
                     <span className={`status-dot ${keyDot}`} />
-                    <span>{hasKey ? "密钥已入库" : "未绑定密钥"}</span>
+                    <span>{hasKey ? t("overview.keyBound") : t("overview.keyUnbound")}</span>
                   </div>
 
                   {id.owners.map((owner) => (
@@ -107,10 +151,10 @@ export function OverviewMobile() {
                     style={{ flex: "0 0 80px" }}
                     disabled={m.writesLocked}
                     onClick={() => m.setEditingIdentity(id)}
-                    title="修改备注、别名、邮箱等"
+                    title={t("overview.editTipShort")}
                   >
                     <Edit3 size={13} />
-                    <span>详情</span>
+                    <span>{t("overview.detail")}</span>
                   </button>
 
                   <button
@@ -123,12 +167,12 @@ export function OverviewMobile() {
                     {m.copiedKeyId === id.keyId ? (
                       <>
                         <Check size={13} />
-                        <span>已复制公钥</span>
+                        <span>{t("overview.copiedPub")}</span>
                       </>
                     ) : (
                       <>
                         <Copy size={13} />
-                        <span>复制公钥</span>
+                        <span>{t("overview.copyPub")}</span>
                       </>
                     )}
                   </button>

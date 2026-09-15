@@ -12,6 +12,7 @@ import {
 import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
 import { resolvePlatform } from "../../platform/resolve";
 import { detectTotpInput } from "../../lib/totpInput";
+import { i18n } from "../../lib/i18n";
 import { firstOtpauth, pickQrFromGallery, scanQrWithCamera } from "../../lib/qrCapture";
 import { isMobilePlatform } from "../../lib/platform";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
@@ -180,7 +181,7 @@ export function useTotpModel() {
     try {
       await copyWithClear(cur.code.replace(/\s/g, ""));
     } catch (e) {
-      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || i18n.t("totp.copyFail"));
       return;
     }
     setCopiedId(id);
@@ -207,7 +208,7 @@ export function useTotpModel() {
   async function saveEditor() {
     if (!editor) return;
     if (editor.id && editor.hasSeed === false && !editor.secret?.trim()) {
-      setErr("这条记录的种子已丢失，请重新填入密钥或 otpauth 链接。");
+      setErr(i18n.t("totp.seedLost"));
       return;
     }
     setBusy(true);
@@ -264,13 +265,13 @@ export function useTotpModel() {
     setErr("");
     try {
       const texts = await scanQrWithCamera({
-        title: "扫描 2FA 密钥二维码",
-        hint: "对准包含 otpauth 密钥的二维码，自动识别",
+        title: i18n.t("totp.scanTitle"),
+        hint: i18n.t("totp.scanHint"),
       });
       if (!texts) return;
       const uri = firstOtpauth(texts);
       if (!uri) {
-        setErr("未识别到有效的 2FA/otpauth 二维码");
+        setErr(i18n.t("totp.scanNone"));
         return;
       }
       await importFromOtpauth(uri);
@@ -290,13 +291,13 @@ export function useTotpModel() {
         if (!texts) return;
         const uri = firstOtpauth(texts);
         if (!uri) {
-          setErr("照片中未识别到 otpauth 二维码");
+          setErr(i18n.t("totp.scanPhotoNone"));
           return;
         }
         await importFromOtpauth(uri);
         return;
       }
-      const path = await open({ filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
+      const path = await open({ filters: [{ name: i18n.t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
       if (typeof path !== "string") return;
       const p = await api.totpImportFromImage(path);
       applyPreview(p);
@@ -311,7 +312,7 @@ export function useTotpModel() {
     setBusy(true);
     try {
       const hits = await api.totpScanScreen();
-      if (hits.length === 0) setErr("屏幕中未识别到 otpauth 二维码");
+      if (hits.length === 0) setErr(i18n.t("totp.scanScreenNone"));
       else if (hits.length === 1)
         applyPreview({ ...hits[0].parsed, suggestedIcon: null, secret: detectTotpInput(hits[0].uri).secret });
       else setScanHits(hits);

@@ -2,6 +2,7 @@ import { api, errCode, errMessage, type ClipboardWriteResult } from "./ipc";
 import { clearClipboard, writeClipboard } from "./clipboard";
 import { resolvePlatform } from "../platform/resolve";
 import { showAppToast } from "../ui/Toast";
+import { i18n } from "./i18n";
 
 const customCache = new Map<string, string>();
 let clearTimer: number | null = null;
@@ -11,10 +12,10 @@ export async function copyWithClear(text: string, seconds?: number, secret = tru
   try {
     result = await writeClipboard(text, secret);
   } catch (e) {
-    if (resolvePlatform() === "mobile") showAppToast("复制失败");
+    if (resolvePlatform() === "mobile") showAppToast(i18n.t("common.copyFailed"));
     throw e;
   }
-  if (resolvePlatform() === "mobile") showAppToast("已复制");
+  if (resolvePlatform() === "mobile") showAppToast(i18n.t("common.copied"));
   let wait = seconds;
   if (wait === undefined) {
     try {

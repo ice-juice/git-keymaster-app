@@ -29,6 +29,8 @@ pub struct VaultStatus {
     pub close_action: Option<String>,
     /// 启动云同步未完成时禁止修改。
     pub writes_locked: bool,
+    /// 移动端主界面返回键：true 回系统桌面保活，false 退出。
+    pub mobile_background_run: bool,
     pub startup_note: Option<String>,
 }
 
@@ -97,6 +99,7 @@ pub fn vault_status(state: State<AppState>) -> VaultStatus {
     let launch_at_login = cfg.launch_at_login || autostart::is_enabled();
     let grace_days = cfg.grace_days;
     let close_action = cfg.close_action.clone();
+    let mobile_background_run = cfg.mobile_background_run;
     drop(vault);
     drop(cfg);
     let grace = session::info(workspace_id.as_deref());
@@ -112,6 +115,7 @@ pub fn vault_status(state: State<AppState>) -> VaultStatus {
         grace_active: grace.active,
         grace_expires_at: grace.expires_at,
         close_action,
+        mobile_background_run,
         writes_locked: state
             .writes_locked
             .load(std::sync::atomic::Ordering::SeqCst),
@@ -607,6 +611,13 @@ pub fn set_launch_at_login(state: State<AppState>, enabled: bool) -> Result<()> 
     autostart::set_enabled(enabled)?;
     let mut cfg = recover_lock(&state.config);
     cfg.launch_at_login = enabled;
+    cfg.save()
+}
+
+#[tauri::command]
+pub fn set_mobile_background_run(state: State<AppState>, enabled: bool) -> Result<()> {
+    let mut cfg = recover_lock(&state.config);
+    cfg.mobile_background_run = enabled;
     cfg.save()
 }
 

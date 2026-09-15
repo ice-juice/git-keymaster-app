@@ -5,25 +5,10 @@ const UNLOCK_ANIM_STYLE_KEY = "gam.unlockAnimStyle";
 
 export type UnlockAnimStyle = "cyber" | "classic" | "minimal";
 
-export const UNLOCK_ANIM_STYLES: { id: UnlockAnimStyle; label: string; desc: string; icon: string }[] = [
-  {
-    id: "cyber",
-    label: "赛博全息",
-    desc: "全息猫扫描 · 激光能量钥 · 气密舱门",
-    icon: "⚡",
-  },
-  {
-    id: "classic",
-    label: "经典金匙",
-    desc: "吉祥猫 · 黄金实体钥匙 · 暖光大门旋开",
-    icon: "🗝️",
-  },
-  {
-    id: "minimal",
-    label: "极客量子",
-    desc: "量子核心锁 · 极速代码流 · 瞬间破壁",
-    icon: "💻",
-  },
+export const UNLOCK_ANIM_STYLES: { id: UnlockAnimStyle; icon: string }[] = [
+  { id: "cyber", icon: "⚡" },
+  { id: "classic", icon: "🗝️" },
+  { id: "minimal", icon: "💻" },
 ];
 
 /** 解锁开门动画是否开启，默认开启。 */

@@ -32,14 +32,14 @@ export function AccountsDesktop() {
         <div className="security-banner-text">
           <ShieldCheck size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
           <span>
-            <strong>默认掩码安全模式：</strong>
-            密码与关联 2FA 默认隐藏防窥；复制后写入剪贴板
-            {m.revealCfg.clip > 0 ? `，${m.revealCfg.clip} 秒后自动清空` : ""}。
+            <strong>{t("accounts.maskTitle")}</strong>
+            {t("accounts.maskBody")}
+            {m.revealCfg.clip > 0 ? t("accounts.maskClear", { n: m.revealCfg.clip }) : ""}。
           </span>
         </div>
         <div className="security-banner-pills">
-          {m.revealCfg.grace > 0 && <span className="sec-pill cyan">免密 {m.revealCfg.grace} 分钟</span>}
-          <span className="sec-pill purple">端到端加密</span>
+          {m.revealCfg.grace > 0 && <span className="sec-pill cyan">{t("accounts.pillGrace", { n: m.revealCfg.grace })}</span>}
+          <span className="sec-pill purple">{t("accounts.pillE2ee")}</span>
         </div>
       </div>
 
