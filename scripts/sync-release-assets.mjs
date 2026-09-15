@@ -128,16 +128,21 @@ export function missingDesktopPlatforms(platforms) {
   return REQUIRED_DESKTOP_PLATFORM_KEYS.filter((key) => !keys.includes(key));
 }
 
+export function hasAnyDesktopPlatform(platforms) {
+  return missingDesktopPlatforms(platforms).length < REQUIRED_DESKTOP_PLATFORM_KEYS.length;
+}
+
 export function evaluateManifestUpload({ existingText, incomingText, mergedText, downloaded }) {
   const incoming = parseManifestText(incomingText);
   const existing = parseManifestText(existingText);
   const merged = parseManifestText(mergedText);
-  const incomingMissing = missingDesktopPlatforms(incoming.platforms);
   if (!downloaded) {
-    if (incomingMissing.length > 0) {
+    // 第一个桌面 job 的 incoming 通常只有本机一项；必须允许它先占坑。
+    // 只拦截「安卓-only / 空 platforms」整份覆盖。
+    if (!hasAnyDesktopPlatform(incoming.platforms)) {
       return {
         ok: false,
-        reason: `refusing to upload: latest.json download failed and incoming lacks desktop platforms (${incomingMissing.join(", ")})`,
+        reason: "refusing to upload: latest.json download failed and incoming has no desktop platforms",
       };
     }
   }
@@ -517,24 +522,28 @@ function pinLegacyLatest(tag) {
   runGh(["release", "view", tag, "--repo", REPO], { ignoreFail: true });
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-pin-"));
   try {
-    const source = downloadReleaseFile(tag, "latest.json", tmp);
-    if (!source) {
-      console.error("[sync] missing latest.json; cannot copy legacy aliases");
-      process.exit(1);
-    }
+    let source = downloadReleaseFile(tag, "latest.json", tmp);
     const version = tag.replace(/^v/, "");
-    const apkSig = readAndroidApkSignature(tag, version, tmp);
-    let pinned = injectAndroidAarch64(fs.readFileSync(source, "utf8"), tag, version, apkSig);
-    let verdict = evaluatePinCanonical(pinned);
-    if (!verdict.ok) {
-      const names = listReleaseAssetNames(tag);
-      pinned = rebuildDesktopPlatforms(tag, pinned, names, (sigName) => {
-        const sigPath = downloadReleaseFile(tag, sigName, tmp);
-        return sigPath ? fs.readFileSync(sigPath, "utf8") : "";
-      });
-      pinned = injectAndroidAarch64(pinned, tag, version, apkSig);
-      verdict = evaluatePinCanonical(pinned);
+    if (!source) {
+      source = path.join(tmp, "latest.json");
+      const seed = {
+        version,
+        notes: loadCanonicalNotes(version),
+        pub_date: new Date().toISOString(),
+        platforms: {},
+      };
+      fs.writeFileSync(source, `${JSON.stringify(seed, null, 2)}\n`);
+      console.log("[sync] no latest.json on the release yet; seeding from CHANGELOG");
     }
+    const apkSig = readAndroidApkSignature(tag, version, tmp);
+    const names = listReleaseAssetNames(tag);
+    let pinned = injectAndroidAarch64(fs.readFileSync(source, "utf8"), tag, version, apkSig);
+    pinned = rebuildDesktopPlatforms(tag, pinned, names, (sigName) => {
+      const sigPath = downloadReleaseFile(tag, sigName, tmp);
+      return sigPath ? fs.readFileSync(sigPath, "utf8") : "";
+    });
+    pinned = injectAndroidAarch64(pinned, tag, version, apkSig);
+    const verdict = evaluatePinCanonical(pinned);
     if (!verdict.ok) {
       console.error(`[sync] ${verdict.reason}`);
       process.exit(1);
@@ -630,6 +639,21 @@ function runSelfTest() {
     });
     if (downloadFail.ok) {
       throw new Error("android-only incoming + download fail must not clobber latest.json");
+    }
+    const firstDesktop = evaluateManifestUpload({
+      existingText: "",
+      incomingText: `${JSON.stringify({
+        version: "1.7.0",
+        platforms: { "windows-x86_64": { signature: "s", url: "win.exe" } },
+      }, null, 2)}\n`,
+      mergedText: `${JSON.stringify({
+        version: "1.7.0",
+        platforms: { "windows-x86_64": { signature: "s", url: "win.exe" } },
+      }, null, 2)}\n`,
+      downloaded: false,
+    });
+    if (!firstDesktop.ok) {
+      throw new Error("first desktop writer must be allowed to create latest.json");
     }
     if (!shouldSkipAndroidMerge("", false) || !shouldSkipAndroidMerge(androidOnly, true)) {
       throw new Error("android merge must skip when desktop latest.json is missing or incomplete");
