@@ -3,14 +3,28 @@ import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorSelection } from "@codemirror/state";
-import { EditorView, placeholder as cmPlaceholder } from "@codemirror/view";
+import { EditorView, ViewPlugin, placeholder as cmPlaceholder } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
+import { useApp } from "../store";
 
 export type NoteMarkdownEditorHandle = {
   wrapSelection: (before: string, after?: string) => void;
   insertAtCursor: (text: string) => void;
   focus: () => void;
+  setScrollRatio: (ratio: number) => void;
 };
+
+export function scrollRatioOf(el: HTMLElement) {
+  const max = el.scrollHeight - el.clientHeight;
+  return max <= 0 ? 0 : el.scrollTop / max;
+}
+
+export function applyScrollRatio(el: HTMLElement | null | undefined, ratio: number) {
+  if (!el) return;
+  const max = el.scrollHeight - el.clientHeight;
+  if (max <= 0) return;
+  el.scrollTop = Math.min(1, Math.max(0, ratio)) * max;
+}
 
 const mdHighlight = HighlightStyle.define([
   { tag: t.heading1, class: "cm-md-h1" },
@@ -32,21 +46,27 @@ const mdHighlight = HighlightStyle.define([
 const chromeTheme = EditorView.theme({
   "&": {
     height: "100%",
+    width: "100%",
+    color: "var(--text)",
     backgroundColor: "transparent",
     fontSize: "13.5px",
   },
-  "&.cm-editor": { height: "100%" },
+  "&.cm-editor": { height: "100%", width: "100%" },
   "&.cm-focused": { outline: "none" },
   ".cm-scroller": {
     overflow: "auto",
     fontFamily: "var(--mono)",
     lineHeight: "1.65",
+    minWidth: "0",
   },
   ".cm-content": {
+    color: "var(--text)",
     padding: "16px 18px 28px",
     caretColor: "var(--accent)",
     minHeight: "100%",
+    minWidth: "0",
   },
+  ".cm-line": { color: "var(--text)" },
   ".cm-gutters": {
     backgroundColor: "transparent",
     border: "none",
@@ -94,13 +114,19 @@ export const NoteMarkdownEditor = forwardRef<
     disabled?: boolean;
     mobile?: boolean;
     onImageFile?: (file: File) => void;
+    onScrollRatio?: (ratio: number) => void;
   }
->(function NoteMarkdownEditor({ value, onChange, placeholder, disabled, mobile, onImageFile }, ref) {
+>(function NoteMarkdownEditor({ value, onChange, placeholder, disabled, mobile, onImageFile, onScrollRatio }, ref) {
+  const theme = useApp((s) => s.theme);
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   const onImageRef = useRef(onImageFile);
+  const onScrollRatioRef = useRef(onScrollRatio);
   useEffect(() => {
     onImageRef.current = onImageFile;
   }, [onImageFile]);
+  useEffect(() => {
+    onScrollRatioRef.current = onScrollRatio;
+  }, [onScrollRatio]);
 
   useImperativeHandle(ref, () => ({
     wrapSelection(before, after = before) {
@@ -116,6 +142,9 @@ export const NoteMarkdownEditor = forwardRef<
     focus() {
       cmRef.current?.view?.focus();
     },
+    setScrollRatio(ratio: number) {
+      applyScrollRatio(cmRef.current?.view?.scrollDOM, ratio);
+    },
   }));
 
   const extensions = useMemo(
@@ -125,6 +154,20 @@ export const NoteMarkdownEditor = forwardRef<
       syntaxHighlighting(mdHighlight),
       chromeTheme,
       cmPlaceholder(placeholder || ""),
+      ViewPlugin.fromClass(
+        class {
+          private readonly onScroll: () => void;
+          private readonly scrollEl: HTMLElement;
+          constructor(view: EditorView) {
+            this.scrollEl = view.scrollDOM;
+            this.onScroll = () => onScrollRatioRef.current?.(scrollRatioOf(this.scrollEl));
+            this.scrollEl.addEventListener("scroll", this.onScroll, { passive: true });
+          }
+          destroy() {
+            this.scrollEl.removeEventListener("scroll", this.onScroll);
+          }
+        },
+      ),
       EditorView.domEventHandlers({
         drop(event) {
           const file = event.dataTransfer?.files?.[0];
@@ -153,6 +196,7 @@ export const NoteMarkdownEditor = forwardRef<
       className={"note-cm" + (mobile ? " is-mobile" : "")}
       value={value}
       height="100%"
+      theme={theme === "light" ? "light" : "dark"}
       editable={!disabled}
       basicSetup={{
         lineNumbers: !mobile,

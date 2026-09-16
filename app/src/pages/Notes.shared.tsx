@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { forwardRef, useEffect, useRef, useState, type ReactNode, type UIEvent } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ArrowUpToLine, Check, Columns2, Eye, FileCode2, Pin, Plus, Save, Trash2, Type, X } from "lucide-react";
@@ -6,7 +6,7 @@ import { useTranslation } from "react-i18next";
 import { ConfirmDangerDialog, Empty, ErrorDialog } from "../ui/common";
 import { GroupDialog } from "../ui/GroupDialog";
 import { MarkdownToolbar } from "../ui/MarkdownToolbar";
-import { NoteMarkdownEditor } from "../ui/NoteMarkdownEditor";
+import { applyScrollRatio, NoteMarkdownEditor, scrollRatioOf } from "../ui/NoteMarkdownEditor";
 import {
   extractKmassetHashes,
   type NoteExportFormat,
@@ -75,7 +75,10 @@ function NoteImg({ src, alt }: { src?: string; alt?: string }) {
   return <img src={url} alt={alt || ""} className="note-preview-img" />;
 }
 
-export function NotePreview({ markdown }: { markdown: string }) {
+export const NotePreview = forwardRef<
+  HTMLDivElement,
+  { markdown: string; onScroll?: (event: UIEvent<HTMLDivElement>) => void }
+>(function NotePreview({ markdown, onScroll }, ref) {
   const { t } = useTranslation();
 
   useEffect(() => {
@@ -89,11 +92,15 @@ export function NotePreview({ markdown }: { markdown: string }) {
   }, [markdown]);
 
   if (!markdown.trim()) {
-    return <div className="note-preview note-preview-empty">{t("notes.previewEmpty")}</div>;
+    return (
+      <div ref={ref} className="note-preview note-preview-empty" onScroll={onScroll}>
+        {t("notes.previewEmpty")}
+      </div>
+    );
   }
 
   return (
-    <div className="note-preview">
+    <div ref={ref} className="note-preview" onScroll={onScroll}>
       <Markdown
         remarkPlugins={[remarkGfm]}
         urlTransform={urlTransform}
@@ -103,7 +110,7 @@ export function NotePreview({ markdown }: { markdown: string }) {
       </Markdown>
     </div>
   );
-}
+});
 
 export function NotesFilters({ m, hideSearch }: { m: NotesModel; hideSearch?: boolean }) {
   const { t } = useTranslation();
@@ -534,6 +541,34 @@ export function NoteEditorCard({
   const stats = notePlainStats(m.draft.markdown);
   const showSource = layout !== "preview";
   const showPreview = layout !== "edit";
+  const previewRef = useRef<HTMLDivElement>(null);
+  const sourcePaneRef = useRef<HTMLDivElement>(null);
+  const scrollLock = useRef<"source" | "preview" | null>(null);
+  const scrollUnlock = useRef(0);
+  const syncScroll = layout === "split" && !mobile;
+
+  function lockScroll(side: "source" | "preview") {
+    scrollLock.current = side;
+    window.clearTimeout(scrollUnlock.current);
+    scrollUnlock.current = window.setTimeout(() => {
+      scrollLock.current = null;
+    }, 80);
+  }
+
+  useEffect(() => {
+    if (!syncScroll) return;
+    const root = sourcePaneRef.current;
+    if (!root) return;
+    const onScroll = (event: Event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || scrollLock.current === "preview") return;
+      if (target.scrollHeight <= target.clientHeight) return;
+      lockScroll("source");
+      applyScrollRatio(previewRef.current, scrollRatioOf(target));
+    };
+    root.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => root.removeEventListener("scroll", onScroll, true);
+  }, [syncScroll]);
 
   return (
     <div className={"note-editor-card" + (mobile ? " is-mobile" : "")}>
@@ -609,6 +644,7 @@ export function NoteEditorCard({
       <div className={"notes-panes" + (layout === "split" ? " split" : "")}>
         {showSource && (
           <div
+            ref={sourcePaneRef}
             className="note-pane"
             onBlur={(ev) => {
               const next = ev.relatedTarget as Node | null;
@@ -625,13 +661,35 @@ export function NoteEditorCard({
               disabled={m.writesLocked}
               mobile={mobile}
               onImageFile={(file) => ingestNoteImage(m, file)}
+              onScrollRatio={
+                syncScroll
+                  ? (ratio) => {
+                      if (scrollLock.current === "preview") return;
+                      lockScroll("source");
+                      applyScrollRatio(previewRef.current, ratio);
+                    }
+                  : undefined
+              }
             />
           </div>
         )}
         {showPreview && (
           <div className="note-pane note-pane-preview">
             {layout === "split" && <div className="note-pane-label">{t("notes.panePreview")}</div>}
-            <NotePreview markdown={m.draft.markdown} />
+            <NotePreview
+              ref={previewRef}
+              markdown={m.draft.markdown}
+              onScroll={
+                syncScroll
+                  ? () => {
+                      const el = previewRef.current;
+                      if (!el || scrollLock.current === "source") return;
+                      lockScroll("preview");
+                      m.editorRef.current?.setScrollRatio(scrollRatioOf(el));
+                    }
+                  : undefined
+              }
+            />
           </div>
         )}
       </div>

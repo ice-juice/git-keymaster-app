@@ -417,16 +417,36 @@ pub fn note_save_groups(
     Ok(())
 }
 
+/// 导出允许的扩展名。导出只该产出文档，不该能落一个可执行体。
+const EXPORT_ALLOWED_EXT: &[&str] = &["md", "markdown", "txt", "pdf", "zip", "html"];
+
 fn resolve_export_dest(dest_path: &str) -> Result<PathBuf> {
     let dest = dest_path.trim();
     if dest.is_empty() {
         return Err(AppError::Invalid("请选择导出路径".into()));
     }
     let dest = PathBuf::from(dest);
-    if let Some(parent) = dest.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+
+    // `note_write_export_file` 把「任意字节写到任意路径」这件事开在了 IPC 上。
+    // 正常只有导出对话框会调它，但一旦 WebView 侧被注入，它就是现成的落地写入原语
+    // （写进开机启动目录即等于持久化执行）。这里把它收成「只能写文档」。
+    let ext = dest
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !EXPORT_ALLOWED_EXT.contains(&ext.as_str()) {
+        return Err(AppError::Invalid(format!(
+            "导出文件名必须以 {} 之一结尾",
+            EXPORT_ALLOWED_EXT.join(" / ")
+        )));
+    }
+
+    // 不创建任意深度的新目录树：父目录必须已经存在（由文件选择器保证）。
+    match dest.parent() {
+        Some(parent) if parent.as_os_str().is_empty() => {}
+        Some(parent) if parent.is_dir() => {}
+        _ => return Err(AppError::Invalid("导出目录不存在".into())),
     }
     Ok(dest)
 }

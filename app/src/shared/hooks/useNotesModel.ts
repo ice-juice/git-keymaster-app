@@ -10,6 +10,7 @@ import { i18n } from "../../lib/i18n";
 import { useApp } from "../../store";
 import { getNotesAutoSave } from "../../lib/prefs";
 import { formatUpdatedAt } from "./useFilesModel";
+import * as noteDrafts from "../noteDrafts";
 
 export type NoteExportFormat = "md_raw" | "md_inline" | "pdf";
 export type NoteExportScope = "selected" | "filtered";
@@ -28,7 +29,6 @@ export type NotesViewLayout = "split" | "edit" | "preview";
 export type NotesMobileTab = "edit" | "preview";
 
 const LAYOUT_KEY = "km.notes.viewLayout";
-const DRAFT_PREFIX = "km.notes.draft.";
 
 function emptyDraft(): NoteDraftState {
   return { title: "", markdown: "", tags: [], pinned: false };
@@ -44,36 +44,16 @@ function readLayout(): NotesViewLayout {
   return "split";
 }
 
-function draftKey(id?: string) {
-  return `${DRAFT_PREFIX}${id || "new"}`;
-}
-
 function readOfflineDraft(id?: string): { draft: NoteDraftState; savedAt: string } | null {
-  try {
-    const raw = localStorage.getItem(draftKey(id));
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { draft: NoteDraftState; savedAt: string };
-    if (!parsed?.draft) return null;
-    return parsed;
-  } catch {
-    return null;
-  }
+  return noteDrafts.readDraft<NoteDraftState>(id);
 }
 
 function writeOfflineDraft(draft: NoteDraftState) {
-  try {
-    localStorage.setItem(draftKey(draft.id), JSON.stringify({ draft, savedAt: new Date().toISOString() }));
-  } catch {
-    /* ignore */
-  }
+  noteDrafts.writeDraft(draft.id, draft);
 }
 
 function clearOfflineDraft(id?: string) {
-  try {
-    localStorage.removeItem(draftKey(id));
-  } catch {
-    /* ignore */
-  }
+  noteDrafts.clearDraft(id);
 }
 
 function haystack(e: NoteEntry): string {

@@ -297,7 +297,23 @@ fn write_secret_file(path: &Path, pem: &[u8]) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, pem).map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
+        use std::io::Write;
+        // `create_new` 而不是 `write`：文件名虽然带 UUID，但 `%TEMP%` 是可预测目录，
+        // 用 create_new 才能保证不会往别人预先摆好的文件或链接里写私钥。
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
+        f.write_all(pem)
+            .map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
+        drop(f);
+        // Unix 分支有 0600，Windows 分支原先什么都不做，明文私钥就这么带着
+        // 继承来的 ACL 躺在 TEMP 里等 ssh-add 读完。这里补上同等的收权。
+        use crate::platform::PlatformOps;
+        if let Err(e) = crate::platform::current().secure_key_file(path) {
+            log::warn!("收紧临时私钥权限失败 {}：{e}", path.display());
+        }
     }
     Ok(())
 }

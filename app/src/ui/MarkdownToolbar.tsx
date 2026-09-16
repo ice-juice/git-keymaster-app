@@ -54,7 +54,7 @@ export function MarkdownToolbar({
       <div className="md-tb-group">
         {btn(t("notes.tbQuote"), () => onInsert("\n> "), <Quote size={14} />)}
         {btn(t("notes.tbCode"), () => onWrap("\n```\n", "\n```\n"), <Code size={14} />)}
-        {btn(t("notes.tbHr"), () => onInsert("\n---\n"), <Minus size={14} />)}
+        {btn(t("notes.tbHr"), () => onInsert("\n\n---\n\n"), <Minus size={14} />)}
       </div>
       <div className="md-tb-group">
         {btn(t("notes.tbLink"), () => onWrap("[", "](url)"), <Link size={14} />)}
