@@ -674,6 +674,16 @@ mod tests {
     }
 
     #[test]
+    fn verify_password_requires_correct_access_password() {
+        let root = temp_root();
+        let (v, _) = Vault::init(&root, "access-pw", fast_kdf()).unwrap();
+        assert!(v.verify_password("").is_err(), "空密码不得通过二次验证");
+        assert!(v.verify_password("nope").is_err(), "错误密码不得通过二次验证");
+        v.verify_password("access-pw").unwrap();
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
     fn restore_keeps_workspace_id_mk_and_recovery() {
         let src = temp_root();
         let (v, rec) = Vault::init(&src, "old-pw", fast_kdf()).unwrap();

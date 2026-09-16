@@ -373,6 +373,21 @@ pub fn try_grace_unlock_silent(state: &AppState) -> bool {
     true
 }
 
+/// 当场校验访问密码（不吃免密查看窗口）。
+/// 用于查看云存储 Access Key、导出或分享配置前的二次确认。
+#[tauri::command]
+pub fn verify_access_password(state: State<AppState>, access_password: String) -> Result<()> {
+    let vault = recover_lock(&state.vault);
+    let v = vault.as_ref().ok_or(AppError::Locked)?;
+    if !v.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    if access_password.trim().is_empty() {
+        return Err(AppError::Invalid("访问密码不能为空".into()));
+    }
+    v.verify_password(&access_password)
+}
+
 /// 修改访问密码（需正确旧密码）。
 #[tauri::command]
 pub fn change_password(

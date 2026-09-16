@@ -21,6 +21,7 @@ import { TotpPage } from "./pages/Totp";
 import { AccountsPage } from "./pages/Accounts";
 import { FilesPage } from "./pages/Files";
 import { NotesPage } from "./pages/Notes";
+import { NoteMobileEditorPreview } from "./pages/NoteMobileEditor.preview";
 import { CloseConfirmHost } from "./ui/CloseConfirm";
 import { ToastHost } from "./ui/Toast";
 import UnlockAnimation from "./ui/UnlockAnimation";
@@ -115,6 +116,11 @@ export default function App() {
     };
   }, [compact, status?.unlocked, status?.mobileBackgroundRun]);
 
+  const isNotesPreview =
+    import.meta.env.DEV &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("preview") === "notes";
+
   useEffect(() => {
     (async () => {
       // 先拉状态画出解锁/主界面，再做静默解锁，避免首屏卡在「加载中」。
@@ -172,6 +178,16 @@ export default function App() {
       unlisten?.();
     };
   }, [refresh]);
+
+  if (isNotesPreview) {
+    return (
+      <div className="app-shell">
+        <div className="app-view">
+          <NoteMobileEditorPreview />
+        </div>
+      </div>
+    );
+  }
 
   let screen: ReactNode;
   if (loading) {

@@ -99,6 +99,7 @@ pub fn run() {
             commands::vault::vault_unlock_biometric,
             commands::vault::vault_lock,
             commands::vault::change_password,
+            commands::vault::verify_access_password,
             commands::vault::get_kdf_info,
             commands::vault::relax_kdf_for_mobile,
             commands::vault::rotate_recovery_key,

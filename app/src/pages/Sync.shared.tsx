@@ -30,11 +30,14 @@ import {
   type CloudSnapshot,
 } from "../lib/ipc";
 import { PageHead, Card, Badge, FieldLabel, ConfirmDialog, ErrorDialog } from "../ui/common";
+import { ReauthDialog } from "../ui/ReauthDialog";
 import { S3SetupGuide, S3GuideButton, type S3GuideProvider } from "../ui/S3SetupGuide";
 import { encodeS3ConfigPayload, importS3ConfigFromPicker } from "../lib/s3ConfigPick";
 import { firstS3ConfigJson, scanQrWithCamera } from "../lib/qrCapture";
 import { useApp } from "../store";
 import { useOverlayBack } from "../shared/mobileBack";
+
+type S3AuthIntent = "export" | "share" | "reveal";
 
 const AUTO_PRESETS: { labelKey: string; minutes: number }[] = [
   { labelKey: "syncPage.intervalOff", minutes: 0 },
@@ -59,7 +62,8 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     secretAccessKey: "",
     prefix: "gam-sync/",
   });
-  const [showSecret, setShowSecret] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
+  const [s3Auth, setS3Auth] = useState<S3AuthIntent | null>(null);
   const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -77,7 +81,6 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   const [guideTab, setGuideTab] = useState<S3GuideProvider>("r2");
   const [shareQr, setShareQr] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
-  const [exportS3AccessPw, setExportS3AccessPw] = useState("");
   const [err, setErr] = useState("");
   const [pendingConfirm, setPendingConfirm] = useState<
     | { kind: "push" }
@@ -86,6 +89,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     | null
   >(null);
   useOverlayBack(!!pendingConfirm, () => setPendingConfirm(null));
+  useOverlayBack(!!s3Auth, () => setS3Auth(null));
   useOverlayBack(!!shareQr, () => setShareQr(null));
   useOverlayBack(guideOpen, () => setGuideOpen(false));
 
@@ -223,22 +227,59 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     }
   }
 
-  async function exportS3File() {
-    if (!exportS3AccessPw.trim()) {
-      setSyncNotice(t("syncPage.exportAccessPwMissing"));
-      return;
-    }
+  async function exportS3File(accessPassword: string) {
     try {
       const selected = await save({
         defaultPath: `gam-s3-${s3Config.bucket || "config"}.json`,
         filters: [{ name: t("syncPage.cfgFilter"), extensions: ["json"] }],
       });
       if (!selected) return;
-      await api.exportS3Config(selected, s3Config, exportS3AccessPw);
-      setExportS3AccessPw("");
+      await api.exportS3Config(selected, s3Config, accessPassword);
       setSyncNotice(t("syncPage.exportCfgOk"));
     } catch (e) {
       setSyncNotice(t("syncPage.exportCfgFail", { error: errMessage(e) }));
+    }
+  }
+
+  function requestRevealKeys() {
+    if (showKeys) {
+      setShowKeys(false);
+      return;
+    }
+    setS3Auth("reveal");
+  }
+
+  function requestExportS3() {
+    setS3Auth("export");
+  }
+
+  function requestShareQr() {
+    if (!s3Filled()) {
+      setShareQr(null);
+      setSyncNotice(t("syncPage.shareNeedCfg"));
+      return;
+    }
+    setS3Auth("share");
+  }
+
+  async function confirmS3Auth(pw: string) {
+    try {
+      await api.verifyAccessPassword(pw);
+    } catch (e) {
+      throw new Error(errMessage(e));
+    }
+    const intent = s3Auth;
+    setS3Auth(null);
+    if (intent === "reveal") {
+      setShowKeys(true);
+      return;
+    }
+    if (intent === "export") {
+      await exportS3File(pw);
+      return;
+    }
+    if (intent === "share") {
+      await shareConfigQr();
     }
   }
 
@@ -246,6 +287,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     try {
       const cfg = await importS3ConfigFromPicker();
       if (!cfg) return;
+      setShowKeys(false);
       setS3Config(cfg);
       setSyncNotice(t("syncPage.importCfgOk"));
     } catch (e) {
@@ -292,6 +334,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
         return;
       }
       const cfg = await api.importS3ConfigText(raw);
+      setShowKeys(false);
       setS3Config(cfg);
       await api.saveCloudSyncConfig(cfg);
       setSyncNotice(t("syncPage.scanOk"));
@@ -511,6 +554,26 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   return (
     <div className="stack-lg">
       <ErrorDialog message={err} onClose={() => setErr("")} />
+      {s3Auth && (
+        <ReauthDialog
+          title={
+            s3Auth === "export"
+              ? t("syncPage.exportCfg")
+              : s3Auth === "share"
+                ? t("syncPage.shareCfg")
+                : t("reauth.title")
+          }
+          hint={
+            s3Auth === "export"
+              ? t("syncPage.exportCfgAccessPwHint")
+              : s3Auth === "share"
+                ? t("syncPage.shareCfgReauthHint")
+                : t("syncPage.revealKeysHint")
+          }
+          onCancel={() => setS3Auth(null)}
+          onConfirm={confirmS3Auth}
+        />
+      )}
       {pendingConfirm?.kind === "push" && (
         <ConfirmDialog
           title={t("syncPage.confirmPushTitle")}
@@ -949,12 +1012,27 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   name="Access Key ID"
                   tip={t("syncPage.akTip")}
                 />
-                <input
-                  className="input mono"
-                  placeholder="AKIA..."
-                  value={s3Config.accessKeyId}
-                  onChange={(e) => setS3Config({ ...s3Config, accessKeyId: e.target.value })}
-                />
+                <div style={{ position: "relative" }}>
+                  <input
+                    type={showKeys ? "text" : "password"}
+                    className="input mono"
+                    placeholder="AKIA..."
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={s3Config.accessKeyId}
+                    onChange={(e) => setS3Config({ ...s3Config, accessKeyId: e.target.value })}
+                    style={{ paddingRight: 32 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn ghost sm"
+                    onClick={requestRevealKeys}
+                    aria-label={showKeys ? t("syncPage.hideKeys") : t("syncPage.revealKeys")}
+                    style={{ position: "absolute", right: 4, top: 4, padding: "2px 6px" }}
+                  >
+                    {showKeys ? <EyeOff size={13} /> : <Eye size={13} />}
+                  </button>
+                </div>
               </div>
               <div>
                 <FieldLabel
@@ -963,9 +1041,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 />
                 <div style={{ position: "relative" }}>
                   <input
-                    type={showSecret ? "text" : "password"}
+                    type={showKeys ? "text" : "password"}
                     className="input mono"
                     placeholder="Secret Key"
+                    autoComplete="off"
+                    spellCheck={false}
                     value={s3Config.secretAccessKey}
                     onChange={(e) => setS3Config({ ...s3Config, secretAccessKey: e.target.value })}
                     style={{ paddingRight: 32 }}
@@ -973,10 +1053,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   <button
                     type="button"
                     className="btn ghost sm"
-                    onClick={() => setShowSecret(!showSecret)}
+                    onClick={requestRevealKeys}
+                    aria-label={showKeys ? t("syncPage.hideKeys") : t("syncPage.revealKeys")}
                     style={{ position: "absolute", right: 4, top: 4, padding: "2px 6px" }}
                   >
-                    {showSecret ? <EyeOff size={13} /> : <Eye size={13} />}
+                    {showKeys ? <EyeOff size={13} /> : <Eye size={13} />}
                   </button>
                 </div>
               </div>
@@ -999,19 +1080,6 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               </div>
             )}
 
-            <div style={{ marginBottom: 10 }}>
-              <label className="field-label">{t("syncPage.exportAccessPw")}</label>
-              <input
-                className="input"
-                type="password"
-                autoComplete="current-password"
-                placeholder={t("syncPage.exportAccessPwPh")}
-                value={exportS3AccessPw}
-                onChange={(e) => setExportS3AccessPw(e.target.value)}
-              />
-              <div className="hint">{t("syncPage.exportCfgAccessPwHint")}</div>
-            </div>
-
             {compact ? (
               <div className="m-s3-actions">
                 <div className="m-s3-actions-main">
@@ -1029,7 +1097,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   </button>
                 </div>
                 <div className="m-s3-tools">
-                  <button type="button" className="m-s3-tool" onClick={exportS3File}>
+                  <button type="button" className="m-s3-tool" onClick={requestExportS3}>
                     <Download size={16} />
                     <span>{t("syncPage.exportCfg")}</span>
                   </button>
@@ -1054,7 +1122,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   <Zap size={13} />
                   {testing ? t("syncPage.testing") : t("syncPage.testConn")}
                 </button>
-                <button type="button" className="btn ghost sm" onClick={exportS3File}>
+                <button type="button" className="btn ghost sm" onClick={requestExportS3}>
                   <Download size={13} />
                   {t("syncPage.exportCfg")}
                 </button>
@@ -1062,7 +1130,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   <Upload size={13} />
                   {t("syncPage.importCfg")}
                 </button>
-                <button type="button" className="btn ghost sm" disabled={sharing} onClick={shareConfigQr}>
+                <button type="button" className="btn ghost sm" disabled={sharing} onClick={requestShareQr}>
                   <QrCode size={13} />
                   {sharing ? t("syncPage.sharing") : t("syncPage.shareCfg")}
                 </button>

@@ -1,11 +1,12 @@
 import { useEffect, useRef, type PointerEvent } from "react";
-import { ArrowUpToLine, CheckSquare, ChevronLeft, Download, Pin, Plus } from "lucide-react";
+import { ArrowUpToLine, CheckSquare, Download, Pin, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Empty } from "../ui/common";
 import { MobileListToolbar } from "../ui/MobileListToolbar";
 import { pushMobileBack } from "../shared/mobileBack";
 import { useNotesModel, type NotesModel } from "../shared/hooks/useNotesModel";
-import { ingestNoteImage, NoteEditorCard, NoteIndexTags, NoteSelectedMark, NotesDialogs, NotesFilters } from "./Notes.shared";
+import { ingestNoteImage, NoteIndexTags, NoteSelectedMark, NotesDialogs, NotesFilters } from "./Notes.shared";
+import { NoteMobileEditor } from "./NoteMobileEditor";
 import type { NoteEntry } from "../lib/ipc";
 
 const LONG_PRESS_MS = 500;
@@ -51,18 +52,10 @@ export function NotesMobile() {
             ingestNoteImage(m, file);
           }}
         />
-        <NoteEditorCard
+        <NoteMobileEditor
           m={m}
-          layout={m.mobileTab === "preview" ? "preview" : "edit"}
-          onLayout={(v) => m.setMobileTab(v === "preview" ? "preview" : "edit")}
-          modes={["edit", "preview"]}
           onInsertImage={pickImage}
-          mobile
-          leading={
-            <button type="button" className="m-icon-btn" aria-label={t("common.back")} onClick={() => void m.selectNote(null)}>
-              <ChevronLeft size={22} />
-            </button>
-          }
+          onBack={() => void m.selectNote(null)}
         />
         <NotesDialogs m={m} />
       </div>

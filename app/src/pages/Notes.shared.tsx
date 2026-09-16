@@ -164,7 +164,7 @@ export function NoteSelectedMark() {
   );
 }
 
-const TAG_PALETTE = [
+export const TAG_PALETTE = [
   { bg: "rgba(79, 70, 229, 0.16)", fg: "#3730a3" },
   { bg: "rgba(219, 39, 119, 0.16)", fg: "#9d174d" },
   { bg: "rgba(5, 150, 105, 0.16)", fg: "#065f46" },

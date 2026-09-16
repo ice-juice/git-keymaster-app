@@ -569,6 +569,8 @@ export const api = {
   getCloudSyncConfig: () => invoke<S3Config | null>("get_cloud_sync_config"),
   saveCloudSyncConfig: (syncConfig: S3Config | null) =>
     invoke<void>("save_cloud_sync_config", { syncConfig }),
+  verifyAccessPassword: (accessPassword: string) =>
+    invoke<void>("verify_access_password", { accessPassword }),
   exportS3Config: (destPath: string, syncConfig: S3Config, accessPassword: string) =>
     invoke<void>("export_s3_config", { destPath, syncConfig, accessPassword }),
   importS3Config: (srcPath: string) => invoke<S3Config>("import_s3_config", { srcPath }),
