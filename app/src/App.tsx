@@ -31,6 +31,8 @@ import { decideMobileRootBack } from "./shared/mobileBack";
 import { startNetworkGuard } from "./shared/networkGuard";
 import { startActivityHeartbeat } from "./shared/activityHeartbeat";
 import { clearAllDrafts } from "./shared/noteDrafts";
+import { useScreenCaptureGuard } from "./shared/hooks/useScreenCaptureGuard";
+import { useImeInset } from "./shared/hooks/useImeInset";
 
 function AppShell({ compact }: { compact: boolean }) {
   if (compact) {
@@ -62,6 +64,8 @@ export default function App() {
   } = useApp();
 
   const compact = useIsCompact();
+  useImeInset(compact);
+  const privacyCover = useScreenCaptureGuard();
   // 本机 Git / SSH 工具链相关页面在移动端没有消费者，连路由都不注册，
   // 避免深链接或历史记录把用户带到一个必然报错的页面。
   // 平台标记（<html data-platform>）已由 main.tsx 在首帧前写好，这里无需再动。
@@ -180,13 +184,7 @@ export default function App() {
   }, [refresh]);
 
   if (isNotesPreview) {
-    return (
-      <div className="app-shell">
-        <div className="app-view">
-          <NoteMobileEditorPreview />
-        </div>
-      </div>
-    );
+    return <NoteMobileEditorPreview />;
   }
 
   let screen: ReactNode;
@@ -235,6 +233,7 @@ export default function App() {
         <div className="app-view">{screen}</div>
       </div>
       {unlockOverlay}
+      {privacyCover && <div className="privacy-cover" aria-hidden="true" />}
     </>
   );
 }

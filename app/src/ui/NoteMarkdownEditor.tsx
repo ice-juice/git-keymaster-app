@@ -1,9 +1,9 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorSelection } from "@codemirror/state";
-import { EditorView, ViewPlugin, placeholder as cmPlaceholder } from "@codemirror/view";
+import { EditorView, ViewPlugin, drawSelection, placeholder as cmPlaceholder } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { useApp } from "../store";
 
@@ -12,7 +12,20 @@ export type NoteMarkdownEditorHandle = {
   insertAtCursor: (text: string) => void;
   focus: () => void;
   setScrollRatio: (ratio: number) => void;
+  getMarkdown: () => string | undefined;
+  isComposing: () => boolean;
+  setMarkdown: (text: string) => void;
+  revealCursor: () => void;
 };
+
+function revealSelection(view: EditorView) {
+  view.dispatch({
+    effects: EditorView.scrollIntoView(view.state.selection.main.head, {
+      y: "nearest",
+      yMargin: 48,
+    }),
+  });
+}
 
 export function scrollRatioOf(el: HTMLElement) {
   const max = el.scrollHeight - el.clientHeight;
@@ -49,24 +62,41 @@ const chromeTheme = EditorView.theme({
     width: "100%",
     color: "var(--text)",
     backgroundColor: "transparent",
-    fontSize: "13.5px",
+    fontSize: "15px",
+    outline: "none !important",
   },
-  "&.cm-editor": { height: "100%", width: "100%" },
-  "&.cm-focused": { outline: "none" },
+  "&.cm-editor": {
+    height: "100%",
+    width: "100%",
+    outline: "none !important",
+    border: "none !important",
+  },
+  "&.cm-focused": {
+    outline: "none !important",
+    border: "none !important",
+    boxShadow: "none !important",
+  },
   ".cm-scroller": {
     overflow: "auto",
     fontFamily: "var(--mono)",
-    lineHeight: "1.65",
+    lineHeight: "1.75",
     minWidth: "0",
+    outline: "none !important",
+    border: "none !important",
   },
   ".cm-content": {
     color: "var(--text)",
     padding: "16px 18px 28px",
-    caretColor: "var(--accent)",
+    caretColor: "var(--accent) !important",
     minHeight: "100%",
     minWidth: "0",
+    outline: "none !important",
+    border: "none !important",
   },
-  ".cm-line": { color: "var(--text)" },
+  ".cm-line": {
+    color: "var(--text)",
+    caretColor: "var(--accent) !important",
+  },
   ".cm-gutters": {
     backgroundColor: "transparent",
     border: "none",
@@ -74,11 +104,16 @@ const chromeTheme = EditorView.theme({
     paddingLeft: "6px",
   },
   ".cm-activeLineGutter": { backgroundColor: "transparent" },
-  ".cm-activeLine": { backgroundColor: "var(--accent-soft)" },
+  ".cm-activeLine": { backgroundColor: "transparent" },
   ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
     backgroundColor: "var(--accent-soft)",
   },
-  ".cm-cursor": { borderLeftColor: "var(--accent)" },
+  ".cm-cursor, .cm-dropCursor": {
+    borderLeft: "2.5px solid var(--accent) !important",
+    marginLeft: "-1px",
+    opacity: "1 !important",
+    visibility: "visible !important",
+  },
 });
 
 function applyInsert(view: EditorView, text: string) {
@@ -121,6 +156,11 @@ export const NoteMarkdownEditor = forwardRef<
   const cmRef = useRef<ReactCodeMirrorRef>(null);
   const onImageRef = useRef(onImageFile);
   const onScrollRatioRef = useRef(onScrollRatio);
+  const composingRef = useRef(false);
+  const focusedRef = useRef(false);
+  const bumpImeRef = useRef(() => {});
+  const [, setImeTick] = useState(0);
+  bumpImeRef.current = () => setImeTick((n) => n + 1);
   useEffect(() => {
     onImageRef.current = onImageFile;
   }, [onImageFile]);
@@ -145,15 +185,45 @@ export const NoteMarkdownEditor = forwardRef<
     setScrollRatio(ratio: number) {
       applyScrollRatio(cmRef.current?.view?.scrollDOM, ratio);
     },
+    getMarkdown() {
+      return cmRef.current?.view?.state.doc.toString();
+    },
+    isComposing() {
+      return composingRef.current;
+    },
+    setMarkdown(text) {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      const current = view.state.doc.toString();
+      if (current === text) return;
+      view.dispatch({
+        changes: { from: 0, to: current.length, insert: text },
+      });
+    },
+    revealCursor() {
+      const view = cmRef.current?.view;
+      if (!view) return;
+      revealSelection(view);
+    },
   }));
 
   const extensions = useMemo(
     () => [
       markdown(),
       EditorView.lineWrapping,
+      drawSelection(),
       syntaxHighlighting(mdHighlight),
       chromeTheme,
       cmPlaceholder(placeholder || ""),
+      ...(mobile
+        ? [
+            EditorView.scrollMargins.of(() => {
+              const raw = getComputedStyle(document.documentElement).getPropertyValue("--km-note-ime");
+              const ime = Number.parseFloat(raw) || 0;
+              return { top: 12, bottom: 56 + ime };
+            }),
+          ]
+        : []),
       ViewPlugin.fromClass(
         class {
           private readonly onScroll: () => void;
@@ -169,6 +239,24 @@ export const NoteMarkdownEditor = forwardRef<
         },
       ),
       EditorView.domEventHandlers({
+        compositionstart() {
+          composingRef.current = true;
+          bumpImeRef.current();
+          return false;
+        },
+        compositionend() {
+          composingRef.current = false;
+          bumpImeRef.current();
+          return false;
+        },
+        focus() {
+          focusedRef.current = true;
+          return false;
+        },
+        blur() {
+          focusedRef.current = false;
+          return false;
+        },
         drop(event) {
           const file = event.dataTransfer?.files?.[0];
           if (!file || !file.type.startsWith("image/")) return false;
@@ -187,14 +275,18 @@ export const NoteMarkdownEditor = forwardRef<
         },
       }),
     ],
-    [placeholder],
+    [placeholder, mobile],
   );
+
+  const viewText = cmRef.current?.view?.state.doc.toString();
+  const lockExternal = composingRef.current || focusedRef.current;
+  const cmValue = lockExternal ? (viewText ?? value) : value;
 
   return (
     <CodeMirror
       ref={cmRef}
       className={"note-cm" + (mobile ? " is-mobile" : "")}
-      value={value}
+      value={cmValue}
       height="100%"
       theme={theme === "light" ? "light" : "dark"}
       editable={!disabled}

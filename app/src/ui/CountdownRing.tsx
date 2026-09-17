@@ -21,7 +21,14 @@ export function CountdownRing({
   return (
     <div
       className="countdown-ring"
-      style={{ width: size, height: size, flex: `0 0 ${size}px` }}
+      style={
+        {
+          width: size,
+          height: size,
+          flex: `0 0 ${size}px`,
+          "--countdown-size": `${size}px`,
+        } as React.CSSProperties
+      }
       title={t("totp.remain", { n: remain })}
     >
       <svg viewBox="0 0 32 32">

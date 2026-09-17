@@ -9,6 +9,7 @@ import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
+import app.tauri.plugin.JSObject
 import app.tauri.plugin.Plugin
 
 @InvokeArg
@@ -16,7 +17,7 @@ class ClipboardWriteArgs {
   lateinit var text: String
 }
 
-/** 用系统 ClipboardManager 写入/清空，避免 WebView 的 localhost 剪贴板权限框。 */
+/** 用系统 ClipboardManager 读写/清空，避免 WebView 的 localhost 剪贴板权限框。 */
 @TauriPlugin
 class ClipboardPlugin(private val activity: Activity) : Plugin(activity) {
   @Command
@@ -28,6 +29,25 @@ class ClipboardPlugin(private val activity: Activity) : Plugin(activity) {
         invoke.resolve()
       } catch (e: Exception) {
         invoke.reject(e.message ?: "写入系统剪贴板失败")
+      }
+    }
+  }
+
+  @Command
+  fun readText(invoke: Invoke) {
+    activity.runOnUiThread {
+      try {
+        val clip = clipboard().primaryClip
+        val text = if (clip != null && clip.itemCount > 0) {
+          clip.getItemAt(0).coerceToText(activity).toString()
+        } else {
+          ""
+        }
+        val ret = JSObject()
+        ret.put("text", text)
+        invoke.resolve(ret)
+      } catch (e: Exception) {
+        invoke.reject(e.message ?: "读取系统剪贴板失败")
       }
     }
   }

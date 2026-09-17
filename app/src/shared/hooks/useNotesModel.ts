@@ -133,10 +133,13 @@ export function useNotesModel() {
   const draftTimer = useRef<number | null>(null);
   const dirtyRef = useRef(false);
   const savingRef = useRef(false);
+  const draftRef = useRef<NoteDraftState>(draft);
+  const saveGenRef = useRef(0);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectionMode, setSelectionMode] = useState(false);
   const [exporting, setExporting] = useState(false);
   const skipNextOpenRef = useRef(false);
+  draftRef.current = draft;
 
   const load = useCallback(async () => {
     const data = await api.noteList();
@@ -218,7 +221,20 @@ export function useNotesModel() {
   }
 
   function updateDraft(patch: Partial<NoteDraftState>) {
-    setDraft((prev) => ({ ...prev, ...patch }));
+    setDraft((prev) => {
+      const next = { ...prev, ...patch };
+      draftRef.current = next;
+      return next;
+    });
+  }
+
+  function liveDraft(): NoteDraftState {
+    const current = draftRef.current;
+    const markdown = editorRef.current?.getMarkdown();
+    if (markdown === undefined || markdown === current.markdown) return current;
+    const next = { ...current, markdown };
+    draftRef.current = next;
+    return next;
   }
 
   useEffect(() => {
@@ -233,54 +249,75 @@ export function useNotesModel() {
 
   const saveCurrentNote = useCallback(async () => {
     if (writesLocked || savingRef.current) return;
+    const snapshot = liveDraft();
+    const gen = ++saveGenRef.current;
     savingRef.current = true;
     setSaving(true);
     try {
-      const created = appendGroupIfNew(groups, draft.group);
+      const created = appendGroupIfNew(groups, snapshot.group);
       if (created) {
         await api.noteSaveGroups(created);
+        if (gen !== saveGenRef.current) return;
         setGroups(created);
       }
-      const groupName = resolveGroupName(created || groups, draft.group);
+      const groupName = resolveGroupName(created || groups, snapshot.group);
       const saved = await api.noteUpsert({
-        id: draft.id,
-        title: draft.title,
+        id: snapshot.id,
+        title: snapshot.title,
         format: "markdown",
-        tags: draft.tags,
+        tags: snapshot.tags,
         group: groupName,
-        pinned: draft.pinned,
-        markdown: draft.markdown,
+        pinned: snapshot.pinned,
+        markdown: snapshot.markdown,
       });
-      const next = { ...draft, id: saved.id, group: groupName };
+      if (gen !== saveGenRef.current) return;
+      const latest = liveDraft();
+      const next = {
+        ...latest,
+        id: saved.id,
+        group: groupName,
+      };
+      draftRef.current = next;
       setDraft(next);
-      rememberSaved(next);
+      const stillSame =
+        latest.title === snapshot.title &&
+        latest.markdown === snapshot.markdown &&
+        (latest.group || "") === (snapshot.group || "") &&
+        latest.pinned === snapshot.pinned &&
+        latest.tags.join("\u0001") === snapshot.tags.join("\u0001");
+      if (stillSame) rememberSaved(next);
       setActiveId(saved.id);
-      setActiveBody(draft.markdown);
-      clearOfflineDraft(draft.id);
-      if (saved.id !== draft.id) clearOfflineDraft(saved.id);
+      setActiveBody(stillSame ? snapshot.markdown : latest.markdown);
+      clearOfflineDraft(snapshot.id);
+      if (saved.id !== snapshot.id) clearOfflineDraft(saved.id);
       await load();
     } catch (e) {
-      setErr(errMessage(e));
+      if (gen === saveGenRef.current) setErr(errMessage(e));
     } finally {
-      savingRef.current = false;
-      setSaving(false);
+      if (gen === saveGenRef.current) {
+        savingRef.current = false;
+        setSaving(false);
+      }
     }
-  }, [draft, groups, load, writesLocked]);
+  }, [groups, load, writesLocked]);
 
   const onEditorFocusLeave = useCallback(() => {
     if (!getNotesAutoSave() || writesLocked || savingRef.current || !dirtyRef.current) return;
+    if (editorRef.current?.isComposing()) return;
     void saveCurrentNote();
   }, [saveCurrentNote, writesLocked]);
 
   async function selectNote(id: string | null) {
     if (id === activeId && (id !== null || !detailOpen)) return;
     const go = async () => {
+      saveGenRef.current += 1;
       setOfflineDraft(null);
       setLeaveConfirm(null);
       if (!id) {
         setActiveId(null);
         setDetailOpen(false);
         const d = emptyDraft();
+        draftRef.current = d;
         setDraft(d);
         setActiveBody("");
         rememberSaved(d);
@@ -301,6 +338,7 @@ export function useNotesModel() {
         setActiveId(id);
         setDetailOpen(true);
         setActiveBody(body.markdown);
+        draftRef.current = d;
         setDraft(d);
         rememberSaved(d);
         const cached = readOfflineDraft(id);
@@ -322,9 +360,11 @@ export function useNotesModel() {
 
   function createNote() {
     const open = () => {
+      saveGenRef.current += 1;
       setLeaveConfirm(null);
       const d = emptyDraft();
       setActiveId(null);
+      draftRef.current = d;
       setDraft(d);
       setActiveBody("");
       rememberSaved(d);
@@ -342,7 +382,9 @@ export function useNotesModel() {
 
   function restoreOfflineDraft() {
     if (!offlineDraft) return;
+    draftRef.current = offlineDraft.draft;
     setDraft(offlineDraft.draft);
+    editorRef.current?.setMarkdown(offlineDraft.draft.markdown);
     setOfflineDraft(null);
   }
 
@@ -411,8 +453,10 @@ export function useNotesModel() {
       setPendingDelete(null);
       clearOfflineDraft(id);
       if (activeId === id) {
+        saveGenRef.current += 1;
         setActiveId(null);
         const d = emptyDraft();
+        draftRef.current = d;
         setDraft(d);
         setActiveBody("");
         rememberSaved(d);

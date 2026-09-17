@@ -67,6 +67,26 @@ export async function writeClipboard(text: string, secret = false): Promise<Clip
   throw new Error(i18n.t("common.copyFailedPerm"));
 }
 
+/** 优先走原生通道（Android WebView 的 navigator.clipboard.readText 经常被拒）。 */
+export async function readClipboard(): Promise<string> {
+  let lastErr: unknown;
+  if (isTauri()) {
+    try {
+      const text = (await api.clipboardRead()).trim();
+      if (text) return text;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (text) return text;
+  } catch (e) {
+    lastErr = e;
+  }
+  throw new Error(i18n.t(lastErr ? "common.pasteFailed" : "common.pasteEmpty"));
+}
+
 export async function clearClipboard() {
   if (isTauri()) {
     try {

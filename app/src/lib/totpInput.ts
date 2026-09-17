@@ -2,7 +2,7 @@ import { i18n } from "./i18n";
 
 /** 识别用户粘贴的是 otpauth 链接还是 Base32 密钥（二者只需填一种）。 */
 
-export type TotpSecretKind = "empty" | "otpauth" | "base32" | "unknown";
+export type TotpSecretKind = "empty" | "otpauth" | "base32" | "migration" | "unknown";
 
 export interface DetectedTotpInput {
   kind: TotpSecretKind;
@@ -20,6 +20,15 @@ export function detectTotpInput(raw: string): DetectedTotpInput {
   const trimmed = raw.trim();
   if (!trimmed) {
     return { kind: "empty", raw, message: i18n.t("totp.detectEmpty") };
+  }
+
+  const migrationStart = trimmed.toLowerCase().indexOf("otpauth-migration://");
+  if (migrationStart >= 0) {
+    return {
+      kind: "migration",
+      raw,
+      message: i18n.t("totp.detectMigrationMsg"),
+    };
   }
 
   const uriStart = trimmed.toLowerCase().indexOf("otpauth://");

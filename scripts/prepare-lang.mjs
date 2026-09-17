@@ -28,10 +28,24 @@ function upsertPlistString(xml, key, value) {
 }
 
 function writeInfoPlistStrings(dir, displayName) {
+  const camera =
+    displayName === ZH_DISPLAY_NAME
+      ? "用于扫描 2FA 密钥或云存储配置二维码。"
+      : "Used to scan 2FA secrets or cloud-storage QR codes.";
+  const face =
+    displayName === ZH_DISPLAY_NAME
+      ? "用于解锁工作空间并确认查看验证码或账户密码。"
+      : "Used to unlock the workspace and confirm viewing codes or passwords.";
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "InfoPlist.strings"),
-    `CFBundleName = "${displayName}";\nCFBundleDisplayName = "${displayName}";\n`,
+    [
+      `CFBundleName = "${displayName}";`,
+      `CFBundleDisplayName = "${displayName}";`,
+      `NSCameraUsageDescription = "${camera}";`,
+      `NSFaceIDUsageDescription = "${face}";`,
+      "",
+    ].join("\n"),
     "utf-8",
   );
 }

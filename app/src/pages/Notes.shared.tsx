@@ -1,5 +1,6 @@
 import { forwardRef, useEffect, useRef, useState, type ReactNode, type UIEvent } from "react";
 import Markdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { ArrowUpToLine, Check, Columns2, Eye, FileCode2, Pin, Plus, Save, Trash2, Type, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -77,8 +78,8 @@ function NoteImg({ src, alt }: { src?: string; alt?: string }) {
 
 export const NotePreview = forwardRef<
   HTMLDivElement,
-  { markdown: string; onScroll?: (event: UIEvent<HTMLDivElement>) => void }
->(function NotePreview({ markdown, onScroll }, ref) {
+  { markdown: string; onScroll?: (event: UIEvent<HTMLDivElement>) => void; breaks?: boolean }
+>(function NotePreview({ markdown, onScroll, breaks }, ref) {
   const { t } = useTranslation();
 
   useEffect(() => {
@@ -100,9 +101,9 @@ export const NotePreview = forwardRef<
   }
 
   return (
-    <div ref={ref} className="note-preview" onScroll={onScroll}>
+    <div ref={ref} className={"note-preview" + (breaks ? " is-hard-breaks" : "")} onScroll={onScroll}>
       <Markdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={breaks ? [remarkGfm, remarkBreaks] : [remarkGfm]}
         urlTransform={urlTransform}
         components={{ img: ({ src, alt }) => <NoteImg src={src} alt={alt} /> }}
       >
@@ -654,6 +655,7 @@ export function NoteEditorCard({
           >
             {layout === "split" && <div className="note-pane-label">{t("notes.paneSource")}</div>}
             <NoteMarkdownEditor
+              key={m.draft.id ?? "new"}
               ref={m.editorRef}
               value={m.draft.markdown}
               onChange={(markdown) => m.updateDraft({ markdown })}

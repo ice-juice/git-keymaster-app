@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { i18n } from "../../lib/i18n";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, errCode, errMessage, type CloudRestorePreview, type S3Config } from "../../lib/ipc";
+import { readClipboard } from "../../lib/clipboard";
 import { importS3ConfigFromPicker } from "../../lib/s3ConfigPick";
 import { firstS3ConfigJson, scanQrWithCamera } from "../../lib/qrCapture";
 import { useApp } from "../../store";
@@ -364,25 +365,22 @@ export function useInitModel(variant: "desktop" | "mobile") {
   }
 
   async function pasteRestoreKey() {
+    resetErr();
     try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.trim()) {
-        setRestoreKey(text.trim());
-        setPreview(null);
-      }
-    } catch {
-      // 剪贴板不可用或权限限制
+      const text = await readClipboard();
+      setRestoreKey(text);
+      setPreview(null);
+    } catch (e) {
+      setErr(errMessage(e));
     }
   }
 
   async function pasteConfirm() {
+    resetErr();
     try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.trim()) {
-        setConfirm(text.trim());
-      }
-    } catch {
-      // 剪贴板不可用或权限限制
+      setConfirm(await readClipboard());
+    } catch (e) {
+      setErr(errMessage(e));
     }
   }
 

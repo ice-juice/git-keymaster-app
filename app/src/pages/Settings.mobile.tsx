@@ -13,6 +13,7 @@ import {
   KeyRound,
   Fingerprint,
   Timer,
+  MonitorOff,
   RefreshCw,
   Sparkles,
   Info,
@@ -28,6 +29,7 @@ import { Badge, Card, ErrorDialog, FieldLabel } from "../ui/common";
 import {
   FactoryResetPanel,
   GithubPatSettings,
+  ScreenshotSetting,
   SecurityChecklistCard,
 } from "./Settings.shared";
 import { LanguageChoiceRow } from "../ui/LanguageCard";
@@ -42,6 +44,7 @@ type SubSection =
   | "checklist"
   | "password"
   | "biometric"
+  | "screenshot"
   | "timeout"
   | "recovery"
   | "workspace"
@@ -212,6 +215,8 @@ export function SettingsMobile() {
             onJump={(anchor) => {
               if (anchor === "reveal-grace" || anchor === "clipboard-clear") {
                 setSubSection("timeout");
+              } else if (anchor === "allow-screenshots") {
+                setSubSection("screenshot");
               } else if (anchor === "workspace-path" || anchor === "auto-lock") {
                 setSubSection("workspace");
               }
@@ -365,6 +370,17 @@ export function SettingsMobile() {
                 </div>
               )}
             </div>
+          </Card>
+        )}
+
+        {subSection === "screenshot" && (
+          <Card title={t("settings.screenshotTitle")}>
+            <ScreenshotSetting
+              allow={m.allowScreenshots}
+              capability={m.screenshotCapability}
+              busy={m.busy}
+              onToggle={(next) => void m.toggleAllowScreenshots(next)}
+            />
           </Card>
         )}
 
@@ -678,6 +694,19 @@ export function SettingsMobile() {
           </div>
           <span className="m-settings-cell-title">{t("settings.bioCell")}</span>
           <span className="m-settings-cell-value">{m.bio?.enabled ? t("settings.fingerprint") : t("settings.password")}</span>
+          <ChevronRight size={16} className="m-settings-cell-chevron" />
+        </button>
+
+        <button
+          type="button"
+          className="m-settings-cell"
+          onClick={() => setSubSection("screenshot")}
+        >
+          <div className="m-settings-cell-icon" style={{ background: "rgba(99, 102, 241, 0.12)", color: "#6366f1" }}>
+            <MonitorOff size={16} />
+          </div>
+          <span className="m-settings-cell-title">{t("settings.screenshotCell")}</span>
+          <span className="m-settings-cell-value">{m.allowScreenshots ? t("common.on") : t("common.off")}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
 

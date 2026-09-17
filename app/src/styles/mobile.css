@@ -124,12 +124,41 @@ html[data-platform="mobile"] .body { flex-direction: column; }
 html[data-platform="mobile"] .main { min-width: 0; }
 html[data-platform="mobile"] .content { padding: 12px 12px 16px; }
 
-/* 触摸目标放大 */
+/* 触摸目标放大与移动端控件精细化 */
 html[data-platform="mobile"] .nav-item { padding: 10px 12px; font-size: 14px; }
-html[data-platform="mobile"] .btn { min-height: 40px; padding: 8px 14px; font-size: 13.5px; }
-html[data-platform="mobile"] .btn.sm { min-height: 36px; padding: 6px 12px; }
+html[data-platform="mobile"] .btn {
+  min-height: 40px;
+  padding: 8px 14px;
+  font-size: 13.5px;
+  border-radius: 12px;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .btn.sm {
+  min-height: 36px;
+  padding: 6px 12px;
+  border-radius: 10px;
+  font-size: 12.5px;
+}
 html[data-platform="mobile"] .input,
-html[data-platform="mobile"] select.input { min-height: 42px; font-size: 16px; padding: 8px 10px; }
+html[data-platform="mobile"] select.input {
+  min-height: 42px;
+  font-size: 15px;
+  padding: 8px 12px;
+  border-radius: 12px;
+}
+html[data-platform="mobile"] .badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 20px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
 
 /* 桌面常用的并排两栏在竖屏上一律堆叠（保留微观 .row 的横向内联排版） */
 html[data-platform="mobile"] .grid-2,
@@ -614,6 +643,13 @@ html[data-platform="mobile"] .startup-lock-bar {
 .m-list-sheet-item:disabled {
   opacity: 0.5;
 }
+.m-list-sheet-item.is-danger {
+  color: var(--red);
+}
+.m-list-sheet-item.is-danger .m-list-sheet-icon {
+  background: var(--red-soft);
+  color: var(--red);
+}
 .m-list-sheet-icon {
   width: 36px;
   height: 36px;
@@ -1058,46 +1094,338 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   color: var(--text);
 }
 
+/* ==================== 移动端全屏/侧滑子页面体系 (Mobile Subpage Stage) ==================== */
+.m-subpage-stage {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+  animation: mSubpageSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  --km-safe-top: max(env(safe-area-inset-top, 0px), 12px);
+  --km-safe-bottom: max(env(safe-area-inset-bottom, 0px), 14px);
+  --km-safe-left: env(safe-area-inset-left, 0px);
+  --km-safe-right: env(safe-area-inset-right, 0px);
+}
+
+@keyframes mSubpageSlideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0.85;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.m-subpage-nav {
+  flex: 0 0 auto;
+  min-height: calc(52px + var(--km-safe-top));
+  padding-top: var(--km-safe-top);
+  padding-left: calc(8px + var(--km-safe-left));
+  padding-right: calc(12px + var(--km-safe-right));
+  padding-bottom: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.03);
+  z-index: 20;
+}
+
+.m-subpage-nav-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 38px;
+  padding: 0 8px 0 2px;
+  border-radius: 10px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 14.5px;
+  font-weight: 600;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-subpage-nav-back:active {
+  background: var(--gray-soft);
+}
+
+.m-subpage-nav-title {
+  font-size: 16px;
+  font-weight: 750;
+  color: var(--text);
+  letter-spacing: 0.01em;
+  text-align: center;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+  padding: 0 4px;
+}
+
+.m-subpage-nav-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: none;
+  background: var(--accent-gradient, var(--accent));
+  color: var(--accent-contrast, #fff);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.28);
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.15s ease;
+}
+.m-subpage-nav-save:active {
+  transform: scale(0.96);
+  filter: brightness(0.95);
+}
+.m-subpage-nav-save:disabled {
+  opacity: 0.45;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.m-subpage-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-y: contain;
+  padding: 14px calc(14px + var(--km-safe-right)) calc(40px + var(--km-safe-bottom)) calc(14px + var(--km-safe-left));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 表单卡片体系 */
+.m-form-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.03);
+}
+
+.m-form-card-title {
+  font-size: 13px;
+  font-weight: 750;
+  color: var(--text-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding-bottom: 2px;
+}
+
+.m-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.m-field-label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-soft);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.m-field-hint {
+  font-size: 11.5px;
+  color: var(--text-mute);
+  line-height: 1.4;
+}
+
+.m-form-accordion-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 现代开关与折叠控制器 */
+.m-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-switch-label {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+.m-switch {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  background: var(--border-strong, #cbd5e1);
+  transition: background 0.2s ease;
+  flex-shrink: 0;
+}
+.m-switch.on {
+  background: var(--accent);
+}
+.m-switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.m-switch.on .m-switch-thumb {
+  transform: translateX(18px);
+}
+
+/* 附件条目与行操作 */
+.m-att-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--gray-soft);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.m-att-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.m-att-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-att-meta {
+  font-size: 11.5px;
+  color: var(--text-mute);
+}
+.m-att-del-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--red);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+}
+.m-att-del-btn:active {
+  background: var(--red-soft);
+}
+
+/* 危险操作按钮 */
+.m-danger-btn {
+  width: 100%;
+  min-height: 44px;
+  border-radius: 12px;
+  border: 1px solid var(--red-soft);
+  background: var(--red-soft);
+  color: var(--red);
+  font-size: 14px;
+  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.15s ease;
+}
+.m-danger-btn:active {
+  background: var(--red);
+  color: #fff;
+}
+
 /* ===== 移动端 2FA 卡片体系 (Totp Mobile) ===== */
 .m-totp-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 8px;
 }
 .m-totp-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 14px;
+  gap: 8px;
+  padding: 10px 12px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 14px;
   box-shadow: var(--shadow);
-  transition: transform 0.12s ease, box-shadow 0.12s ease;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 .m-totp-card-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
 }
 .m-totp-card-identity {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
   min-width: 0;
   flex: 1;
 }
 .m-totp-card-meta {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
   overflow: hidden;
 }
 .m-totp-card-issuer {
-  font-size: 14.5px;
-  font-weight: 700;
+  font-size: 14px;
+  font-weight: 750;
   color: var(--text);
   white-space: nowrap;
   overflow: hidden;
@@ -1121,21 +1449,21 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   flex-shrink: 0;
 }
 .m-totp-op-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--border);
-  background: var(--panel-2);
+  background: var(--bg);
   color: var(--text-soft);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  transition: all 0.15s ease;
 }
 .m-totp-op-btn:active {
   background: var(--gray-soft);
-  color: var(--text);
 }
 .m-totp-op-btn.danger {
   color: var(--red);
@@ -1145,70 +1473,296 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
 }
 
 .m-totp-code-area {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
+  position: relative;
+  height: 38px;
+  overflow: hidden;
   background: var(--gray-soft);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  min-height: 52px;
+  border-radius: 9px;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  transition: all 0.15s ease;
+  transition:
+    background-color 360ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 360ms cubic-bezier(0.22, 1, 0.36, 1);
 }
-.m-totp-code-area.revealed {
+.m-totp-code-area.is-revealed {
   background: var(--accent-soft);
   border-color: rgba(99, 102, 241, 0.28);
 }
+.m-totp-code-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 6px 0 10px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 360ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.m-totp-code-layer.is-masked {
+  opacity: 1;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.m-totp-code-area.is-revealed .m-totp-code-layer.is-masked {
+  opacity: 0;
+  pointer-events: none;
+}
+.m-totp-code-area.is-revealed .m-totp-code-layer.is-live {
+  opacity: 1;
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 6px 0 8px;
+}
+.m-totp-live-left {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-shrink: 0;
+  min-width: 60px;
+}
+.m-totp-live-left .countdown-ring .sec-num {
+  font-size: 11.5px;
+  font-weight: 800;
+}
 .m-totp-code-num {
   font-family: var(--mono);
-  font-size: 22px;
-  font-weight: 750;
+  font-size: 20px;
+  font-weight: 800;
   color: var(--accent);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.12em;
+  text-align: center;
+  flex: 1;
+  min-width: 0;
+  line-height: 24px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  animation: m-totp-digit-in 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes m-totp-digit-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
 }
 .m-totp-code-masked {
   font-family: var(--mono);
-  font-size: 18px;
-  letter-spacing: 0.25em;
+  font-size: 14px;
+  letter-spacing: 0.24em;
   color: var(--text-mute);
+  line-height: 24px;
 }
-.m-totp-code-right {
+.m-totp-live-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
 }
-.m-totp-copy-tag {
+.m-totp-hide-btn,
+html[data-platform="mobile"] .m-totp-hide-btn {
+  width: 28px;
+  height: 28px;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 650;
-  padding: 3px 8px;
-  border-radius: 6px;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text-soft);
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-totp-hide-btn:active {
+  background: var(--gray-soft);
+  color: var(--text);
+}
+.m-totp-copy-icon {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  color: var(--accent);
   background: var(--panel);
   border: 1px solid var(--border);
-  color: var(--accent);
+  transition: all 0.15s ease;
 }
-.m-totp-copy-tag.copied {
-  background: rgba(16, 185, 129, 0.15);
-  border-color: rgba(16, 185, 129, 0.3);
+.m-totp-copy-icon.copied {
   color: var(--green);
+  background: var(--green-soft);
+}
+.m-totp-view-btn,
+html[data-platform="mobile"] .m-totp-view-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 28px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-totp-view-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+@media (prefers-reduced-motion: reduce) {
+  .m-totp-code-area,
+  .m-totp-code-layer,
+  .m-totp-code-num {
+    transition: none;
+    animation: none;
+  }
+}
+.m-totp-card.is-selecting:not(.is-checked) {
+  opacity: 0.78;
+}
+.m-totp-card.is-checked {
+  background: var(--accent-soft, var(--gray-soft));
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.m-totp-check {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  border: 1.5px solid var(--border);
+  background: var(--bg);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.m-totp-check.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.m-totp-code-area.is-static {
+  cursor: default;
+}
+.m-totp-select-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 0 2px;
+}
+.m-totp-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text-soft);
+}
+.m-totp-select-count {
+  color: var(--text);
+}
+.m-totp-select-all,
+.m-totp-select-done {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 650;
+  padding: 4px 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-totp-select-done {
+  margin-left: auto;
+}
+.m-totp-select-all:disabled,
+.m-totp-select-done:disabled,
+.m-totp-select-group-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.m-totp-select-group-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 700;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-totp-select-group-btn:active:not(:disabled) {
+  filter: brightness(0.96);
+}
+.m-totp-group-sheet .group-picker {
+  margin-top: 2px;
+}
+.m-totp-sheet-foot {
+  display: flex;
+  gap: 8px;
+}
+.m-totp-sheet-foot .btn {
+  flex: 1;
+  justify-content: center;
 }
 
 /* ===== 移动端账密卡片体系 (Accounts Mobile) ===== */
+.m-platform-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.m-platform-group {
+  --m-platform-accent: var(--accent);
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 2px 12px rgba(15, 23, 42, 0.045);
+  overflow: hidden;
+}
+.m-platform-group::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--m-platform-accent);
+  z-index: 1;
+}
 .m-platform-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 14px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  gap: 8px;
+  padding: 10px 10px 10px 14px;
+  margin: 0;
+  background: var(--bg);
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
-  margin-bottom: 8px;
+}
+.m-platform-group.is-folded .m-platform-header {
+  border-bottom: 0;
 }
 .m-platform-header-left {
   display: flex;
@@ -1217,61 +1771,218 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   min-width: 0;
   flex: 1;
 }
+.m-platform-chevron {
+  flex: 0 0 auto;
+  color: var(--text-mute);
+  transition: transform 0.16s ease;
+}
+.m-platform-chevron.is-folded {
+  transform: rotate(-90deg);
+}
+.m-platform-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.m-platform-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
 .m-platform-name {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 750;
   color: var(--text);
+  line-height: 1.2;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.m-platform-ops {
+.m-platform-rename {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-platform-rename:active {
+  background: var(--gray-soft);
+  color: var(--text);
+}
+.m-platform-count {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--m-platform-accent);
+  letter-spacing: 0.01em;
+}
+.m-platform-link {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  color: var(--text-mute);
+}
+.m-platform-link:active {
+  background: var(--gray-soft);
+  color: var(--accent);
+}
+.m-platform-add-row {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  flex-shrink: 0;
+  width: 100%;
+  min-height: 44px;
+  margin: 0;
+  padding: 0 16px;
+  border: 0;
+  border-top: 1px dashed var(--border);
+  background: transparent;
+  color: var(--accent);
+  font-size: 13.5px;
+  font-weight: 650;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-platform-add-row:active:not(:disabled) {
+  background: var(--gray-soft);
+}
+.m-platform-add-row:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .m-account-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 4px 0 10px;
+  gap: 0;
+  padding: 0;
 }
-.m-account-card {
+html[data-platform="mobile"] .m-account-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px 14px;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+  gap: 6px;
+  padding: 8px 12px 8px 16px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
 }
-.m-account-card-user-row {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+html[data-platform="mobile"] .m-account-list .m-account-card:last-of-type {
+  border-bottom: 0;
 }
-.m-account-user-title {
+html[data-platform="mobile"] .m-account-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
+  min-width: 0;
 }
-.m-account-username {
-  font-family: var(--mono);
-  font-size: 15px;
-  font-weight: 700;
-  color: var(--text);
+html[data-platform="mobile"] .m-account-id {
+  min-width: 0;
+  flex: 1 1 auto;
 }
-.m-account-meta-line {
-  font-size: 11.5px;
-  color: var(--text-mute);
+html[data-platform="mobile"] .m-account-user-title {
   display: flex;
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+}
+html[data-platform="mobile"] .m-account-user-copy {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: -4px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .m-account-user-copy:active,
+html[data-platform="mobile"] .m-account-user-copy.is-copied {
+  background: var(--gray-soft);
+  color: var(--accent);
+}
+html[data-platform="mobile"] .m-account-username {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.3;
+}
+html[data-platform="mobile"] .m-account-meta-line {
+  font-size: 11px;
+  color: var(--text-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 34px;
+}
+html[data-platform="mobile"] .m-account-ops {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+html[data-platform="mobile"] .m-account-op-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .m-account-op-btn:active {
+  background: var(--gray-soft);
+}
+html[data-platform="mobile"] .m-account-op-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+html[data-platform="mobile"] .m-account-icon-btn {
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .m-account-icon-btn svg {
+  stroke: currentColor;
+}
+html[data-platform="mobile"] .m-account-icon-btn:active,
+html[data-platform="mobile"] .m-account-icon-btn.is-on {
+  background: var(--gray-soft);
+  color: var(--accent);
 }
 
 .m-account-pwd-bar {
@@ -1281,12 +1992,13 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   gap: 8px;
   background: var(--gray-soft);
   border: 1px solid var(--border);
-  border-radius: 9px;
-  padding: 6px 10px;
+  border-radius: 10px;
+  padding: 2px 4px 2px 10px;
+  min-height: 40px;
 }
 .m-account-pwd-text {
   font-family: var(--mono);
-  font-size: 13.5px;
+  font-size: 13px;
   color: var(--text);
   letter-spacing: 0.12em;
   flex: 1;
@@ -1297,8 +2009,38 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
 .m-account-pwd-btns {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 2px;
   flex-shrink: 0;
+}
+html[data-platform="mobile"] .m-account-pwd-copy,
+html[data-platform="mobile"] .m-account-pwd-copy:hover,
+html[data-platform="mobile"] .m-account-pwd-copy:focus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  min-width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: #0f766e;
+  color: #fff;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .m-account-pwd-copy:active {
+  background: #0d9488;
+  color: #fff;
+}
+html[data-platform="mobile"] .m-account-pwd-copy.is-copied,
+html[data-platform="mobile"] .m-account-pwd-copy.good {
+  background: var(--green);
+  color: #fff;
+}
+html[data-platform="mobile"] .m-account-pwd-copy:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .m-account-totp-bar {
@@ -1307,8 +2049,9 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   justify-content: space-between;
   background: var(--accent-soft);
   border: 1px solid rgba(99, 102, 241, 0.22);
-  border-radius: 9px;
-  padding: 6px 10px;
+  border-radius: 10px;
+  padding: 2px 4px 2px 10px;
+  min-height: 36px;
 }
 .m-account-totp-code {
   display: flex;
@@ -1318,24 +2061,6 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   font-size: 14px;
   font-weight: 700;
   color: var(--accent);
-}
-
-.m-account-actions-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-top: 4px;
-  border-top: 1px dashed var(--border);
-}
-.m-account-actions-row .btn {
-  flex: 1;
-  min-height: 34px;
-  padding: 4px 8px;
-  font-size: 12.5px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
 }
 
 /* ===== 移动端总览卡片 (Overview Mobile) ===== */
@@ -1724,17 +2449,57 @@ html[data-platform="mobile"] .note-preview-phone-stage {
 html[data-platform="mobile"] .note-preview-phone {
   width: 390px;
   height: min(844px, calc(100dvh - 48px));
-  border-radius: 28px;
+  border-radius: 36px;
   overflow: hidden;
   position: relative;
   background: var(--bg);
   box-shadow: 0 0 0 10px #0b0c10, 0 24px 60px rgba(0, 0, 0, 0.45);
 }
-html[data-platform="mobile"] .note-preview-phone .notes-mobile-detail {
+
+/* 仿真系统状态栏与底部手势条 */
+html[data-platform="mobile"] .note-preview-system-statusbar {
   position: absolute;
-  inset: 0;
-  height: 100%;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 36px;
+  padding: 0 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  z-index: 100;
+  pointer-events: none;
 }
+html[data-platform="mobile"] .note-preview-system-statusbar .sys-icons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+html[data-platform="mobile"] .note-preview-system-navbar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  pointer-events: none;
+}
+html[data-platform="mobile"] .note-preview-system-navbar .sys-home-indicator {
+  width: 134px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--text);
+  opacity: 0.35;
+}
+
 html[data-platform="mobile"] .notes-mobile-detail {
   position: fixed;
   inset: 0;
@@ -1745,6 +2510,18 @@ html[data-platform="mobile"] .notes-mobile-detail {
   height: 100%;
   height: 100dvh;
   overflow: hidden;
+  --km-safe-top: max(env(safe-area-inset-top, 0px), 36px);
+  --km-safe-bottom: max(env(safe-area-inset-bottom, 0px), 24px);
+  --km-safe-left: env(safe-area-inset-left, 0px);
+  --km-safe-right: env(safe-area-inset-right, 0px);
+}
+
+html[data-platform="mobile"] .note-preview-phone .notes-mobile-detail {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  --km-safe-top: 42px;
+  --km-safe-bottom: 28px;
 }
 
 html[data-platform="mobile"] .m-note-mobile-editor {
@@ -1755,27 +2532,33 @@ html[data-platform="mobile"] .m-note-mobile-editor {
   background: var(--bg);
   position: relative;
   overflow: hidden;
+  height: 100%;
 }
 
-/* 1. 顶部紧凑沉浸导航栏 */
+/* 1. 顶部紧凑沉浸导航栏（完全适配状态栏安全区） */
 html[data-platform="mobile"] .m-note-topbar {
   flex: 0 0 auto;
-  height: 48px;
+  min-height: calc(48px + var(--km-safe-top));
+  padding-top: calc(var(--km-safe-top) + 20px);
+  padding-left: calc(12px + var(--km-safe-left));
+  padding-right: calc(12px + var(--km-safe-right));
+  padding-bottom: 4px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px 0 6px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   gap: 8px;
+  z-index: 20;
 }
 
 html[data-platform="mobile"] .m-note-nav-back {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  min-height: 38px;
-  padding: 0 8px 0 4px;
+  min-height: 40px;
+  padding: 0 8px 0 2px;
   background: transparent;
   border: none;
   border-radius: 8px;
@@ -1856,15 +2639,17 @@ html[data-platform="mobile"] .m-note-icon-action.on {
   background: var(--accent-soft);
 }
 
-/* 2. 页面主体 Canvas */
+/* 2. 页面主体 Canvas（思源笔记风格无边际纸张质感） */
 html[data-platform="mobile"] .m-note-canvas {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  padding: 8px 16px 0;
+  padding: 8px 14px 0;
   overflow: hidden;
   background: var(--bg);
+  outline: none !important;
+  border: none !important;
 }
 
 /* 思源笔记风格：紧凑属性栏 */
@@ -1873,7 +2658,7 @@ html[data-platform="mobile"] .m-note-props-bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 0 6px;
+  padding: 6px 0 10px;
   overflow: hidden;
 }
 
@@ -1882,8 +2667,8 @@ html[data-platform="mobile"] .m-note-prop-btn {
   align-items: center;
   gap: 4px;
   height: 24px;
-  padding: 0 8px;
-  border-radius: 6px;
+  padding: 0 9px;
+  border-radius: 999px;
   border: 1px dashed var(--border);
   background: transparent;
   color: var(--text-mute);
@@ -1903,8 +2688,8 @@ html[data-platform="mobile"] .m-note-prop-pill {
   align-items: center;
   gap: 5px;
   height: 24px;
-  padding: 0 8px;
-  border-radius: 6px;
+  padding: 0 9px;
+  border-radius: 999px;
   border: 1px solid var(--border);
   background: var(--gray-soft);
   color: var(--text-soft);
@@ -1939,8 +2724,8 @@ html[data-platform="mobile"] .m-note-tag-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 22px;
-  padding: 0 6px 0 8px;
+  height: 23px;
+  padding: 0 6px 0 9px;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 550;
@@ -1980,34 +2765,69 @@ html[data-platform="mobile"] .m-note-tag-input {
   outline: none;
 }
 
-/* 无边框沉浸大标题 */
+/* 思源笔记风格：无边框沉浸大标题（去除非必要的底部分割线） */
 html[data-platform="mobile"] .m-note-title-wrap {
   flex: 0 0 auto;
-  padding: 4px 0 8px;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 4px;
+  padding: 8px 0 12px;
+  border-bottom: none;
+  margin-bottom: 0;
 }
 
 html[data-platform="mobile"] .m-note-title-textarea {
   display: block;
   width: 100%;
-  border: none;
-  outline: none;
+  border: none !important;
+  outline: none !important;
   background: transparent;
-  font-size: 19px;
+  font-size: 22px;
   font-weight: 700;
   line-height: 1.35;
   color: var(--text);
   padding: 0;
   margin: 0;
   resize: none;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  max-height: 96px;
   font-family: inherit;
+  caret-color: #4f46e5 !important;
+  caret-color: var(--accent, #4f46e5) !important;
 }
 html[data-platform="mobile"] .m-note-title-textarea::placeholder {
   color: var(--text-mute);
   font-weight: 600;
-  opacity: 0.55;
+  opacity: 0.5;
+}
+
+/* 彻底清除 Android WebView / WebKit 自动生成的焦点黄色边框 */
+html[data-platform="mobile"] .m-note-content-area,
+html[data-platform="mobile"] .m-note-editor-host,
+html[data-platform="mobile"] .m-note-editor-host *,
+html[data-platform="mobile"] .note-cm,
+html[data-platform="mobile"] .note-cm *,
+html[data-platform="mobile"] .cm-editor,
+html[data-platform="mobile"] .cm-scroller,
+html[data-platform="mobile"] .cm-content,
+html[data-platform="mobile"] .cm-line {
+  outline: none !important;
+  border-color: transparent !important;
+  -webkit-tap-highlight-color: transparent !important;
+  -webkit-focus-ring-color: transparent !important;
+}
+
+html[data-platform="mobile"] .m-note-editor-host:focus,
+html[data-platform="mobile"] .m-note-editor-host:focus-visible,
+html[data-platform="mobile"] .note-cm:focus,
+html[data-platform="mobile"] .note-cm:focus-visible,
+html[data-platform="mobile"] .cm-editor:focus,
+html[data-platform="mobile"] .cm-editor:focus-visible,
+html[data-platform="mobile"] .cm-scroller:focus,
+html[data-platform="mobile"] .cm-scroller:focus-visible,
+html[data-platform="mobile"] .cm-content:focus,
+html[data-platform="mobile"] .cm-content:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+  border: none !important;
 }
 
 /* 正文编辑区 */
@@ -2018,6 +2838,8 @@ html[data-platform="mobile"] .m-note-content-area {
   flex-direction: column;
   position: relative;
   overflow: hidden;
+  border: none !important;
+  outline: none !important;
 }
 
 html[data-platform="mobile"] .m-note-editor-host {
@@ -2026,23 +2848,122 @@ html[data-platform="mobile"] .m-note-editor-host {
   height: 100%;
   display: flex;
   flex-direction: column;
+  border: none !important;
+  outline: none !important;
+}
+
+/* 切到预览时不卸载源码编辑器，避免丢掉光标、选区和撤销栈 */
+html[data-platform="mobile"] .m-note-editor-host.is-parked {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+  z-index: 0;
 }
 
 html[data-platform="mobile"] .m-note-editor-host .note-cm {
   flex: 1;
   min-height: 0;
   height: 100%;
+  border: none !important;
+  outline: none !important;
 }
 html[data-platform="mobile"] .m-note-editor-host .cm-editor {
   height: 100%;
+  border: none !important;
+  outline: none !important;
 }
 html[data-platform="mobile"] .m-note-editor-host .cm-scroller {
-  padding: 6px 0 28px;
+  padding: 4px 0 40px;
+  border: none !important;
+  outline: none !important;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+}
+html[data-platform="mobile"] .m-note-editor-host .cm-scroller::-webkit-scrollbar {
+  width: 4px;
+}
+html[data-platform="mobile"] .m-note-editor-host .cm-scroller::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 999px;
 }
 html[data-platform="mobile"] .m-note-editor-host .cm-content {
-  padding: 0 0 28px;
-  font-size: 15.5px;
-  line-height: 1.65;
+  padding: 4px 4px calc(48px + var(--km-note-ime, 0px));
+  font-size: 16px;
+  line-height: 1.75;
+  border: none !important;
+  outline: none !important;
+  caret-color: #4f46e5 !important;
+  caret-color: var(--accent, #4f46e5) !important;
+}
+/* 软折行：续行悬挂缩进 + 左侧折行轨，避免看起来像已经回车 */
+html[data-platform="mobile"] .m-note-editor-host .cm-line {
+  --km-wrap-indent: 14px;
+  padding: 3px 0 3px var(--km-wrap-indent);
+  text-indent: calc(-1 * var(--km-wrap-indent));
+  caret-color: #4f46e5 !important;
+  caret-color: var(--accent, #4f46e5) !important;
+  background-image: linear-gradient(var(--border), var(--border));
+  background-repeat: no-repeat;
+  background-size: 2px calc(100% - 1.75em);
+  background-position: 4px 1.75em;
+}
+
+html[data-platform="mobile"] .m-note-editor-host .note-cm .cm-activeLine,
+html[data-platform="mobile"] .m-note-editor-host .note-cm .cm-activeLineGutter {
+  background-color: transparent !important;
+}
+
+/* 强化光标与选区：保证移动端清晰可见、醒目闪烁 */
+@keyframes cm-mobile-blink {
+  0%, 45% {
+    opacity: 1;
+    visibility: visible;
+  }
+  50%, 95% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
+html[data-platform="mobile"] .cm-cursor,
+html[data-platform="mobile"] .cm-dropCursor {
+  border-left: 2.5px solid var(--accent, #4f46e5) !important;
+  margin-left: -1px !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  z-index: 100 !important;
+  animation: cm-mobile-blink 1.05s ease-in-out infinite !important;
+}
+html[data-platform="mobile"] .cm-selectionBackground,
+html[data-platform="mobile"] .cm-editor.cm-focused .cm-selectionBackground {
+  background: var(--accent-soft) !important;
+}
+
+/* 思源笔记风格 Markdown 标题层级感 */
+html[data-platform="mobile"] .note-cm .cm-md-h1 {
+  font-size: 1.28em;
+  font-weight: 700;
+  color: var(--accent);
+}
+html[data-platform="mobile"] .note-cm .cm-md-h2 {
+  font-size: 1.16em;
+  font-weight: 700;
+  color: var(--accent);
+}
+html[data-platform="mobile"] .note-cm .cm-md-h3 {
+  font-size: 1.08em;
+  font-weight: 700;
+  color: var(--accent);
+}
+html[data-platform="mobile"] .note-cm .cm-md-strong {
+  font-weight: 700;
+  color: var(--text);
 }
 
 /* 预览区域 */
@@ -2061,6 +2982,11 @@ html[data-platform="mobile"] .m-note-preview-host .note-preview {
   font-size: 15px;
   line-height: 1.7;
 }
+html[data-platform="mobile"] .m-note-preview-host .note-preview.is-hard-breaks p,
+html[data-platform="mobile"] .m-note-preview-host .note-preview.is-hard-breaks li {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
 
 html[data-platform="mobile"] .m-note-preview-status {
   flex: 0 0 auto;
@@ -2072,18 +2998,22 @@ html[data-platform="mobile"] .m-note-preview-status {
   gap: 4px;
 }
 
-/* 3. 思源笔记图三：底部键盘吸附工具栏（Accessory Bar） */
+/* 3. 底部键盘吸附工具栏（完全适配底部虚拟导航栏与安全区） */
 html[data-platform="mobile"] .m-note-acc-bar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  height: 42px;
+  min-height: calc(48px + var(--km-safe-bottom));
+  padding-bottom: calc(var(--km-safe-bottom) + 24px);
+  padding-top: 6px;
+  padding-left: calc(8px + var(--km-safe-left));
+  padding-right: calc(8px + var(--km-safe-right));
   background: var(--bg-elev);
   border-top: 1px solid var(--border);
-  padding: 0 4px;
-  gap: 2px;
-  z-index: 10;
-  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.04);
+  gap: 4px;
+  z-index: 25;
+  box-shadow: 0 -3px 12px rgba(0, 0, 0, 0.05);
+  box-sizing: border-box;
 }
 
 html[data-platform="mobile"] .m-note-acc-scroll {
@@ -2091,7 +3021,7 @@ html[data-platform="mobile"] .m-note-acc-scroll {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -2105,15 +3035,16 @@ html[data-platform="mobile"] .m-acc-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   flex-shrink: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   border: none;
   background: transparent;
   color: var(--text-soft);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  outline: none;
 }
 html[data-platform="mobile"] .m-acc-btn:active {
   background: var(--gray-soft);
@@ -2126,7 +3057,7 @@ html[data-platform="mobile"] .m-acc-btn.is-img {
 
 html[data-platform="mobile"] .m-acc-divider {
   width: 1px;
-  height: 18px;
+  height: 20px;
   background: var(--border);
   margin: 0 2px;
   flex-shrink: 0;
@@ -2136,15 +3067,84 @@ html[data-platform="mobile"] .m-acc-dismiss-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   flex-shrink: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   border: none;
   background: transparent;
   color: var(--text-mute);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  outline: none;
+  margin-left: 2px;
+}
+html[data-platform="mobile"] .m-acc-dismiss-btn:active {
+  background: var(--gray-soft);
+  color: var(--text);
+}
+
+html[data-platform="mobile"] .m-note-acc-scroll {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding: 0 2px;
+}
+html[data-platform="mobile"] .m-note-acc-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+html[data-platform="mobile"] .m-acc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-soft);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
+}
+html[data-platform="mobile"] .m-acc-btn:active {
+  background: var(--gray-soft);
+  color: var(--text);
+  transform: scale(0.94);
+}
+html[data-platform="mobile"] .m-acc-btn.is-img {
+  color: var(--accent);
+}
+
+html[data-platform="mobile"] .m-acc-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+html[data-platform="mobile"] .m-acc-dismiss-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  outline: none;
   margin-left: 2px;
 }
 html[data-platform="mobile"] .m-acc-dismiss-btn:active {
@@ -2286,6 +3286,21 @@ html[data-platform="mobile"] .m-note-group-option.is-create {
   color: var(--accent);
   justify-content: flex-start;
   gap: 8px;
+}
+
+/* 输入法弹出时整块弹层（含底部按钮）抬到键盘上方，收起后落回正中 */
+html[data-platform="mobile"] .wizard-overlay {
+  box-sizing: border-box;
+  padding-bottom: calc(12px + var(--km-ime-inset, 0px));
+  transition: padding-bottom 0.22s ease;
+}
+html[data-platform="mobile"][data-km-ime="1"] .wizard-overlay {
+  align-items: flex-end;
+}
+html[data-platform="mobile"] .wizard-overlay > .card,
+html[data-platform="mobile"] .wizard-overlay > .dialog-card {
+  max-height: calc(100dvh - var(--km-ime-inset, 0px) - 24px);
+  overflow: auto;
 }
 
 

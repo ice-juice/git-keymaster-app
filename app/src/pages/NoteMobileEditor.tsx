@@ -59,12 +59,50 @@ export function NoteMobileEditor({
 
   const stats = notePlainStats(m.draft.markdown);
   const isPreview = m.mobileTab === "preview";
+  const [viewportBottomOffset, setViewportBottomOffset] = useState(0);
+  const wasPreviewRef = useRef(isPreview);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      const offset = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
+      setViewportBottomOffset(offset);
+      root.style.setProperty("--km-note-ime", `${offset}px`);
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      root.style.removeProperty("--km-note-ime");
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isPreview || viewportBottomOffset <= 0) return;
+    const id = window.requestAnimationFrame(() => m.editorRef.current?.revealCursor());
+    return () => window.cancelAnimationFrame(id);
+  }, [isPreview, viewportBottomOffset, m.editorRef]);
+
+  useEffect(() => {
+    const leftPreview = wasPreviewRef.current && !isPreview;
+    wasPreviewRef.current = isPreview;
+    if (!leftPreview) return;
+    const id = window.requestAnimationFrame(() => {
+      m.editorRef.current?.focus();
+      m.editorRef.current?.revealCursor();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [isPreview, m.editorRef]);
 
   const adjustTitleHeight = useCallback(() => {
     const el = titleTextareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.max(32, el.scrollHeight)}px`;
+    el.style.height = `${Math.min(96, Math.max(32, el.scrollHeight))}px`;
   }, []);
 
   useEffect(() => {
@@ -127,7 +165,10 @@ export function NoteMobileEditor({
             className={"m-note-icon-action" + (isPreview ? " on" : "")}
             aria-label={isPreview ? t("notes.layoutEdit") : t("notes.layoutPreview")}
             title={isPreview ? t("notes.layoutEdit") : t("notes.layoutPreview")}
-            onClick={() => m.setMobileTab(isPreview ? "edit" : "preview")}
+            onClick={() => {
+              if (!isPreview) handleDismissKeyboard();
+              m.setMobileTab(isPreview ? "edit" : "preview");
+            }}
           >
             {isPreview ? <FileCode2 size={18} /> : <Eye size={18} />}
           </button>
@@ -247,14 +288,41 @@ export function NoteMobileEditor({
               m.updateDraft({ title: e.target.value });
               adjustTitleHeight();
             }}
+            onKeyDown={(e) => {
+              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+              e.preventDefault();
+              if (isPreview) m.setMobileTab("edit");
+              m.editorRef.current?.focus();
+            }}
           />
         </div>
 
         {/* 正文主编辑区 / 预览区 */}
         <div className="m-note-content-area">
-          {isPreview ? (
+          <div
+            className={"m-note-editor-host" + (isPreview ? " is-parked" : "")}
+            aria-hidden={isPreview}
+            onBlur={(ev) => {
+              if (isPreview) return;
+              const next = ev.relatedTarget as Node | null;
+              if (next && ev.currentTarget.contains(next)) return;
+              m.onEditorFocusLeave();
+            }}
+          >
+            <NoteMarkdownEditor
+              key={m.draft.id ?? "new"}
+              ref={m.editorRef}
+              value={m.draft.markdown}
+              onChange={(markdown) => m.updateDraft({ markdown })}
+              placeholder={t("notes.sourcePlaceholder")}
+              disabled={m.writesLocked}
+              mobile
+              onImageFile={(file) => ingestNoteImage(m, file)}
+            />
+          </div>
+          {isPreview && (
             <div className="m-note-preview-host">
-              <NotePreview markdown={m.draft.markdown} />
+              <NotePreview markdown={m.draft.markdown} breaks />
               <div className="m-note-preview-status">
                 <span>{t("notes.statChars", { n: stats.chars })}</span>
                 <span className="dot">·</span>
@@ -267,32 +335,21 @@ export function NoteMobileEditor({
                 )}
               </div>
             </div>
-          ) : (
-            <div
-              className="m-note-editor-host"
-              onBlur={(ev) => {
-                const next = ev.relatedTarget as Node | null;
-                if (next && ev.currentTarget.contains(next)) return;
-                m.onEditorFocusLeave();
-              }}
-            >
-              <NoteMarkdownEditor
-                ref={m.editorRef}
-                value={m.draft.markdown}
-                onChange={(markdown) => m.updateDraft({ markdown })}
-                placeholder={t("notes.sourcePlaceholder")}
-                disabled={m.writesLocked}
-                mobile
-                onImageFile={(file) => ingestNoteImage(m, file)}
-              />
-            </div>
           )}
         </div>
       </div>
 
       {/* 3. 思源笔记图三风格：底部键盘吸附工具栏（Accessory Toolbar） */}
       {!isPreview && (
-        <footer className="m-note-acc-bar" role="toolbar">
+        <footer
+          className="m-note-acc-bar"
+          role="toolbar"
+          style={
+            viewportBottomOffset > 0
+              ? { transform: `translateY(-${viewportBottomOffset}px)` }
+              : undefined
+          }
+        >
           <div className="m-note-acc-scroll">
             {/* 插入图片 */}
             <button

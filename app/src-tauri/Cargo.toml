@@ -75,6 +75,7 @@ tauri-plugin-updater = "2"
 xcap = "0.9"
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
 winreg = "0.55"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
@@ -101,6 +102,7 @@ windows-future = "0.2"
 # 需共享的条目要显式改成 cfg(any(target_os = "macos", target_os = "ios"))。
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
+objc2 = "0.6"
 block2 = "0.6"
 objc2-foundation = { version = "0.3.2", features = ["NSData", "NSError", "NSString"] }
 objc2-local-authentication = { version = "0.3.2", default-features = false, features = [
@@ -114,6 +116,18 @@ objc2-local-authentication = { version = "0.3.2", default-features = false, feat
 # 原生文件选择器只给非 Windows 的桌面平台；移动端走 tauri-plugin-dialog / SAF。
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 rfd = "0.15"
+
+# iOS：后台遮罩 + 系统截屏通知。不能彻底禁止截屏。
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSNotification",
+    "NSObject",
+    "NSString",
+    "block2",
+] }
 
 [dev-dependencies]
 minisign = "0.7"

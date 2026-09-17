@@ -12,11 +12,13 @@ export function IconMark({
   builtins,
   label,
   size = 28,
+  color,
 }: {
   icon?: string | null;
   builtins: BuiltinIconInfo[];
   label?: string;
   size?: number;
+  color?: string;
 }) {
   const [custom, setCustom] = useState<string | null>(null);
 
@@ -60,7 +62,7 @@ export function IconMark({
         width: size,
         height: size,
         borderRadius: 8,
-        background: info.color,
+        background: color || info.color,
         color: "#fff",
         fontSize: size < 26 ? 9 : 11,
         fontWeight: 700,

@@ -149,12 +149,6 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                           {e.displayName && <span>{e.displayName}</span>}
                           {e.displayName && e.note && <span>·</span>}
                           {e.note && <span className="muted">{e.note}</span>}
-                          {(e.displayName || e.note) && e.lastUsedAt && <span>·</span>}
-                          {e.lastUsedAt && (
-                            <span className="muted" title={t("accounts.lastUsed")}>
-                              {t("accounts.usedAt", { time: e.lastUsedAt.slice(0, 16) })}
-                            </span>
-                          )}
                         </div>
                       </div>
 
@@ -367,9 +361,9 @@ function EditPlatformModal({
   );
 }
 
-export function AccountsDialogs({ m, compact }: { m: AccountsModel; compact?: boolean }) {
+export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; compact?: boolean; skipEditor?: boolean }) {
   const { t } = useTranslation();
-  useOverlayBack(!!m.editor, () => m.setEditor(null));
+  useOverlayBack(!skipEditor && !!m.editor, () => m.setEditor(null));
   useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(false));
   useOverlayBack(!!m.reauth, () => m.reauthCancel.current?.());
   useOverlayBack(!!m.editingPlatformModal, () => m.setEditingPlatformModal(null));
@@ -405,7 +399,7 @@ export function AccountsDialogs({ m, compact }: { m: AccountsModel; compact?: bo
         />
       )}
 
-      {m.editor && !m.pendingDelete && (
+      {!skipEditor && m.editor && !m.pendingDelete && (
         <AccountEditor
           compact={compact}
           value={m.editor}

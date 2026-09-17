@@ -304,9 +304,9 @@ export function FileEditModal({ m }: { m: FilesModel }) {
   );
 }
 
-export function FilesDialogs({ m }: { m: FilesModel }) {
+export function FilesDialogs({ m, skipEditor }: { m: FilesModel; skipEditor?: boolean }) {
   const { t } = useTranslation();
-  useOverlayBack(!!m.editor, () => m.setEditor(null));
+  useOverlayBack(!skipEditor && !!m.editor, () => m.setEditor(null));
   useOverlayBack(!!m.exportPick, () => m.setExportPick(null));
   useOverlayBack(!!m.pendingDelete, () => m.setPendingDelete(null));
   useOverlayBack(!!m.reauth, () => m.reauthCancel.current?.());
@@ -324,7 +324,7 @@ export function FilesDialogs({ m }: { m: FilesModel }) {
       {m.groupDlg && (
         <GroupDialog existing={m.groups.map((g) => g.name)} onCancel={() => m.setGroupDlg(false)} onConfirm={m.saveGroup} />
       )}
-      {m.editor && <FileEditModal m={m} />}
+      {!skipEditor && m.editor && <FileEditModal m={m} />}
       {m.exportPick && (
         <div className="wizard-overlay">
           <div className="card" style={{ width: 420, maxWidth: "96vw" }}>

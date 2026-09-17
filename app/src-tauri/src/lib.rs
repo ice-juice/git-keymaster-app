@@ -8,6 +8,8 @@ pub mod autostart;
 pub mod biometric;
 mod clipboard;
 pub mod camera_perm;
+#[cfg(windows)]
+mod desktop_media;
 pub mod commands;
 pub mod session;
 pub mod security;
@@ -17,6 +19,7 @@ pub mod icons;
 pub mod importer;
 pub mod model;
 pub mod qrscan;
+pub mod screen_protect;
 pub mod net;
 pub mod platform;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -76,6 +79,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(camera_perm::init())
         .plugin(clipboard::init())
+        .plugin(screen_protect::init())
         .plugin(biometric::init())
         .plugin(mobile::update::init())
         .plugin(mobile::nav::init());
@@ -212,6 +216,7 @@ pub fn run() {
             commands::totp::totp_save_groups,
             commands::totp::totp_generate_code,
             commands::totp::totp_parse_uri,
+            commands::totp::totp_parse_import,
             commands::totp::totp_import_from_image,
             commands::totp::totp_scan_screen,
             commands::qr::render_qr_png,
@@ -251,11 +256,14 @@ pub fn run() {
             commands::notes::note_export_content,
             commands::notes::note_write_export_file,
             commands::secrets_ui::clipboard_write,
+            commands::secrets_ui::clipboard_read,
             commands::secrets_ui::clipboard_clear,
             commands::secrets_ui::get_reveal_settings,
             commands::secrets_ui::set_reveal_grace_minutes,
             commands::secrets_ui::set_clipboard_clear_seconds,
             commands::secrets_ui::set_account_history_limit,
+            commands::screen::get_screen_capture_settings,
+            commands::screen::set_allow_screenshots,
             commands::secrets_ui::icon_list_builtin,
             commands::secrets_ui::icon_upload_custom,
             commands::secrets_ui::icon_get_custom,
@@ -278,6 +286,10 @@ pub fn run() {
 
             // 桌面端在 `run()` 开头已经迁移过，这里只负责注册状态。
             app.manage(AppState::new());
+            // 窗口已在，立刻按配置套防护，避免先能截再变黑。
+            crate::screen_protect::apply_from_app(app.handle());
+            #[cfg(windows)]
+            crate::desktop_media::grant_camera(app.handle());
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -329,13 +341,18 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_app, event| {
-            // 应用退出时释放单实例锁（各退出路径最终都会触发 Exit）
-            if let tauri::RunEvent::Exit = event {
-                // 退出时前端的清空定时器已经随 WebView 一起消失，这里补最后一刀。
-                crate::clipboard::clear_on_teardown();
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                crate::single_instance::release_lock();
+        .run(|app, event| {
+            match event {
+                tauri::RunEvent::Ready => {
+                    // WebView / 子 HWND 就绪后再套一次，补上冷启动漏网的合成层。
+                    crate::screen_protect::apply_from_app(app);
+                }
+                tauri::RunEvent::Exit => {
+                    crate::clipboard::clear_on_teardown();
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    crate::single_instance::release_lock();
+                }
+                _ => {}
             }
         });
 }

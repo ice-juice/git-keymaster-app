@@ -69,6 +69,19 @@ pub fn clipboard_write(
 }
 
 #[tauri::command]
+pub fn clipboard_read(app: AppHandle) -> Result<String> {
+    #[cfg(target_os = "android")]
+    {
+        return clipboard::read_android(&app).map_err(clipboard_err);
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app;
+        clipboard::read().map_err(clipboard_err)
+    }
+}
+
+#[tauri::command]
 pub fn clipboard_clear(app: AppHandle) -> Result<()> {
     #[cfg(target_os = "android")]
     {

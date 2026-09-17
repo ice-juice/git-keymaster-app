@@ -11,6 +11,8 @@
 		<string>zh_CN</string>
 		<string>en</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>用于扫描 2FA 密钥或云存储配置二维码。</string>
 	<key>NSFaceIDUsageDescription</key>
 	<string>用于解锁工作空间并确认查看验证码或账户密码。</string>
 </dict>

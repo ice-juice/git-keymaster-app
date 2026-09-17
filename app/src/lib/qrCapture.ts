@@ -93,15 +93,25 @@ export async function decodeQrFromBytes(bytes: Uint8Array): Promise<string[]> {
   return decodeQrFromImageBlob(blob);
 }
 
-/** 提取首个有效 OTPAuth 链接 */
+function isTotpImportUri(text: string): boolean {
+  const s = text.trim().toLowerCase();
+  return s.startsWith("otpauth-migration://") || s.startsWith("otpauth://");
+}
+
+/** 提取首个有效 OTPAuth / Google 导出链接 */
 export function firstOtpauth(texts: string[]): string | null {
+  const uris = totpImportUris(texts);
+  return uris[0] || null;
+}
+
+/** 提取全部可导入的 2FA 链接（含 Google 身份验证器导出） */
+export function totpImportUris(texts: string[]): string[] {
+  const out: string[] = [];
   for (const t of texts) {
     const s = t.trim();
-    if (s.toLowerCase().startsWith("otpauth://")) {
-      return s;
-    }
+    if (isTotpImportUri(s) && !out.includes(s)) out.push(s);
   }
-  return null;
+  return out;
 }
 
 /** 提取首个有效 S3/R2 云存储配置 JSON */

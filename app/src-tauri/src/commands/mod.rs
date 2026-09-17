@@ -11,6 +11,7 @@ pub mod locale;
 pub mod proxy;
 pub mod qr;
 pub mod repo;
+pub mod screen;
 pub mod secrets_ui;
 pub mod security;
 pub mod sync;

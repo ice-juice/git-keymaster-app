@@ -24,6 +24,7 @@ import {
   type ProxyTestResult,
   type SecurityChecklist,
   type SecurityFinding,
+  type ScreenCaptureCapability,
   type SecurityLevel,
   type UpdateCheckResult,
   type UpdateSource,
@@ -852,7 +853,45 @@ const SETTING_ANCHOR_TAB: Record<string, SettingsTab> = {
   "lock-on-sleep": "workspace",
   "reveal-grace": "security",
   "clipboard-clear": "security",
+  "allow-screenshots": "security",
 };
+
+function screenshotHintKey(capability: ScreenCaptureCapability): string {
+  if (capability === "overlay") return "settings.screenshotHintOverlay";
+  if (capability === "unsupported") return "settings.screenshotHintUnsupported";
+  return "settings.screenshotHintExclude";
+}
+
+export function ScreenshotSetting({
+  allow,
+  capability,
+  busy,
+  onToggle,
+}: {
+  allow: boolean;
+  capability: ScreenCaptureCapability;
+  busy?: boolean;
+  onToggle: (next: boolean) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="stack" id="setting-allow-screenshots">
+      <div className="muted">{t(screenshotHintKey(capability))}</div>
+      <div className="field">
+        <FieldLabel name={t("settings.screenshotAllow")} tip={t("settings.screenshotAllowTip")} />
+        <label className="row" style={{ marginTop: 4, gap: 8 }}>
+          <input
+            type="checkbox"
+            disabled={busy}
+            checked={allow}
+            onChange={(e) => onToggle(e.target.checked)}
+          />
+          <span className="hint">{t("settings.screenshotAllowHint")}</span>
+        </label>
+      </div>
+    </div>
+  );
+}
 
 function scrollToSettingAnchor(anchor: string) {
   const el = document.getElementById(`setting-${anchor}`);
@@ -1033,6 +1072,8 @@ export function SettingsView() {
   const [bio, setBio] = useState<BiometricStatus | null>(null);
   const [bioPw, setBioPw] = useState("");
   const [notesAutoSave, setNotesAutoSave] = useState(getNotesAutoSave);
+  const [allowScreenshots, setAllowScreenshots] = useState(false);
+  const [screenshotCapability, setScreenshotCapability] = useState<ScreenCaptureCapability>("exclude");
 
   useEffect(() => {
     setGraceDays(String(status?.graceDays ?? 0));
@@ -1043,6 +1084,10 @@ export function SettingsView() {
       setRevealGrace(String(s.revealGraceMinutes));
       setClipSec(String(s.clipboardClearSeconds));
       setHistLimit(String(s.accountHistoryLimit));
+    }).catch(() => {});
+    api.getScreenCaptureSettings().then((s) => {
+      setAllowScreenshots(!!s.allowScreenshots);
+      setScreenshotCapability(s.capability);
     }).catch(() => {});
     api.biometricStatus().then(setBio).catch(() => setBio(null));
   }, []);
@@ -1559,6 +1604,29 @@ export function SettingsView() {
                     </label>
                   </div>
                 </div>
+              </Card>
+
+              <Card title={t("settings.screenshotTitle")}>
+                <ScreenshotSetting
+                  allow={allowScreenshots}
+                  capability={screenshotCapability}
+                  busy={busy}
+                  onToggle={async (next) => {
+                    setBusy(true);
+                    setErr("");
+                    try {
+                      const s = await api.setAllowScreenshots(next);
+                      setAllowScreenshots(!!s.allowScreenshots);
+                      setScreenshotCapability(s.capability);
+                      setMsg(next ? t("settings.screenshotOn") : t("settings.screenshotOff"));
+                      setChecklistNonce((n) => n + 1);
+                    } catch (e) {
+                      setErr(errMessage(e));
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                />
               </Card>
 
               <Card title={t("settings.revealTitle")}>

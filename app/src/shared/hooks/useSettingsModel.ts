@@ -5,6 +5,7 @@ import {
   api,
   errMessage,
   type BiometricStatus,
+  type ScreenCaptureCapability,
   type SecurityLevel,
   type SecurityFinding,
 } from "../../lib/ipc";
@@ -18,6 +19,7 @@ export const SETTING_ANCHOR_TAB: Record<string, SettingsTab> = {
   "lock-on-sleep": "workspace",
   "reveal-grace": "security",
   "clipboard-clear": "security",
+  "allow-screenshots": "security",
 };
 
 export function scrollToSettingAnchor(anchor: string) {
@@ -84,6 +86,9 @@ export function useSettingsModel() {
   const [newRecovery, setNewRecovery] = useState("");
   const [bio, setBio] = useState<BiometricStatus | null>(null);
   const [bioPw, setBioPw] = useState("");
+  const [allowScreenshots, setAllowScreenshots] = useState(false);
+  const [screenshotCapability, setScreenshotCapability] =
+    useState<ScreenCaptureCapability>("exclude");
 
   useEffect(() => {
     setGraceDays(String(status?.graceDays ?? 0));
@@ -94,6 +99,10 @@ export function useSettingsModel() {
       setRevealGrace(String(s.revealGraceMinutes));
       setClipSec(String(s.clipboardClearSeconds));
       setHistLimit(String(s.accountHistoryLimit));
+    }).catch(() => {});
+    api.getScreenCaptureSettings().then((s) => {
+      setAllowScreenshots(!!s.allowScreenshots);
+      setScreenshotCapability(s.capability);
     }).catch(() => {});
     api.biometricStatus().then(setBio).catch(() => setBio(null));
   }, []);
@@ -299,6 +308,22 @@ export function useSettingsModel() {
     }
   }
 
+  async function toggleAllowScreenshots(enabled: boolean) {
+    setBusy(true);
+    setErr("");
+    try {
+      const s = await api.setAllowScreenshots(enabled);
+      setAllowScreenshots(!!s.allowScreenshots);
+      setScreenshotCapability(s.capability);
+      setMsg(enabled ? t("settings.screenshotOn") : t("settings.screenshotOff"));
+      setChecklistNonce((n) => n + 1);
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function toggleBioSecret(enabled: boolean) {
     setBusy(true);
     try {
@@ -377,6 +402,9 @@ export function useSettingsModel() {
     disableBio,
     toggleBioReveal,
     toggleBioSecret,
+    allowScreenshots,
+    screenshotCapability,
+    toggleAllowScreenshots,
     toggleLaunch,
     toggleMobileBackgroundRun,
     clearCloseAction,

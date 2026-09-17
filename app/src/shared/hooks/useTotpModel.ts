@@ -6,14 +6,14 @@ import {
   type BuiltinIconInfo,
   type GroupMeta,
   type ParsedTotpPreview,
-  type ScreenHit,
   type TotpEntry,
+  type TotpImportResult,
 } from "../../lib/ipc";
 import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
 import { resolvePlatform } from "../../platform/resolve";
 import { detectTotpInput } from "../../lib/totpInput";
 import { i18n } from "../../lib/i18n";
-import { firstOtpauth, pickQrFromGallery, scanQrWithCamera } from "../../lib/qrCapture";
+import { firstOtpauth, pickQrFromGallery, scanQrWithCamera, totpImportUris } from "../../lib/qrCapture";
 import { isMobilePlatform } from "../../lib/platform";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { useApp } from "../../store";
@@ -47,10 +47,11 @@ export function useTotpModel() {
   const [revealCfg, setRevealCfg] = useState({ grace: 5, clip: 20 });
   const [editor, setEditor] = useState<null | Partial<TotpEntry> & { secret?: string }>(null);
   const [secretDlg, setSecretDlg] = useState<null | { id: string; secret?: string; uri?: string; qr?: string }>(null);
-  const [scanHits, setScanHits] = useState<ScreenHit[] | null>(null);
+  const [batchImport, setBatchImport] = useState<TotpImportResult | null>(null);
   const [groupDlg, setGroupDlg] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<TotpEntry | null>(null);
   const [busy, setBusy] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
 
   const load = useCallback(async () => {
     const [list, icons] = await Promise.all([api.totpList(), api.iconListBuiltin()]);
@@ -255,9 +256,74 @@ export function useTotpModel() {
     });
   }
 
-  async function importFromOtpauth(uri: string) {
-    const p = await api.totpParseUri(uri);
-    applyPreview(p, detectTotpInput(uri).secret);
+  function openImportResult(r: TotpImportResult) {
+    if (r.entries.length === 0) {
+      setErr(i18n.t("totp.scanNone"));
+      return;
+    }
+    if (r.entries.length === 1) {
+      applyPreview(r.entries[0], r.entries[0].secret);
+      return;
+    }
+    setBatchImport(r);
+  }
+
+  async function ingestImportTexts(texts: string[]) {
+    const uris = totpImportUris(texts);
+    if (!uris.length) {
+      setErr(i18n.t("totp.scanNone"));
+      return;
+    }
+    const merged: ParsedTotpPreview[] = [];
+    let skippedHotp = 0;
+    let source = "otpauth";
+    let batchIndex = 0;
+    let batchSize = 1;
+    for (const uri of uris) {
+      const r = await api.totpParseImport(uri);
+      merged.push(...r.entries);
+      skippedHotp += r.skippedHotp || 0;
+      if (r.source === "google-migration") {
+        source = r.source;
+        batchIndex = r.batchIndex;
+        batchSize = r.batchSize;
+      }
+    }
+    openImportResult({ source, entries: merged, skippedHotp, batchIndex, batchSize });
+  }
+
+  async function confirmBatchImport(selected: ParsedTotpPreview[], group?: string) {
+    if (!selected.length) {
+      setErr(i18n.t("totp.batchNoneSelected"));
+      return;
+    }
+    setBusy(true);
+    try {
+      const nextGroup = resolveGroupName(groups, group);
+      const created = appendGroupIfNew(groups, nextGroup);
+      if (created) {
+        await api.totpSaveGroups(created);
+        setGroups(created);
+      }
+      for (const e of selected) {
+        await api.totpAdd({
+          issuer: e.issuer,
+          account: e.account,
+          secret: e.secret,
+          algorithm: e.algorithm || "SHA1",
+          digits: e.digits || 6,
+          period: e.period || 30,
+          icon: e.suggestedIcon || undefined,
+          group: nextGroup,
+        });
+      }
+      setBatchImport(null);
+      await load();
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function scanCamera() {
@@ -269,12 +335,11 @@ export function useTotpModel() {
         hint: i18n.t("totp.scanHint"),
       });
       if (!texts) return;
-      const uri = firstOtpauth(texts);
-      if (!uri) {
+      if (!firstOtpauth(texts)) {
         setErr(i18n.t("totp.scanNone"));
         return;
       }
-      await importFromOtpauth(uri);
+      await ingestImportTexts(texts);
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -289,18 +354,17 @@ export function useTotpModel() {
       if (isMobilePlatform()) {
         const texts = await pickQrFromGallery();
         if (!texts) return;
-        const uri = firstOtpauth(texts);
-        if (!uri) {
+        if (!firstOtpauth(texts)) {
           setErr(i18n.t("totp.scanPhotoNone"));
           return;
         }
-        await importFromOtpauth(uri);
+        await ingestImportTexts(texts);
         return;
       }
       const path = await open({ filters: [{ name: i18n.t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }] });
       if (typeof path !== "string") return;
-      const p = await api.totpImportFromImage(path);
-      applyPreview(p);
+      const r = await api.totpImportFromImage(path);
+      openImportResult(r);
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -313,9 +377,20 @@ export function useTotpModel() {
     try {
       const hits = await api.totpScanScreen();
       if (hits.length === 0) setErr(i18n.t("totp.scanScreenNone"));
-      else if (hits.length === 1)
-        applyPreview({ ...hits[0].parsed, suggestedIcon: null, secret: detectTotpInput(hits[0].uri).secret });
-      else setScanHits(hits);
+      else
+        openImportResult({
+          source: hits.some((h) => h.uri.toLowerCase().startsWith("otpauth-migration://"))
+            ? "google-migration"
+            : "otpauth",
+          entries: hits.map((h) => ({
+            ...h.parsed,
+            suggestedIcon: null,
+            secret: h.parsed.secret || detectTotpInput(h.uri).secret,
+          })),
+          skippedHotp: 0,
+          batchIndex: 0,
+          batchSize: 1,
+        });
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -346,6 +421,85 @@ export function useTotpModel() {
       setErr(errMessage(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function batchUpdateGroup(
+    ids: string[],
+    groupRaw?: string,
+  ): Promise<{ ok: number; failedIds: string[] } | undefined> {
+    if (writesLocked) {
+      setErr(i18n.t("totp.batchGroupLocked"));
+      return;
+    }
+    const unique = [...new Set(ids)];
+    const targets = unique
+      .map((id) => entries.find((e) => e.id === id))
+      .filter((e): e is TotpEntry => !!e);
+    if (!targets.length) {
+      setErr(i18n.t("totp.batchGroupNeedPick"));
+      return;
+    }
+    setBusy(true);
+    setBatchProgress({ done: 0, total: targets.length });
+    setErr("");
+    try {
+      const nextGroup = resolveGroupName(groups, groupRaw);
+      const created = appendGroupIfNew(groups, nextGroup);
+      if (created) {
+        await api.totpSaveGroups(created);
+        setGroups(created);
+      }
+      const failedIds: string[] = [];
+      const failedLines: string[] = [];
+      let done = 0;
+      for (const e of targets) {
+        if (e.hasSeed === false) {
+          failedIds.push(e.id);
+          failedLines.push(`${e.issuer} / ${e.account}：${i18n.t("totp.seedLostShort")}`);
+        } else {
+          try {
+            await api.totpUpdate({
+              id: e.id,
+              issuer: e.issuer,
+              account: e.account,
+              note: e.note || undefined,
+              url: e.url || undefined,
+              group: nextGroup,
+              algorithm: e.algorithm,
+              digits: e.digits,
+              period: e.period,
+              icon: e.icon || undefined,
+              sortOrder: e.sortOrder,
+            });
+          } catch (err) {
+            failedIds.push(e.id);
+            failedLines.push(`${e.issuer} / ${e.account}：${errMessage(err)}`);
+          }
+        }
+        done += 1;
+        setBatchProgress({ done, total: targets.length });
+      }
+      await load();
+      if (failedIds.length) {
+        const detail = failedLines.join("\n");
+        setErr(
+          failedIds.length === targets.length
+            ? i18n.t("totp.batchGroupAllFailed", { n: failedIds.length, detail })
+            : i18n.t("totp.batchGroupPartial", {
+                ok: targets.length - failedIds.length,
+                fail: failedIds.length,
+                detail,
+              }),
+        );
+      }
+      return { ok: targets.length - failedIds.length, failedIds };
+    } catch (e) {
+      setErr(errMessage(e));
+      return;
+    } finally {
+      setBusy(false);
+      setBatchProgress(null);
     }
   }
 
@@ -380,13 +534,17 @@ export function useTotpModel() {
     setEditor,
     secretDlg,
     setSecretDlg,
-    scanHits,
-    setScanHits,
+    batchImport,
+    setBatchImport,
+    confirmBatchImport,
+    ingestImportTexts,
     groupDlg,
     setGroupDlg,
     pendingDelete,
     setPendingDelete,
     busy,
+    batchProgress,
+    batchUpdateGroup,
     filtered,
     groupTabs,
     reveal,

@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type FC } from "react";
 import { createRoot } from "react-dom/client";
-import { X, Zap, ZapOff, Image as ImageIcon, CameraOff, RefreshCw } from "lucide-react";
+import { X, Zap, ZapOff, Image as ImageIcon, CameraOff, RefreshCw, SwitchCamera } from "lucide-react";
 import jsQR from "jsqr";
 import { pickQrFromGallery } from "../lib/qrCapture";
 import { api } from "../lib/ipc";
 import { i18n, displayNameForLocale } from "../lib/i18n";
+import { isMobilePlatform } from "../lib/platform";
 
 export interface QrScannerDialogProps {
   open: boolean;
@@ -33,6 +34,9 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [loadingCamera, setLoadingCamera] = useState(true);
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+  const mobile = isMobilePlatform();
 
   // 停止所有摄像头轨道
   const stopStream = () => {
@@ -49,10 +53,12 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
   };
 
   // 启动摄像头：先向系统申请 CAMERA 运行时权限，再打开镜头
-  const startCamera = async () => {
+  const startCamera = async (preferredId?: string | null) => {
     stopStream();
     setCameraError(null);
     setPermissionDenied(false);
+    setTorchAvailable(false);
+    setTorchOn(false);
     setLoadingCamera(true);
 
     try {
@@ -62,20 +68,25 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         setLoadingCamera(false);
         setCameraError(
           perm.permanentlyDenied
-            ? i18n.t("qrscan.permDeniedSettings", { name: brand })
+            ? i18n.t(mobile ? "qrscan.permDeniedSettings" : "qrscan.permDeniedDesktop", { name: brand })
             : i18n.t("qrscan.permNeeded"),
         );
         return;
       }
 
-      const constraints: MediaStreamConstraints = {
-        video: {
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
+      const chosenId = preferredId ?? deviceId;
+      const video: MediaTrackConstraints = {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
       };
+      if (chosenId) {
+        video.deviceId = { exact: chosenId };
+      } else if (mobile) {
+        video.facingMode = { ideal: "environment" };
+      } else {
+        video.facingMode = { ideal: "user" };
+      }
+      const constraints: MediaStreamConstraints = { video, audio: false };
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
@@ -92,6 +103,14 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         if (capabilities && "torch" in capabilities) {
           setTorchAvailable(true);
         }
+        const currentId = videoTrack.getSettings().deviceId;
+        if (currentId) setDeviceId(currentId);
+      }
+      try {
+        const all = await navigator.mediaDevices.enumerateDevices();
+        setCameras(all.filter((d) => d.kind === "videoinput" && d.deviceId));
+      } catch {
+        setCameras([]);
       }
 
       setLoadingCamera(false);
@@ -100,7 +119,9 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       const name = err?.name || "";
       if (name === "NotAllowedError" || name === "PermissionDeniedError") {
         setPermissionDenied(true);
-        setCameraError(i18n.t("qrscan.permDeniedPhone", { name: brand }));
+        setCameraError(
+          i18n.t(mobile ? "qrscan.permDeniedPhone" : "qrscan.permDeniedDesktop", { name: brand }),
+        );
       } else if (name === "NotFoundError" || name === "DevicesNotFoundError") {
         setCameraError(i18n.t("qrscan.noCamera"));
       } else {
@@ -293,7 +314,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
             >
               <RefreshCw size={14} /> {i18n.t("qrscan.retry")}
             </button>
-            {permissionDenied && (
+            {permissionDenied && mobile && (
               <button
                 type="button"
                 className="btn ghost sm"
@@ -320,6 +341,20 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         </div>
 
         <div className="qr-scanner-actions">
+          {cameras.length > 1 && (
+            <button
+              type="button"
+              className="qr-scanner-action-btn"
+              onClick={() => {
+                const idx = cameras.findIndex((c) => c.deviceId === deviceId);
+                const next = cameras[(idx + 1 + cameras.length) % cameras.length];
+                if (next) void startCamera(next.deviceId);
+              }}
+            >
+              <SwitchCamera size={22} />
+              <span>{i18n.t("qrscan.switchCamera")}</span>
+            </button>
+          )}
           {torchAvailable && (
             <button
               type="button"

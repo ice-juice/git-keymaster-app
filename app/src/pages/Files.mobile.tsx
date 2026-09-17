@@ -7,6 +7,7 @@ import { MobileListToolbar } from "../ui/MobileListToolbar";
 import { editFromEntry, FilesDialogs, FilesFilters } from "./Files.shared";
 import { formatBytes, formatUpdatedAt, useFilesModel, type FilesModel } from "../shared/hooks/useFilesModel";
 import { entryAttachments, type FileEntry } from "../lib/ipc";
+import { FileMobileEditor } from "./FileMobileEditor";
 
 function FileMobileCard({ e, m }: { e: FileEntry; m: FilesModel }) {
   const { t } = useTranslation();
@@ -170,7 +171,14 @@ export function FilesMobile() {
         </div>
       )}
 
-      <FilesDialogs m={m} />
+      <FilesDialogs m={m} skipEditor />
+
+      {m.editor && (
+        <FileMobileEditor
+          m={m}
+          onClose={() => m.setEditor(null)}
+        />
+      )}
     </div>
   );
 }

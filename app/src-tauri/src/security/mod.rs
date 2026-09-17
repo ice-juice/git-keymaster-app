@@ -21,6 +21,12 @@ const LIMITATION_SCREEN_LOCK: &str =
 const LIMITATION_CLIPBOARD: &str =
     "无法枚举剪贴板监听者或截屏调用方。剪贴板排除是给系统历史、云剪贴板和守规矩的管理器看的协作式约定，恶意程序可无视；不能防木马，也不会让截图变黑。";
 
+const LIMITATION_SCREENSHOT_IOS: &str =
+    "iOS 不允许应用彻底禁止截屏。关闭「允许截屏」时只会在切到后台时隐藏画面，避免任务切换器预览泄露；系统截屏仍可能拍到界面。";
+
+const LIMITATION_SCREENSHOT_LINUX: &str =
+    "当前 Linux 桌面（Wayland / X11）没有可靠的应用级拦截接口，无法把窗口从截图里涂黑。";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SecuritySeverity {
@@ -95,6 +101,7 @@ pub fn build_checklist(cfg: &AppConfig) -> SecurityChecklist {
         item_lock_on_sleep(cfg.lock_on_sleep),
         item_auto_lock(cfg.auto_lock_minutes),
         item_clipboard_exclude(),
+        item_screenshot(cfg),
         item_config_secrets(cfg),
     ];
     SecurityChecklist {
@@ -270,6 +277,63 @@ fn item_auto_lock(minutes: u32) -> SecurityFinding {
             settings_anchor: Some("auto-lock".into()),
             limitation: None,
         }
+    }
+}
+
+fn item_screenshot(cfg: &AppConfig) -> SecurityFinding {
+    use crate::screen_protect::{capability, ScreenCaptureCapability};
+
+    let cap = capability();
+    let limitation = match cap {
+        ScreenCaptureCapability::Exclude => None,
+        ScreenCaptureCapability::Overlay => Some(LIMITATION_SCREENSHOT_IOS.into()),
+        ScreenCaptureCapability::Unsupported => Some(LIMITATION_SCREENSHOT_LINUX.into()),
+    };
+
+    if cfg.allow_screenshots {
+        return SecurityFinding {
+            id: "app.screenshot".into(),
+            category: SecurityCategory::App,
+            severity: SecuritySeverity::Info,
+            title: "已允许截取本应用画面".into(),
+            detail: "设置里打开了「允许截屏」，系统截图、录屏或部分投屏可以拍到验证码和密钥。".into(),
+            advice: "不需要备份界面时请关掉，降低旁边的人或软件把机密截走的机会。".into(),
+            settings_anchor: Some("allow-screenshots".into()),
+            limitation,
+        };
+    }
+
+    match cap {
+        ScreenCaptureCapability::Exclude => SecurityFinding {
+            id: "app.screenshot".into(),
+            category: SecurityCategory::App,
+            severity: SecuritySeverity::Ok,
+            title: "默认禁止截取本应用画面".into(),
+            detail: "系统截图、录屏和部分投屏应看不到本窗口，或只能看到黑屏。".into(),
+            advice: "备份二维码或给客服看界面时，可在设置里临时打开「允许截屏」。".into(),
+            settings_anchor: Some("allow-screenshots".into()),
+            limitation,
+        },
+        ScreenCaptureCapability::Overlay => SecurityFinding {
+            id: "app.screenshot".into(),
+            category: SecurityCategory::App,
+            severity: SecuritySeverity::Ok,
+            title: "后台预览已隐藏".into(),
+            detail: "切到后台时会盖住画面，降低任务切换器预览泄露。iOS 仍可能允许系统截屏。".into(),
+            advice: "需要自己截图时再打开「允许截屏」。系统截屏无法被本应用彻底关掉。".into(),
+            settings_anchor: Some("allow-screenshots".into()),
+            limitation,
+        },
+        ScreenCaptureCapability::Unsupported => SecurityFinding {
+            id: "app.screenshot".into(),
+            category: SecurityCategory::App,
+            severity: SecuritySeverity::Info,
+            title: "当前系统无法拦截截屏".into(),
+            detail: LIMITATION_SCREENSHOT_LINUX.into(),
+            advice: "请避免在有人围观或投屏时打开验证码页。此开关会记住偏好，但不能在本机涂黑窗口。".into(),
+            settings_anchor: Some("allow-screenshots".into()),
+            limitation,
+        },
     }
 }
 
@@ -527,5 +591,30 @@ mod tests {
             assert_eq!(exclude.severity, SecuritySeverity::Info);
             assert_eq!(list.level, SecurityLevel::Caution);
         }
+        let shot = list
+            .items
+            .iter()
+            .find(|i| i.id == "app.screenshot")
+            .unwrap();
+        assert_eq!(shot.settings_anchor.as_deref(), Some("allow-screenshots"));
+        match crate::screen_protect::capability() {
+            crate::screen_protect::ScreenCaptureCapability::Unsupported => {
+                assert_eq!(shot.severity, SecuritySeverity::Info);
+            }
+            _ => assert_eq!(shot.severity, SecuritySeverity::Ok),
+        }
+    }
+
+    #[test]
+    fn allowing_screenshots_is_info() {
+        let mut cfg = AppConfig::default();
+        cfg.allow_screenshots = true;
+        let item = build_checklist(&cfg)
+            .items
+            .into_iter()
+            .find(|i| i.id == "app.screenshot")
+            .unwrap();
+        assert_eq!(item.severity, SecuritySeverity::Info);
+        assert_eq!(item.settings_anchor.as_deref(), Some("allow-screenshots"));
     }
 }

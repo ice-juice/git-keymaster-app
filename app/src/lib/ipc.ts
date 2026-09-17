@@ -1,5 +1,6 @@
 // 类型化 IPC 封装：对 Rust 命令的薄包装 + 类型定义。
 import { invoke } from "@tauri-apps/api/core";
+import { i18n } from "./i18n";
 
 export interface AppErrorShape {
   code: string;
@@ -629,7 +630,8 @@ export const api = {
   totpGenerateCode: (id: string, password?: string) =>
     invoke<TotpCode>("totp_generate_code", { id, password: password ?? null }),
   totpParseUri: (uri: string) => invoke<ParsedTotpPreview>("totp_parse_uri", { uri }),
-  totpImportFromImage: (path: string) => invoke<ParsedTotpPreview>("totp_import_from_image", { path }),
+  totpParseImport: (text: string) => invoke<TotpImportResult>("totp_parse_import", { text }),
+  totpImportFromImage: (path: string) => invoke<TotpImportResult>("totp_import_from_image", { path }),
   totpScanScreen: () => invoke<ScreenHit[]>("totp_scan_screen"),
   renderQrPng: (text: string) => invoke<string>("render_qr_png", { text }),
   decodeQrFromImage: (bytes: number[]) => invoke<string[]>("decode_qr_from_image", { bytes }),
@@ -692,12 +694,16 @@ export const api = {
 
   clipboardWrite: (text: string, secret = false) =>
     invoke<ClipboardWriteResult>("clipboard_write", { text, secret }),
+  clipboardRead: () => invoke<string>("clipboard_read"),
   clipboardClear: () => invoke<void>("clipboard_clear"),
   getRevealSettings: () => invoke<RevealSettings>("get_reveal_settings"),
   setRevealGraceMinutes: (minutes: number) => invoke<number>("set_reveal_grace_minutes", { minutes }),
   setClipboardClearSeconds: (seconds: number) =>
     invoke<number>("set_clipboard_clear_seconds", { seconds }),
   setAccountHistoryLimit: (limit: number) => invoke<number>("set_account_history_limit", { limit }),
+  getScreenCaptureSettings: () => invoke<ScreenCaptureSettings>("get_screen_capture_settings"),
+  setAllowScreenshots: (allow: boolean) =>
+    invoke<ScreenCaptureSettings>("set_allow_screenshots", { allow }),
   iconListBuiltin: () => invoke<BuiltinIconInfo[]>("icon_list_builtin"),
   iconUploadCustom: (filePath: string) => invoke<CustomIconInfo>("icon_upload_custom", { filePath }),
   iconGetCustom: (iconRef: string) => invoke<string>("icon_get_custom", { iconRef }),
@@ -705,9 +711,31 @@ export const api = {
   securityChecklist: () => invoke<SecurityChecklist>("security_checklist"),
 };
 
-export function errMessage(e: unknown): string {
-  if (e && typeof e === "object" && "message" in e) return String((e as AppErrorShape).message);
+function rawErrorText(e: unknown): string {
+  if (e == null) return "";
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message || e.name || String(e);
+  if (typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    if (typeof o.message === "string" && o.message.trim()) return o.message;
+    if (typeof o.error === "string" && o.error.trim()) return o.error;
+  }
   return String(e);
+}
+
+const CMD_MISSING = /command\s*([a-z][a-z0-9_]*)\s*not\s*found/i;
+const CMD_MISSING_COMPACT = /^command([a-z][a-z0-9_]*)notfound$/i;
+const CMD_DENIED = /command\s*([a-z][a-z0-9_]*)\s*not\s*allowed/i;
+
+/** 把 IPC / 异常收成可读句子。Android WebView 有时会把空格挤掉。 */
+export function errMessage(e: unknown): string {
+  const raw = rawErrorText(e).replace(/[\u00a0\s]+/g, " ").trim();
+  const compact = raw.replace(/\s+/g, "");
+  const missing = raw.match(CMD_MISSING) || compact.match(CMD_MISSING_COMPACT);
+  if (missing?.[1]) return i18n.t("common.commandMissing", { cmd: missing[1] });
+  const denied = raw.match(CMD_DENIED);
+  if (denied?.[1]) return i18n.t("common.commandDenied", { cmd: denied[1] });
+  return raw || String(e);
 }
 
 export function errCode(e: unknown): string {
@@ -888,10 +916,18 @@ export interface ParsedTotpPreview {
   secret?: string;
 }
 
+export interface TotpImportResult {
+  source: "otpauth" | "google-migration" | string;
+  entries: ParsedTotpPreview[];
+  skippedHotp: number;
+  batchIndex: number;
+  batchSize: number;
+}
+
 export interface ScreenHit {
   display: string;
   uri: string;
-  parsed: { issuer: string; account: string; algorithm: string; digits: number; period: number };
+  parsed: { issuer: string; account: string; algorithm: string; digits: number; period: number; secret?: string };
 }
 
 export interface HistoryMeta {
@@ -916,6 +952,13 @@ export interface RevealSettings {
   revealGraceMinutes: number;
   clipboardClearSeconds: number;
   accountHistoryLimit: number;
+}
+
+export type ScreenCaptureCapability = "exclude" | "overlay" | "unsupported";
+
+export interface ScreenCaptureSettings {
+  allowScreenshots: boolean;
+  capability: ScreenCaptureCapability;
 }
 
 export type SecuritySeverity = "ok" | "info" | "warn";

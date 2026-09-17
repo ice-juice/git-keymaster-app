@@ -9,8 +9,11 @@ class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
+    // 读配置之前先按默认禁止截屏，避免启动瞬间被系统截到。
+    ScreenProtectGate.applyDefault(this)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    ScreenProtectGate.ensureDefaultUntilConfigured(this)
     onBackPressedDispatcher.addCallback(
       this,
       object : OnBackPressedCallback(true) {
@@ -40,7 +43,16 @@ class MainActivity : TauriActivity() {
   override fun onWebViewCreate(webView: WebView) {
     super.onWebViewCreate(webView)
     appWebView = webView
+    ScreenProtectGate.ensureDefaultUntilConfigured(this)
     CameraChromeClient.wrap(this, webView)
+    ImeInsetBridge.attach(this, webView)
+  }
+
+  override fun onResume() {
+    super.onResume()
+    ScreenProtectGate.ensureDefaultUntilConfigured(this)
+    appWebView?.let { ImeInsetBridge.attach(this, it) }
+    ImeInsetBridge.republish()
   }
 
   override fun onRequestPermissionsResult(

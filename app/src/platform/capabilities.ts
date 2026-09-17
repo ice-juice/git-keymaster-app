@@ -16,7 +16,7 @@ export interface Capabilities {
   windowControls: boolean;
   /** 屏幕截图取二维码（桌面才有意义，手机用相机）。 */
   screenQrScan: boolean;
-  /** 相机扫码（移动端专属）。 */
+  /** 相机 / 电脑摄像头扫码。 */
   cameraQrScan: boolean;
 }
 
@@ -25,7 +25,7 @@ const MATRIX: Record<Platform, Capabilities> = {
     localGitTools: true,
     windowControls: true,
     screenQrScan: true,
-    cameraQrScan: false,
+    cameraQrScan: true,
   },
   mobile: {
     localGitTools: false,

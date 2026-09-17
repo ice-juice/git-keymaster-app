@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Eye, EyeOff, LayoutGrid, List, Copy, KeyRound, Trash2, Link2, Check } from "lucide-react";
-import { api, errMessage, type BuiltinIconInfo, type GroupMeta, type ScreenHit, type TotpEntry } from "../lib/ipc";
+import { api, errMessage, type BuiltinIconInfo, type GroupMeta, type ParsedTotpPreview, type TotpEntry, type TotpImportResult } from "../lib/ipc";
 import { copyWithClear } from "../lib/secretsUi";
 import { Badge, ConfirmDangerDialog, FieldLabel, ErrorDialog } from "../ui/common";
 import { detectTotpInput } from "../lib/totpInput";
@@ -212,13 +212,14 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
   );
 }
 
-export function TotpDialogs({ m, includeScanHits }: { m: TotpModel; includeScanHits?: boolean }) {
+export function TotpDialogs({ m, skipEditor }: { m: TotpModel; skipEditor?: boolean; includeScanHits?: boolean }) {
   const { t } = useTranslation();
-  useOverlayBack(!!m.editor, () => m.setEditor(null));
+  useOverlayBack(!skipEditor && !!m.editor, () => m.setEditor(null));
   useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(false));
   useOverlayBack(!!m.reauth, () => m.reauthCancel.current?.());
   useOverlayBack(!!m.secretDlg, () => m.setSecretDlg(null));
   useOverlayBack(!!m.pendingDelete, () => m.setPendingDelete(null));
+  useOverlayBack(!!m.batchImport, () => m.setBatchImport(null));
   return (
     <>
       <ErrorDialog message={m.err} onClose={() => m.setErr("")} />
@@ -240,7 +241,7 @@ export function TotpDialogs({ m, includeScanHits }: { m: TotpModel; includeScanH
         />
       )}
 
-      {m.editor && (
+      {!skipEditor && m.editor && (
         <Editor
           key={m.editor.id || m.editor.secret || "new"}
           value={m.editor}
@@ -250,6 +251,7 @@ export function TotpDialogs({ m, includeScanHits }: { m: TotpModel; includeScanH
           onChange={m.setEditor}
           onClose={() => m.setEditor(null)}
           onSave={m.saveEditor}
+          onMigration={!m.editor.id ? (uri) => { m.setEditor(null); void m.ingestImportTexts([uri]); } : undefined}
         />
       )}
 
@@ -257,8 +259,16 @@ export function TotpDialogs({ m, includeScanHits }: { m: TotpModel; includeScanH
         <SecretDialog dlg={m.secretDlg} onConfirm={m.confirmSecret} onClose={() => m.setSecretDlg(null)} />
       )}
 
-      {includeScanHits && m.scanHits && (
-        <ScanHitsDialog hits={m.scanHits} onPick={(h) => { m.applyPreview({ ...h.parsed, suggestedIcon: null, secret: detectTotpInput(h.uri).secret }); m.setScanHits(null); }} onCancel={() => m.setScanHits(null)} />
+      {m.batchImport && (
+        <BatchImportDialog
+          result={m.batchImport}
+          entries={m.entries}
+          groups={m.groups}
+          busy={m.busy}
+          locked={m.writesLocked}
+          onCancel={() => m.setBatchImport(null)}
+          onImport={(selected, group) => void m.confirmBatchImport(selected, group)}
+        />
       )}
 
       {m.pendingDelete && (
@@ -318,30 +328,109 @@ function SecretDialog({
   );
 }
 
-function ScanHitsDialog({
-  hits,
-  onPick,
+function itemKey(e: ParsedTotpPreview) {
+  return `${e.issuer}\0${e.account}\0${e.secret || ""}`;
+}
+
+function BatchImportDialog({
+  result,
+  entries,
+  groups,
+  busy,
+  locked,
   onCancel,
+  onImport,
 }: {
-  hits: ScreenHit[];
-  onPick: (h: ScreenHit) => void;
+  result: TotpImportResult;
+  entries: TotpEntry[];
+  groups: GroupMeta[];
+  busy: boolean;
+  locked: boolean;
   onCancel: () => void;
+  onImport: (selected: ParsedTotpPreview[], group?: string) => void;
 }) {
   const { t } = useTranslation();
+  const existing = new Set(entries.map((e) => `${e.issuer.toLowerCase()}\0${e.account.toLowerCase()}`));
+  const [picked, setPicked] = useState<Set<string>>(() => {
+    const next = new Set<string>();
+    for (const e of result.entries) {
+      const dup = existing.has(`${e.issuer.toLowerCase()}\0${e.account.toLowerCase()}`);
+      if (!dup) next.add(itemKey(e));
+    }
+    return next;
+  });
+  const [group, setGroup] = useState("");
+
+  const selectedCount = picked.size;
+  const allKeys = result.entries.map(itemKey);
+  const allOn = allKeys.length > 0 && allKeys.every((k) => picked.has(k));
+
+  function toggle(key: string) {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setPicked(allOn ? new Set() : new Set(allKeys));
+  }
+
+  const isGoogle = result.source === "google-migration";
   return (
     <div className="wizard-overlay">
-      <div className="card" style={{ width: 480 }}>
-        <div className="card-head"><div className="card-title">{t("totp.scanHits")}</div></div>
+      <div className="card dialog-card totp-batch-dialog">
+        <div className="card-head">
+          <div className="card-title">{isGoogle ? t("totp.batchGoogle") : t("totp.batchTitle")}</div>
+        </div>
         <div className="card-body stack">
-          {hits.map((h, i) => (
-            <button key={i} type="button" className="choice" onClick={() => onPick(h)}>
-              <b>{h.parsed.issuer}</b> · {h.parsed.account}
-              <div className="muted">{h.display} · {h.parsed.algorithm} {t("totp.digits", { n: h.parsed.digits })}</div>
-            </button>
-          ))}
-          <div className="row" style={{ justifyContent: "flex-end" }}>
-            <button type="button" className="btn ghost sm" onClick={onCancel}>{t("common.cancel")}</button>
+          <div className="hint">
+            {isGoogle && result.batchSize > 1
+              ? t("totp.batchPage", { index: result.batchIndex + 1, size: result.batchSize, n: result.entries.length })
+              : t("totp.batchCount", { n: result.entries.length })}
+            {result.skippedHotp > 0 ? ` ${t("totp.batchHotpSkipped", { n: result.skippedHotp })}` : ""}
           </div>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <button type="button" className="btn ghost sm" onClick={toggleAll}>
+              {allOn ? t("totp.batchSelectNone") : t("totp.batchSelectAll")}
+            </button>
+            <span className="muted">{t("totp.batchPicked", { n: selectedCount })}</span>
+          </div>
+          <div className="totp-batch-list">
+            {result.entries.map((e) => {
+              const key = itemKey(e);
+              const dup = existing.has(`${e.issuer.toLowerCase()}\0${e.account.toLowerCase()}`);
+              const on = picked.has(key);
+              return (
+                <label key={key} className={"totp-batch-item" + (on ? " on" : "") + (dup ? " dup" : "")}>
+                  <input type="checkbox" checked={on} onChange={() => toggle(key)} />
+                  <span>
+                    <b>{e.issuer}</b>
+                    <span className="muted"> · {e.account}</span>
+                    {dup && <span className="totp-batch-dup">{t("totp.batchAlready")}</span>}
+                    <div className="muted">{e.algorithm} · {t("totp.digits", { n: e.digits })}</div>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+          <div className="field">
+            <FieldLabel name={t("totp.group")} tip={t("totp.batchGroupTip")} />
+            <GroupPicker groups={groups} value={group} onChange={setGroup} />
+          </div>
+        </div>
+        <div className="card-foot">
+          <button type="button" className="btn ghost sm" onClick={onCancel}>{t("common.cancel")}</button>
+          <button
+            type="button"
+            className="btn primary sm"
+            disabled={busy || locked || selectedCount === 0}
+            onClick={() => onImport(result.entries.filter((e) => picked.has(itemKey(e))), group || undefined)}
+          >
+            {t("totp.batchImport", { n: selectedCount })}
+          </button>
         </div>
       </div>
     </div>
@@ -550,7 +639,7 @@ function ReauthInner({ hint, onConfirm, onCancel }: { hint: string; onConfirm: (
 }
 
 function Editor({
-  value, builtins, groups, busy, onChange, onClose, onSave,
+  value, builtins, groups, busy, onChange, onClose, onSave, onMigration,
 }: {
   value: Partial<TotpEntry> & { secret?: string };
   builtins: BuiltinIconInfo[];
@@ -559,6 +648,7 @@ function Editor({
   onChange: (v: Partial<TotpEntry> & { secret?: string }) => void;
   onClose: () => void;
   onSave: () => void;
+  onMigration?: (uri: string) => void;
 }) {
   const { t } = useTranslation();
   const [secretDraft, setSecretDraft] = useState(value.secret || "");
@@ -572,6 +662,14 @@ function Editor({
   function applySecretDraft(next: string) {
     setSecretDraft(next);
     const d = detectTotpInput(next);
+    if (d.kind === "migration") {
+      if (onMigration && /data=/i.test(next)) {
+        onMigration(next.trim());
+      } else {
+        onChange({ ...value, secret: undefined });
+      }
+      return;
+    }
     if (d.kind === "otpauth") {
       onChange({
         ...value,
@@ -600,7 +698,7 @@ function Editor({
     onChange({ ...value, icon: info.iconRef });
   }
 
-  const detectKind = detected.kind === "otpauth" ? "good" : detected.kind === "base32" ? "info" : detected.kind === "unknown" ? "warn" : "";
+  const detectKind = detected.kind === "otpauth" || detected.kind === "migration" ? "good" : detected.kind === "base32" ? "info" : detected.kind === "unknown" ? "warn" : "";
 
   return (
     <div className="wizard-overlay">
@@ -624,6 +722,7 @@ function Editor({
             {detectKind && (
               <div className={"callout sm " + detectKind} style={{ marginTop: 6 }}>
                 {detected.kind === "otpauth" && t("totp.detectedOtpauth")}
+                {detected.kind === "migration" && t("totp.detectedMigration")}
                 {detected.kind === "base32" && t("totp.detectedBase32")}
                 {detected.kind === "unknown" && t("totp.detectedUnknown")}
               </div>

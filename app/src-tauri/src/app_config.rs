@@ -192,6 +192,10 @@ pub struct AppConfig {
     /// 移动端主界面再按返回：true 回到系统桌面且不杀进程；false 退出应用。
     #[serde(default)]
     pub mobile_background_run: bool,
+    /// 是否允许系统截屏 / 录屏捕获本应用画面。默认关（防护开）。
+    /// 旧配置缺字段时 serde 走 `bool` 默认值 false，与出厂行为一致。
+    #[serde(default)]
+    pub allow_screenshots: bool,
     /// 从旧版 config.json 读出的明文密钥，等首次解锁写进保险库后再丢掉。
     /// 不进序列化：未迁走之前 `save()` 会把它临时补回磁盘，避免改主题冲掉钥匙。
     #[serde(skip)]
@@ -340,6 +344,7 @@ impl Default for AppConfig {
             sync_attachments_wifi_only: true,
             sync_attachments_manual_only: false,
             mobile_background_run: false,
+            allow_screenshots: false,
             pending_legacy_secrets: None,
         }
     }
@@ -522,6 +527,10 @@ mod tests {
         );
         assert!(cfg.sync_attachments_wifi_only);
         assert!(!cfg.sync_attachments_manual_only);
+        assert!(
+            !cfg.allow_screenshots,
+            "旧配置缺字段时应默认禁止截屏"
+        );
         assert_eq!(clamp_ui_locale("ZH"), "zh");
         assert_eq!(clamp_ui_locale("en"), "en");
         assert_eq!(clamp_ui_locale("nope"), "system");

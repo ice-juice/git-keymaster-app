@@ -1,7 +1,8 @@
 //! 二维码解码（图片/屏幕）与 otpauth 二维码生成。
 
 use crate::error::{AppError, Result};
-use crate::totp::{parse_otpauth, ParsedOtpauth};
+use crate::model::TotpEntry;
+use crate::totp::{parse_otpauth, parse_otpauth_migration, ParsedOtpauth};
 use image::{DynamicImage, ImageFormat};
 use serde::Serialize;
 
@@ -21,6 +22,7 @@ pub struct ScreenParsed {
     pub algorithm: String,
     pub digits: u8,
     pub period: u32,
+    pub secret: String,
 }
 
 impl From<&ParsedOtpauth> for ScreenParsed {
@@ -31,6 +33,7 @@ impl From<&ParsedOtpauth> for ScreenParsed {
             algorithm: p.algorithm.clone(),
             digits: p.digits,
             period: p.period,
+            secret: p.secret.clone(),
         }
     }
 }
@@ -61,15 +64,55 @@ fn decode_dynamic(img: &DynamicImage) -> Result<Vec<String>> {
 }
 
 pub fn import_from_image(bytes: &[u8]) -> Result<ParsedOtpauth> {
+    let entries = import_all_from_image(bytes)?;
+    Ok(entries.into_iter().next().unwrap())
+}
+
+pub fn import_all_from_image(bytes: &[u8]) -> Result<Vec<ParsedOtpauth>> {
     let texts = decode_image_bytes(bytes)?;
-    let uris: Vec<_> = texts
-        .into_iter()
-        .filter(|t| t.to_ascii_lowercase().starts_with("otpauth://"))
-        .collect();
-    if uris.is_empty() {
-        return Err(AppError::Invalid("图片中未识别到 otpauth 二维码".into()));
+    let entries = collect_totp_from_texts(&texts);
+    if entries.is_empty() {
+        return Err(AppError::Invalid(
+            "图片中未识别到 otpauth 或 Google 身份验证器导出二维码".into(),
+        ));
     }
-    parse_otpauth(&uris[0])
+    Ok(entries)
+}
+
+pub fn collect_totp_from_texts(texts: &[String]) -> Vec<ParsedOtpauth> {
+    let mut out = Vec::new();
+    for t in texts {
+        let lower = t.to_ascii_lowercase();
+        if lower.starts_with("otpauth-migration://") {
+            if let Ok(batch) = parse_otpauth_migration(t) {
+                out.extend(batch.entries);
+            }
+        } else if lower.starts_with("otpauth://") {
+            if let Ok(parsed) = parse_otpauth(t) {
+                out.push(parsed);
+            }
+        }
+    }
+    out
+}
+
+fn stub_entry(p: &ParsedOtpauth) -> TotpEntry {
+    TotpEntry {
+        id: String::new(),
+        issuer: p.issuer.clone(),
+        account: p.account.clone(),
+        note: None,
+        url: None,
+        group: None,
+        algorithm: p.algorithm.clone(),
+        digits: p.digits,
+        period: p.period,
+        icon: None,
+        sort_order: 0,
+        created_at: String::new(),
+        updated_at: String::new(),
+        has_seed: true,
+    }
 }
 
 #[cfg(mobile)]
@@ -103,7 +146,18 @@ pub fn scan_screen() -> Result<Vec<ScreenHit>> {
         let dyn_img = DynamicImage::ImageRgba8(captured);
         if let Ok(texts) = decode_dynamic(&dyn_img) {
             for t in texts {
-                if let Ok(parsed) = parse_otpauth(&t) {
+                let lower = t.to_ascii_lowercase();
+                if lower.starts_with("otpauth-migration://") {
+                    if let Ok(batch) = parse_otpauth_migration(&t) {
+                        for parsed in batch.entries {
+                            hits.push(ScreenHit {
+                                display: name.clone(),
+                                uri: crate::totp::build_otpauth(&stub_entry(&parsed), &parsed.secret),
+                                parsed: ScreenParsed::from(&parsed),
+                            });
+                        }
+                    }
+                } else if let Ok(parsed) = parse_otpauth(&t) {
                     hits.push(ScreenHit {
                         display: name.clone(),
                         uri: t,

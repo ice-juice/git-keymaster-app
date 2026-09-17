@@ -67,6 +67,33 @@ pub fn clear_android(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "android")]
+pub fn read_android(app: &AppHandle) -> Result<String, String> {
+    #[derive(serde::Deserialize)]
+    struct ReadResult {
+        text: String,
+    }
+    let handle = app.state::<ClipboardHandle<tauri::Wry>>();
+    handle
+        .0
+        .run_mobile_plugin::<ReadResult>("readText", ())
+        .map(|r| r.text)
+        .map_err(|e| format!("读取系统剪贴板失败：{e}"))
+}
+
+pub fn read() -> Result<String, String> {
+    #[cfg(desktop)]
+    {
+        arboard::Clipboard::new()
+            .and_then(|mut cb| cb.get_text())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(mobile)]
+    {
+        Err("当前平台请走原生剪贴板通道".into())
+    }
+}
+
 /// 请求剪贴板监听者不要处理本次内容。
 pub const FMT_EXCLUDE_MONITOR: &str = "ExcludeClipboardContentFromMonitorProcessing";
 /// `DWORD 0`：不进 Win+V 剪贴板历史。
