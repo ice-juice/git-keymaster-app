@@ -159,6 +159,28 @@ const chromeTheme = EditorView.theme({
   },
 });
 
+const mobileScrollTheme = EditorView.theme({
+  "&": {
+    height: "100%",
+    maxHeight: "100%",
+    backgroundColor: "transparent",
+  },
+  "&.cm-editor": {
+    height: "100%",
+    maxHeight: "100%",
+    overflow: "hidden",
+  },
+  ".cm-scroller": {
+    overflowX: "hidden",
+    overflowY: "auto",
+    maxHeight: "100%",
+    touchAction: "pan-y",
+  },
+  ".cm-content": {
+    touchAction: "pan-y",
+  },
+});
+
 function applyInsert(view: EditorView, text: string, cursorOffset?: number) {
   const { from, to } = view.state.selection.main;
   const offset = cursorOffset == null ? text.length : Math.max(0, Math.min(text.length, cursorOffset));
@@ -263,11 +285,12 @@ export const NoteMarkdownEditor = forwardRef<
       drawSelection(),
       syntaxHighlighting(mdHighlight),
       chromeTheme,
+      ...(mobile ? [mobileScrollTheme] : []),
       cmPlaceholder(placeholder || ""),
       ...(mobile
         ? [
             EditorView.scrollMargins.of(() => {
-              return { top: 12, bottom: 56 };
+              return { top: 12, bottom: 72 };
             }),
           ]
         : []),

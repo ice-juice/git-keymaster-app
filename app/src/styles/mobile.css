@@ -3268,44 +3268,80 @@ html[data-platform="mobile"] .m-note-content-area.is-split .m-note-preview-host 
 }
 
 html[data-platform="mobile"] .m-note-editor-host {
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
-  height: 100%;
+  height: auto;
   display: flex;
   flex-direction: column;
-  border: none !important;
+  overflow: hidden;
+  margin: 0 0 8px;
+  border-radius: 12px;
+  background: var(--bg-elev);
+  box-shadow: inset 0 0 0 1px var(--border);
   outline: none !important;
 }
+html[data-theme="dark"][data-platform="mobile"] .m-note-editor-host {
+  background: #222836;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-editor-host {
+  background: #162445;
+  box-shadow: inset 0 0 0 1px rgba(180, 210, 255, 0.12);
+}
 
-/* 切到预览时不卸载源码编辑器，避免丢掉光标、选区和撤销栈 */
+/* 切到预览时不卸载源码编辑器，避免丢掉光标、选区和撤销栈。
+   子元素里的 .cm-cursor 写了 visibility: visible !important，
+   会穿透父级 visibility:hidden，必须单独关掉。 */
 html[data-platform="mobile"] .m-note-editor-host.is-parked {
   position: absolute;
   inset: 0;
   visibility: hidden;
+  opacity: 0;
   pointer-events: none;
-  z-index: 0;
+  z-index: -1;
+  overflow: hidden;
+}
+html[data-platform="mobile"] .m-note-editor-host.is-parked .cm-cursor,
+html[data-platform="mobile"] .m-note-editor-host.is-parked .cm-dropCursor,
+html[data-platform="mobile"] .m-note-editor-host.is-parked .cm-cursorLayer {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  animation: none !important;
+}
+html[data-platform="mobile"] .m-note-editor-host.is-parked .cm-content,
+html[data-platform="mobile"] .m-note-editor-host.is-parked .cm-line {
+  caret-color: transparent !important;
 }
 
-html[data-platform="mobile"] .m-note-editor-host .note-cm {
-  flex: 1;
-  min-height: 0;
-  height: 100%;
-  border: none !important;
-  outline: none !important;
-}
+html[data-platform="mobile"] .m-note-editor-host .note-cm,
+html[data-platform="mobile"] .m-note-editor-host .cm-theme,
 html[data-platform="mobile"] .m-note-editor-host .cm-editor {
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: 100%;
+  overflow: hidden;
+  background: transparent !important;
   border: none !important;
   outline: none !important;
 }
 html[data-platform="mobile"] .m-note-editor-host .cm-scroller {
-  padding: 4px 0 40px;
+  flex: 1 1 auto;
+  min-height: 0 !important;
+  height: 100% !important;
+  max-height: 100%;
+  padding: 8px 8px 56px;
   border: none !important;
   outline: none !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   overflow-anchor: none;
   scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
+  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
 }
 html[data-platform="mobile"] .m-note-editor-host .cm-scroller::-webkit-scrollbar {
   width: 4px;
@@ -3315,13 +3351,14 @@ html[data-platform="mobile"] .m-note-editor-host .cm-scroller::-webkit-scrollbar
   border-radius: 999px;
 }
 html[data-platform="mobile"] .m-note-editor-host .cm-content {
-  padding: 4px 4px 48px;
+  padding: 8px 8px 72px;
   font-size: 16px;
   line-height: 1.75;
   border: none !important;
   outline: none !important;
   caret-color: #4f46e5 !important;
   caret-color: var(--accent, #4f46e5) !important;
+  touch-action: pan-y;
 }
 /* 软折行：续行悬挂缩进 + 左侧折行轨，避免看起来像已经回车 */
 html[data-platform="mobile"] .m-note-editor-host .cm-line {
@@ -3405,6 +3442,8 @@ html[data-platform="mobile"] .m-note-preview-host {
   border-radius: 12px;
   background: #f3ead8;
   color: #3f3428;
+  position: relative;
+  z-index: 1;
 }
 
 html[data-platform="mobile"] .m-note-preview-host .note-preview {
