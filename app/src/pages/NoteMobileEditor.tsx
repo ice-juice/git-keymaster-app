@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowUpToLine,
   Bold,
@@ -9,8 +9,7 @@ import {
   Download,
   Eye,
   FileCode2,
-  Folder,
-  FolderPlus,
+  Heading,
   Heading1,
   Heading2,
   Heading3,
@@ -25,17 +24,20 @@ import {
   Pin,
   Plus,
   Quote,
+  Rows2,
   Save,
   Strikethrough,
-  Tag,
+  Table2,
   Trash2,
-  X,
+  Type,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { ingestNoteImage, NoteDraftBanner, NotePreview, notePlainStats, TAG_PALETTE, tagTone } from "./Notes.shared";
+import { ingestNoteImage, NoteDraftBanner, NotePreview, notePlainStats, NoteTagEditor } from "./Notes.shared";
+import { GroupReorderButtons } from "../ui/GroupReorderButtons";
+import { moveGroupNames } from "../ui/groupOrder";
 import { NoteMarkdownEditor } from "../ui/NoteMarkdownEditor";
 import { useOverlayBack } from "../shared/mobileBack";
-import type { NotesModel } from "../shared/hooks/useNotesModel";
+import type { NotesModel, NotesViewLayout } from "../shared/hooks/useNotesModel";
 
 export function NoteMobileEditor({
   m,
@@ -49,43 +51,63 @@ export function NoteMobileEditor({
   const { t } = useTranslation();
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [groupPickerOpen, setGroupPickerOpen] = useState(false);
-  const [tagAdding, setTagAdding] = useState(false);
-  const [newTagVal, setNewTagVal] = useState("");
-  const titleTextareaRef = useRef<HTMLTextAreaElement>(null);
-  const tagInputRef = useRef<HTMLInputElement>(null);
+  const [layoutOpen, setLayoutOpen] = useState(false);
+  const [headingOpen, setHeadingOpen] = useState(false);
+  const [headingMenuLeft, setHeadingMenuLeft] = useState(8);
+  const accBarRef = useRef<HTMLElement | null>(null);
+  const headingBtnRef = useRef<HTMLButtonElement>(null);
 
   useOverlayBack(moreMenuOpen, () => setMoreMenuOpen(false));
   useOverlayBack(groupPickerOpen, () => setGroupPickerOpen(false));
+  useOverlayBack(layoutOpen, () => setLayoutOpen(false));
+  useOverlayBack(headingOpen, () => setHeadingOpen(false));
 
   const stats = notePlainStats(m.draft.markdown);
-  const isPreview = m.mobileTab === "preview";
-  const [viewportBottomOffset, setViewportBottomOffset] = useState(0);
+  const layout = m.mobileTab;
+  const isPreview = layout === "preview";
+  const isSplit = layout === "split";
+  const showSource = layout !== "preview";
+  const showPreview = layout !== "edit";
+  const currentGroup = (m.draft.group || "").trim();
+  const matchedGroup = m.groups.find((g) => g.name === currentGroup);
+  const [imeInset, setImeInset] = useState(0);
   const wasPreviewRef = useRef(isPreview);
+  const layoutOptions: { id: NotesViewLayout; label: string; icon: typeof FileCode2 }[] = [
+    { id: "edit", label: t("notes.layoutEdit"), icon: FileCode2 },
+    { id: "split", label: t("notes.layoutSplit"), icon: Rows2 },
+    { id: "preview", label: t("notes.layoutPreview"), icon: Eye },
+  ];
+  const currentLayout = layoutOptions.find((item) => item.id === layout) || layoutOptions[0];
+  const CurrentLayoutIcon = currentLayout.icon;
 
   useEffect(() => {
-    const root = document.documentElement;
-    const vv = window.visualViewport;
-    if (!vv) return;
-    const update = () => {
-      const offset = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
-      setViewportBottomOffset(offset);
-      root.style.setProperty("--km-note-ime", `${offset}px`);
+    const read = () => {
+      const raw = getComputedStyle(document.documentElement).getPropertyValue("--km-ime-inset");
+      setImeInset(Number.parseFloat(raw) || 0);
     };
-    update();
-    vv.addEventListener("resize", update);
-    vv.addEventListener("scroll", update);
+    read();
+    const vv = window.visualViewport;
+    vv?.addEventListener("resize", read);
+    vv?.addEventListener("scroll", read);
+    window.addEventListener("resize", read);
+    window.addEventListener("km-android-ime", read);
+    window.addEventListener("focusin", read);
+    window.addEventListener("focusout", read);
     return () => {
-      vv.removeEventListener("resize", update);
-      vv.removeEventListener("scroll", update);
-      root.style.removeProperty("--km-note-ime");
+      vv?.removeEventListener("resize", read);
+      vv?.removeEventListener("scroll", read);
+      window.removeEventListener("resize", read);
+      window.removeEventListener("km-android-ime", read);
+      window.removeEventListener("focusin", read);
+      window.removeEventListener("focusout", read);
     };
   }, []);
 
   useEffect(() => {
-    if (isPreview || viewportBottomOffset <= 0) return;
+    if (!showSource || imeInset <= 0) return;
     const id = window.requestAnimationFrame(() => m.editorRef.current?.revealCursor());
     return () => window.cancelAnimationFrame(id);
-  }, [isPreview, viewportBottomOffset, m.editorRef]);
+  }, [showSource, imeInset, m.editorRef]);
 
   useEffect(() => {
     const leftPreview = wasPreviewRef.current && !isPreview;
@@ -98,35 +120,47 @@ export function NoteMobileEditor({
     return () => window.cancelAnimationFrame(id);
   }, [isPreview, m.editorRef]);
 
-  const adjustTitleHeight = useCallback(() => {
-    const el = titleTextareaRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(96, Math.max(32, el.scrollHeight))}px`;
-  }, []);
-
-  useEffect(() => {
-    adjustTitleHeight();
-  }, [m.draft.title, adjustTitleHeight]);
-
-  function commitNewTag() {
-    const val = newTagVal.trim().replace(/^#/, "");
-    if (val && !m.draft.tags.includes(val)) {
-      m.updateDraft({ tags: [...m.draft.tags, val] });
-    }
-    setNewTagVal("");
-    setTagAdding(false);
-  }
-
   function handleDismissKeyboard() {
     if (document.activeElement instanceof HTMLElement) {
       document.activeElement.blur();
     }
   }
 
+  const headingOptions: { id: "h1" | "h2" | "h3"; label: string; icon: typeof Heading1; insert: string }[] = [
+    { id: "h1", label: t("notes.tbH1"), icon: Heading1, insert: "\n# " },
+    { id: "h2", label: t("notes.tbH2"), icon: Heading2, insert: "\n## " },
+    { id: "h3", label: t("notes.tbH3"), icon: Heading3, insert: "\n### " },
+  ];
+
+  function placeHeadingMenu() {
+    const bar = accBarRef.current;
+    const btn = headingBtnRef.current;
+    if (!bar || !btn) return 8;
+    const barRect = bar.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    const menuMin = 132;
+    const maxLeft = Math.max(8, barRect.width - menuMin - 8);
+    return Math.min(maxLeft, Math.max(8, btnRect.left - barRect.left));
+  }
+
+  function toggleHeadingMenu() {
+    setHeadingOpen((open) => {
+      if (open) return false;
+      setHeadingMenuLeft(placeHeadingMenu());
+      return true;
+    });
+  }
+
+  function insertHeading(text: string) {
+    m.insertAtCursor(text);
+    setHeadingOpen(false);
+  }
+
+  const MD_TABLE = "|  |  |  |\n| --- | --- | --- |\n|  |  |  |";
+
   return (
     <div className="m-note-mobile-editor">
-      {/* 1. 顶栏：返回、保存状态、阅读/编辑切换、更多菜单 */}
+      {/* 1. 顶栏：返回、模式下拉、保存状态、更多菜单 */}
       <header className="m-note-topbar">
         <button
           type="button"
@@ -136,12 +170,54 @@ export function NoteMobileEditor({
         >
           <ChevronLeft size={22} />
           <span className="m-note-nav-title">
-            {m.draft.group || t("pages.notesTitle")}
+            {t("pages.notesTitle")}
           </span>
         </button>
 
         <div className="m-note-topbar-actions">
-          {/* 保存指示与按钮 */}
+          <div className="m-note-layout-wrap">
+            <button
+              type="button"
+              className={"m-note-layout-select" + (layoutOpen ? " is-open" : "")}
+              aria-expanded={layoutOpen}
+              aria-haspopup="listbox"
+              title={t("notes.layoutSwitch")}
+              onClick={() => setLayoutOpen((v) => !v)}
+            >
+              <CurrentLayoutIcon size={13} />
+              <span>{currentLayout.label}</span>
+              <ChevronDown size={12} />
+            </button>
+            {layoutOpen && (
+              <>
+                <div className="m-note-layout-backdrop" onClick={() => setLayoutOpen(false)} />
+                <div className="m-note-layout-menu" role="listbox">
+                  {layoutOptions.map((item) => {
+                    const Icon = item.icon;
+                    const on = item.id === layout;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        role="option"
+                        aria-selected={on}
+                        className={"m-note-layout-item" + (on ? " on" : "")}
+                        onClick={() => {
+                          if (item.id === "preview") handleDismissKeyboard();
+                          m.setMobileTab(item.id);
+                          setLayoutOpen(false);
+                        }}
+                      >
+                        <Icon size={14} />
+                        <span>{item.label}</span>
+                        {on ? <Check size={14} /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
           {m.isDirty ? (
             <button
               type="button"
@@ -159,20 +235,6 @@ export function NoteMobileEditor({
             </span>
           )}
 
-          {/* 模式切换：预览 / 源码 */}
-          <button
-            type="button"
-            className={"m-note-icon-action" + (isPreview ? " on" : "")}
-            aria-label={isPreview ? t("notes.layoutEdit") : t("notes.layoutPreview")}
-            title={isPreview ? t("notes.layoutEdit") : t("notes.layoutPreview")}
-            onClick={() => {
-              if (!isPreview) handleDismissKeyboard();
-              m.setMobileTab(isPreview ? "edit" : "preview");
-            }}
-          >
-            {isPreview ? <FileCode2 size={18} /> : <Eye size={18} />}
-          </button>
-
           {/* 更多菜单 */}
           <button
             type="button"
@@ -186,124 +248,56 @@ export function NoteMobileEditor({
         </div>
       </header>
 
-      {/* 2. 页面主体：轻量属性条 + 无边框标题 + 编辑器/预览画布 */}
+      {/* 2. 页面主体：与桌面端一致的标题栏 + 分组/标签 + 编辑器/预览画布 */}
       <div className="m-note-canvas">
         <NoteDraftBanner m={m} />
 
-        {/* 思源笔记风格：紧凑属性栏（单行流式布局） */}
-        <div className="m-note-props-bar">
-          {/* 分组胶囊 */}
-          {m.draft.group ? (
-            <button
-              type="button"
-              className="m-note-prop-pill is-group"
-              onClick={() => setGroupPickerOpen(true)}
-            >
-              <Folder size={12} />
-              <span>{m.draft.group}</span>
-              <ChevronDown size={11} className="m-note-pill-arrow" />
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="m-note-prop-btn"
-              onClick={() => setGroupPickerOpen(true)}
-            >
-              <FolderPlus size={13} />
-              <span>{t("notes.addGroup")}</span>
-            </button>
-          )}
-
-          {/* 标签列表 */}
-          <div className="m-note-tags-scroll">
-            {m.draft.tags.map((tag) => {
-              const tone = TAG_PALETTE[tagTone(tag)];
-              return (
-                <span
-                  key={tag}
-                  className="m-note-tag-chip"
-                  style={{ backgroundColor: tone.bg, color: tone.fg }}
-                >
-                  <span>#{tag}</span>
-                  <button
-                    type="button"
-                    className="m-note-tag-chip-del"
-                    aria-label={t("common.delete")}
-                    onClick={() =>
-                      m.updateDraft({ tags: m.draft.tags.filter((x) => x !== tag) })
-                    }
-                  >
-                    <X size={10} />
-                  </button>
-                </span>
-              );
-            })}
-
-            {tagAdding ? (
-              <div className="m-note-tag-input-inline">
-                <input
-                  ref={tagInputRef}
-                  className="m-note-tag-input"
-                  placeholder={t("notes.tagsPlaceholder")}
-                  value={newTagVal}
-                  onChange={(e) => setNewTagVal(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === ",") {
-                      e.preventDefault();
-                      commitNewTag();
-                    } else if (e.key === "Escape") {
-                      setTagAdding(false);
-                    }
-                  }}
-                  onBlur={commitNewTag}
-                  autoFocus
-                />
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="m-note-prop-btn"
-                onClick={() => {
-                  setTagAdding(true);
-                  setNewTagVal("");
+        <div className="m-note-chrome">
+          <label className={"note-title-field" + (m.draft.title.trim() ? "" : " is-empty")}>
+            <span className="note-title-label">{t("notes.titleLabel")}</span>
+            <span className="note-title-control">
+              <Type size={14} className="note-title-icon" aria-hidden />
+              <input
+                className="note-title-input"
+                placeholder={t("notes.titlePlaceholder")}
+                value={m.draft.title}
+                autoFocus={!m.draft.id && !m.draft.title}
+                onChange={(e) => m.updateDraft({ title: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+                  e.preventDefault();
+                  if (isPreview) m.setMobileTab("edit");
+                  m.editorRef.current?.focus();
                 }}
-              >
-                <Tag size={13} />
-                <span>{t("notes.addTag")}</span>
-              </button>
-            )}
+              />
+            </span>
+          </label>
+          <div className="note-editor-meta">
+            <button
+              type="button"
+              className={"note-group-select" + (groupPickerOpen ? " is-open" : "")}
+              title={t("notes.groupPlaceholder")}
+              onClick={() => setGroupPickerOpen(true)}
+            >
+              {matchedGroup?.color ? (
+                <span className="group-tab-dot" style={{ background: matchedGroup.color }} />
+              ) : null}
+              <span className={"note-group-select-label" + (!currentGroup ? " is-none" : "")}>
+                {currentGroup || t("group.none")}
+              </span>
+              <ChevronDown size={12} />
+            </button>
+            <NoteTagEditor m={m} />
           </div>
         </div>
 
-        {/* 无边框沉浸式大标题 */}
-        <div className="m-note-title-wrap">
-          <textarea
-            ref={titleTextareaRef}
-            rows={1}
-            className="m-note-title-textarea"
-            placeholder={t("notes.titlePlaceholder")}
-            value={m.draft.title}
-            autoFocus={!m.draft.id && !m.draft.title}
-            onChange={(e) => {
-              m.updateDraft({ title: e.target.value });
-              adjustTitleHeight();
-            }}
-            onKeyDown={(e) => {
-              if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
-              e.preventDefault();
-              if (isPreview) m.setMobileTab("edit");
-              m.editorRef.current?.focus();
-            }}
-          />
-        </div>
-
-        {/* 正文主编辑区 / 预览区 */}
-        <div className="m-note-content-area">
+        {/* 正文主编辑区 / 预览区；对比模式上下分层 */}
+        <div className={"m-note-content-area" + (isSplit ? " is-split" : "")}>
           <div
             className={"m-note-editor-host" + (isPreview ? " is-parked" : "")}
             aria-hidden={isPreview}
             onBlur={(ev) => {
-              if (isPreview) return;
+              if (!showSource) return;
               const next = ev.relatedTarget as Node | null;
               if (next && ev.currentTarget.contains(next)) return;
               m.onEditorFocusLeave();
@@ -320,7 +314,8 @@ export function NoteMobileEditor({
               onImageFile={(file) => ingestNoteImage(m, file)}
             />
           </div>
-          {isPreview && (
+          {isSplit && <div className="m-note-split-rule" aria-hidden />}
+          {showPreview && (
             <div className="m-note-preview-host">
               <NotePreview markdown={m.draft.markdown} breaks />
               <div className="m-note-preview-status">
@@ -340,16 +335,8 @@ export function NoteMobileEditor({
       </div>
 
       {/* 3. 思源笔记图三风格：底部键盘吸附工具栏（Accessory Toolbar） */}
-      {!isPreview && (
-        <footer
-          className="m-note-acc-bar"
-          role="toolbar"
-          style={
-            viewportBottomOffset > 0
-              ? { transform: `translateY(-${viewportBottomOffset}px)` }
-              : undefined
-          }
-        >
+      {showSource && (
+        <footer ref={accBarRef} className="m-note-acc-bar" role="toolbar">
           <div className="m-note-acc-scroll">
             {/* 插入图片 */}
             <button
@@ -367,42 +354,32 @@ export function NoteMobileEditor({
 
             <span className="m-acc-divider" />
 
-            {/* 标题 */}
             <button
+              ref={headingBtnRef}
               type="button"
-              className="m-acc-btn"
-              title={t("notes.tbH1")}
-              aria-label={t("notes.tbH1")}
+              className={"m-acc-btn" + (headingOpen ? " is-open" : "")}
+              title={t("notes.tbHeading")}
+              aria-label={t("notes.tbHeading")}
+              aria-expanded={headingOpen}
+              aria-haspopup="listbox"
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.insertAtCursor("\n# ");
+                toggleHeadingMenu();
               }}
             >
-              <Heading1 size={16} />
+              <Heading size={16} />
             </button>
             <button
               type="button"
               className="m-acc-btn"
-              title={t("notes.tbH2")}
-              aria-label={t("notes.tbH2")}
+              title={t("notes.tbTable")}
+              aria-label={t("notes.tbTable")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.insertAtCursor("\n## ");
+                m.insertAtCursor(`\n${MD_TABLE}`, 3);
               }}
             >
-              <Heading2 size={16} />
-            </button>
-            <button
-              type="button"
-              className="m-acc-btn"
-              title={t("notes.tbH3")}
-              aria-label={t("notes.tbH3")}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                m.insertAtCursor("\n### ");
-              }}
-            >
-              <Heading3 size={16} />
+              <Table2 size={16} />
             </button>
 
             <span className="m-acc-divider" />
@@ -551,6 +528,38 @@ export function NoteMobileEditor({
           >
             <ChevronDown size={18} />
           </button>
+
+          {headingOpen && (
+            <>
+              <div
+                className="m-acc-heading-backdrop"
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  setHeadingOpen(false);
+                }}
+              />
+              <div className="m-acc-heading-menu" role="listbox" style={{ left: headingMenuLeft }}>
+                {headingOptions.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      role="option"
+                      className="m-acc-heading-item"
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        insertHeading(item.insert);
+                      }}
+                    >
+                      <Icon size={14} />
+                      <span>{item.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
         </footer>
       )}
 
@@ -638,7 +647,7 @@ export function NoteMobileEditor({
             <div className="m-note-group-options">
               <button
                 type="button"
-                className={"m-note-group-option" + (!m.draft.group ? " on" : "")}
+                className={"m-note-group-option is-plain" + (!m.draft.group ? " on" : "")}
                 onClick={() => {
                   m.updateDraft({ group: undefined });
                   setGroupPickerOpen(false);
@@ -647,21 +656,40 @@ export function NoteMobileEditor({
                 <span>{t("group.none")}</span>
                 {!m.draft.group && <Check size={16} />}
               </button>
-              {m.groups.map((g) => (
-                <button
-                  key={g.name}
-                  type="button"
-                  className={"m-note-group-option" + (m.draft.group === g.name ? " on" : "")}
-                  onClick={() => {
-                    m.updateDraft({ group: g.name });
-                    setGroupPickerOpen(false);
-                  }}
-                >
-                  {g.color && <span className="group-tab-dot" style={{ background: g.color }} />}
-                  <span>{g.name}</span>
-                  {m.draft.group === g.name && <Check size={16} />}
-                </button>
-              ))}
+              {m.groups.map((g, idx) => {
+                const showOrder = !m.writesLocked && m.groups.length > 1;
+                return (
+                  <div
+                    key={g.name}
+                    className={"m-note-group-option" + (m.draft.group === g.name ? " on" : "")}
+                  >
+                    <button
+                      type="button"
+                      className="group-menu-item-pick"
+                      onClick={() => {
+                        m.updateDraft({ group: g.name });
+                        setGroupPickerOpen(false);
+                      }}
+                    >
+                      <span className="note-group-menu-main">
+                        {g.color && <span className="group-tab-dot" style={{ background: g.color }} />}
+                        <span>{g.name}</span>
+                      </span>
+                      {m.draft.group === g.name && !showOrder && <Check size={16} />}
+                    </button>
+                    {showOrder ? (
+                      <GroupReorderButtons
+                        canUp={idx > 0}
+                        canDown={idx < m.groups.length - 1}
+                        onMove={(action) => {
+                          const next = moveGroupNames(m.groups.map((item) => item.name), g.name, action);
+                          if (next) void m.reorderGroups(next);
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })}
               <button
                 type="button"
                 className="m-note-group-option is-create"
@@ -671,7 +699,7 @@ export function NoteMobileEditor({
                 }}
               >
                 <Plus size={16} />
-                <span>{t("notes.newGroup")}</span>
+                <span>{t("notes.newGroup").replace(/^\+\s*/, "")}</span>
               </button>
             </div>
           </div>

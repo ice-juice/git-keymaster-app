@@ -10,6 +10,7 @@ import { IconMark } from "../ui/IconMark";
 import { CountdownRing } from "../ui/CountdownRing";
 import { GroupDialog } from "../ui/GroupDialog";
 import { GroupPicker } from "../ui/GroupPicker";
+import { GroupTabs } from "../ui/GroupTabs";
 import { useTranslation } from "react-i18next";
 import { clipNote, NOTE_MAX, type TotpModel } from "../shared/hooks/useTotpModel";
 import { useOverlayBack } from "../shared/mobileBack";
@@ -37,29 +38,22 @@ export function TotpViewSwitcher({ view, setViewMode }: { view: "grid" | "list";
 export function TotpFilters({ m, hideSearch }: { m: TotpModel; hideSearch?: boolean }) {
   const { t } = useTranslation();
   return (
-    <div className="row between">
-      <div className="group-tabs">
-        {m.groupTabs.map((g) => {
-          const count = g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length;
-          const color = m.groups.find((item) => item.name === g)?.color;
-          const label = g === "全部" ? t("common.all") : g === "未分组" ? t("common.ungrouped") : g;
-          return (
-            <button key={g} type="button" className={"group-tab" + (m.group === g ? " on" : "")} onClick={() => m.setGroup(g)}>
-              {color && <span className="group-tab-dot" style={{ background: color }} />}
-              <span>{label}</span>
-              <span className="group-tab-count">{count}</span>
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          className="group-tab dashed"
-          disabled={m.writesLocked}
-          onClick={() => m.setGroupDlg(true)}
-        >
-          {t("totp.newGroup")}
-        </button>
-      </div>
+    <div className="group-filter-row">
+      <GroupTabs
+        value={m.group}
+        onChange={m.setGroup}
+        items={m.groupTabs.map((g) => ({
+          key: g,
+          label: g === "全部" ? t("common.all") : g === "未分组" ? t("common.ungrouped") : g,
+          count: g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length,
+          color: m.groups.find((item) => item.name === g)?.color,
+          sortable: g !== "全部" && g !== "未分组",
+        }))}
+        onCreate={() => m.setGroupDlg(true)}
+        onReorder={m.writesLocked ? undefined : m.reorderGroups}
+        createLabel={t("totp.newGroup")}
+        createDisabled={m.writesLocked}
+      />
       {!hideSearch && (
         <input className="input" style={{ maxWidth: 260 }} placeholder={t("totp.search")} value={m.q} onChange={(e) => m.setQ(e.target.value)} />
       )}
@@ -252,6 +246,7 @@ export function TotpDialogs({ m, skipEditor }: { m: TotpModel; skipEditor?: bool
           onClose={() => m.setEditor(null)}
           onSave={m.saveEditor}
           onMigration={!m.editor.id ? (uri) => { m.setEditor(null); void m.ingestImportTexts([uri]); } : undefined}
+          onReorderGroups={m.writesLocked ? undefined : m.reorderGroups}
         />
       )}
 
@@ -268,6 +263,7 @@ export function TotpDialogs({ m, skipEditor }: { m: TotpModel; skipEditor?: bool
           locked={m.writesLocked}
           onCancel={() => m.setBatchImport(null)}
           onImport={(selected, group) => void m.confirmBatchImport(selected, group)}
+          onReorderGroups={m.writesLocked ? undefined : m.reorderGroups}
         />
       )}
 
@@ -340,6 +336,7 @@ function BatchImportDialog({
   locked,
   onCancel,
   onImport,
+  onReorderGroups,
 }: {
   result: TotpImportResult;
   entries: TotpEntry[];
@@ -348,6 +345,7 @@ function BatchImportDialog({
   locked: boolean;
   onCancel: () => void;
   onImport: (selected: ParsedTotpPreview[], group?: string) => void;
+  onReorderGroups?: (orderedNames: string[]) => void;
 }) {
   const { t } = useTranslation();
   const existing = new Set(entries.map((e) => `${e.issuer.toLowerCase()}\0${e.account.toLowerCase()}`));
@@ -418,7 +416,7 @@ function BatchImportDialog({
           </div>
           <div className="field">
             <FieldLabel name={t("totp.group")} tip={t("totp.batchGroupTip")} />
-            <GroupPicker groups={groups} value={group} onChange={setGroup} />
+            <GroupPicker groups={groups} value={group} onChange={setGroup} onReorder={onReorderGroups} />
           </div>
         </div>
         <div className="card-foot">
@@ -639,7 +637,7 @@ function ReauthInner({ hint, onConfirm, onCancel }: { hint: string; onConfirm: (
 }
 
 function Editor({
-  value, builtins, groups, busy, onChange, onClose, onSave, onMigration,
+  value, builtins, groups, busy, onChange, onClose, onSave, onMigration, onReorderGroups,
 }: {
   value: Partial<TotpEntry> & { secret?: string };
   builtins: BuiltinIconInfo[];
@@ -649,6 +647,7 @@ function Editor({
   onClose: () => void;
   onSave: () => void;
   onMigration?: (uri: string) => void;
+  onReorderGroups?: (orderedNames: string[]) => void;
 }) {
   const { t } = useTranslation();
   const [secretDraft, setSecretDraft] = useState(value.secret || "");
@@ -776,6 +775,7 @@ function Editor({
               groups={groups}
               value={value.group}
               onChange={(group) => onChange({ ...value, group })}
+              onReorder={onReorderGroups}
             />
           </div>
           <div className="field">

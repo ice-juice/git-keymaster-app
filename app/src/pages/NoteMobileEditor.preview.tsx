@@ -28,7 +28,7 @@ export function NoteMobileEditorPreview() {
     tags: ["程序猿", "技术"],
     pinned: false,
   });
-  const [mobileTab, setMobileTab] = useState<"edit" | "preview">("edit");
+  const [mobileTab, setMobileTab] = useState<"edit" | "split" | "preview">("edit");
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -45,6 +45,7 @@ export function NoteMobileEditorPreview() {
         { name: "研究", color: "#4f46e5", sortOrder: 0 },
         { name: "工作", color: "#0d9488", sortOrder: 1 },
       ],
+      allTags: ["程序猿", "技术", "开发"],
       activeNote: {
         id: "preview",
         title: draft.title,

@@ -6,6 +6,7 @@ import { resolvePlatform } from "../platform/resolve";
 import { Badge, ConfirmDangerDialog, Empty, ErrorDialog, FieldLabel } from "../ui/common";
 import { GroupDialog } from "../ui/GroupDialog";
 import { GroupPicker } from "../ui/GroupPicker";
+import { GroupTabs } from "../ui/GroupTabs";
 import { ReauthDialog } from "../ui/ReauthDialog";
 import {
   editorAttachments,
@@ -24,7 +25,7 @@ function attachmentSummary(e: FileEntry, t: (key: string, opts?: Record<string, 
   return t("files.fileCountSummary", { n: atts.length, names: atts.map((a) => a.originalName).join("、") });
 }
 
-function groupLabel(g: string, t: (key: string) => string) {
+function groupLabel(g: string, t: (key: string, opts?: Record<string, unknown>) => string) {
   if (g === "全部") return t("files.all");
   if (g === "未分组") return t("files.ungrouped");
   return g;
@@ -33,23 +34,22 @@ function groupLabel(g: string, t: (key: string) => string) {
 export function FilesFilters({ m, hideSearch }: { m: FilesModel; hideSearch?: boolean }) {
   const { t } = useTranslation();
   return (
-    <div className="row between">
-      <div className="group-tabs">
-        {m.tabs.map((g) => {
-          const count = g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length;
-          const color = m.groups.find((item) => item.name === g)?.color;
-          return (
-            <button key={g} type="button" className={"group-tab" + (m.group === g ? " on" : "")} onClick={() => m.setGroup(g)}>
-              {color && <span className="group-tab-dot" style={{ background: color }} />}
-              <span>{groupLabel(g, t)}</span>
-              <span className="group-tab-count">{count}</span>
-            </button>
-          );
-        })}
-        <button type="button" className="group-tab dashed" disabled={m.writesLocked} onClick={() => m.setGroupDlg(true)}>
-          {t("files.newGroup")}
-        </button>
-      </div>
+    <div className="group-filter-row">
+      <GroupTabs
+        value={m.group}
+        onChange={m.setGroup}
+        items={m.tabs.map((g) => ({
+          key: g,
+          label: groupLabel(g, t),
+          count: g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length,
+          color: m.groups.find((item) => item.name === g)?.color,
+          sortable: g !== "全部" && g !== "未分组",
+        }))}
+        onCreate={() => m.setGroupDlg(true)}
+        onReorder={m.writesLocked ? undefined : m.reorderGroups}
+        createLabel={t("files.newGroup")}
+        createDisabled={m.writesLocked}
+      />
       {!hideSearch && (
         <input
           ref={m.searchRef}
@@ -274,7 +274,12 @@ export function FileEditModal({ m }: { m: FilesModel }) {
 
           <div className="field">
             <label className="field-label">{t("files.group")}</label>
-            <GroupPicker groups={m.groups} value={editor.group} onChange={(name) => patch({ group: name || undefined })} />
+            <GroupPicker
+              groups={m.groups}
+              value={editor.group}
+              onChange={(name) => patch({ group: name || undefined })}
+              onReorder={m.writesLocked ? undefined : m.reorderGroups}
+            />
           </div>
 
           <div className="field">

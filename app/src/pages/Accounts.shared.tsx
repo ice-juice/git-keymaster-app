@@ -16,6 +16,7 @@ import { IconMark } from "../ui/IconMark";
 import { CountdownRing } from "../ui/CountdownRing";
 import { GroupDialog } from "../ui/GroupDialog";
 import { GroupPicker } from "../ui/GroupPicker";
+import { GroupTabs } from "../ui/GroupTabs";
 import { useTranslation } from "react-i18next";
 import { type AccountsModel } from "../shared/hooks/useAccountsModel";
 import { useOverlayBack } from "../shared/mobileBack";
@@ -23,29 +24,22 @@ import { useOverlayBack } from "../shared/mobileBack";
 export function AccountsFilters({ m, hideSearch }: { m: AccountsModel; hideSearch?: boolean }) {
   const { t } = useTranslation();
   return (
-    <div className="row between">
-      <div className="group-tabs">
-        {m.tabs.map((g) => {
-          const count = g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length;
-          const color = m.groups.find((item) => item.name === g)?.color;
-          const label = g === "全部" ? t("common.all") : g === "未分组" ? t("common.ungrouped") : g;
-          return (
-            <button key={g} type="button" className={"group-tab" + (m.group === g ? " on" : "")} onClick={() => m.setGroup(g)}>
-              {color && <span className="group-tab-dot" style={{ background: color }} />}
-              <span>{label}</span>
-              <span className="group-tab-count">{count}</span>
-            </button>
-          );
-        })}
-        <button
-          type="button"
-          className="group-tab dashed"
-          disabled={m.writesLocked}
-          onClick={() => m.setGroupDlg(true)}
-        >
-          {t("accounts.newGroup")}
-        </button>
-      </div>
+    <div className="group-filter-row">
+      <GroupTabs
+        value={m.group}
+        onChange={m.setGroup}
+        items={m.tabs.map((g) => ({
+          key: g,
+          label: g === "全部" ? t("common.all") : g === "未分组" ? t("common.ungrouped") : g,
+          count: g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length,
+          color: m.groups.find((item) => item.name === g)?.color,
+          sortable: g !== "全部" && g !== "未分组",
+        }))}
+        onCreate={() => m.setGroupDlg(true)}
+        onReorder={m.writesLocked ? undefined : m.reorderGroups}
+        createLabel={t("accounts.newGroup")}
+        createDisabled={m.writesLocked}
+      />
       {!hideSearch && (
         <input className="input" style={{ maxWidth: 280 }} placeholder={t("accounts.search")} value={m.q} onChange={(e) => m.setQ(e.target.value)} />
       )}
@@ -415,6 +409,7 @@ export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; 
           onClose={() => m.setEditor(null)}
           onSave={m.saveEditor}
           onDelete={m.editor.id ? () => m.deleteEditorAccount() : undefined}
+          onReorderGroups={m.writesLocked ? undefined : m.reorderGroups}
         />
       )}
 
@@ -643,6 +638,7 @@ function AccountEditor({
   onClose,
   onSave,
   onDelete,
+  onReorderGroups,
 }: {
   compact?: boolean;
   value: Partial<AccountEntry> & { password?: string; isPlatformLocked?: boolean };
@@ -656,6 +652,7 @@ function AccountEditor({
   onClose: () => void;
   onSave: () => void;
   onDelete?: () => void;
+  onReorderGroups?: (orderedNames: string[]) => void;
 }) {
   const { t } = useTranslation();
   const [showPw, setShowPw] = useState(false);
@@ -838,6 +835,7 @@ function AccountEditor({
                   groups={groups}
                   value={value.group}
                   onChange={(group) => onChange({ ...value, group })}
+                  onReorder={onReorderGroups}
                 />
               </div>
               <div className="field">

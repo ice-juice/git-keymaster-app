@@ -12,6 +12,7 @@ import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secre
 import { resolvePlatform } from "../../platform/resolve";
 import { resolvePlatformBrand, platformFamily } from "../../lib/accountInput";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
+import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
 import { useApp } from "../../store";
 import { i18n } from "../../lib/i18n";
 
@@ -45,7 +46,7 @@ export function useAccountsModel() {
   const load = useCallback(async () => {
     const [acc, totp, icons] = await Promise.all([api.accountList(), api.totpList(), api.iconListBuiltin()]);
     setEntries(acc.entries);
-    setGroups(acc.groups);
+    setGroups(sortGroups(acc.groups));
     setTotps(totp.entries);
     setBuiltins(icons);
   }, []);
@@ -329,6 +330,19 @@ export function useAccountsModel() {
     setGroupDlg(false);
   }
 
+  async function reorderGroups(orderedNames: string[]) {
+    if (writesLocked) return;
+    const prev = groups;
+    const next = applyGroupOrder(groups, orderedNames);
+    setGroups(next);
+    try {
+      await api.accountSaveGroups(next);
+    } catch (e) {
+      setGroups(prev);
+      setErr(errMessage(e));
+    }
+  }
+
   function deleteEditorAccount() {
     if (!editor?.id) return;
     setPendingDelete({
@@ -463,6 +477,7 @@ export function useAccountsModel() {
     copyLinkedTotp,
     saveEditor,
     saveGroup,
+    reorderGroups,
     deleteEditorAccount,
     confirmDeleteEditorAccount,
     updatePlatformBrand,

@@ -4,6 +4,7 @@ import { api, errMessage, type GroupMeta, type NoteEntry } from "../../lib/ipc";
 import { markdownToPdfBytes } from "../../lib/notePdf";
 import { resolvePlatform } from "../../platform/resolve";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
+import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
 import type { NoteMarkdownEditorHandle } from "../../ui/NoteMarkdownEditor";
 import { showAppToast } from "../../ui/Toast";
 import { i18n } from "../../lib/i18n";
@@ -26,7 +27,7 @@ export interface NoteDraftState {
 }
 
 export type NotesViewLayout = "split" | "edit" | "preview";
-export type NotesMobileTab = "edit" | "preview";
+export type NotesMobileTab = NotesViewLayout;
 
 const LAYOUT_KEY = "km.notes.viewLayout";
 
@@ -144,7 +145,7 @@ export function useNotesModel() {
   const load = useCallback(async () => {
     const data = await api.noteList();
     setEntries(data.entries);
-    setGroups(data.groups);
+    setGroups(sortGroups(data.groups));
   }, []);
 
   useEffect(() => {
@@ -393,9 +394,9 @@ export function useNotesModel() {
     setOfflineDraft(null);
   }
 
-  function insertAtCursor(text: string) {
+  function insertAtCursor(text: string, cursorOffset?: number) {
     if (editorRef.current) {
-      editorRef.current.insertAtCursor(text);
+      editorRef.current.insertAtCursor(text, cursorOffset);
       return;
     }
     updateDraft({ markdown: `${draft.markdown}${draft.markdown.endsWith("\n") || !draft.markdown ? "" : "\n"}${text}` });
@@ -593,6 +594,19 @@ export function useNotesModel() {
     setGroupDlg(false);
   }
 
+  async function reorderGroups(orderedNames: string[]) {
+    if (writesLocked) return;
+    const prev = groups;
+    const next = applyGroupOrder(groups, orderedNames);
+    setGroups(next);
+    try {
+      await api.noteSaveGroups(next);
+    } catch (e) {
+      setGroups(prev);
+      setErr(errMessage(e));
+    }
+  }
+
   async function confirmLeave(saveFirst: boolean) {
     const go = leaveConfirm;
     setLeaveConfirm(null);
@@ -665,6 +679,7 @@ export function useNotesModel() {
     insertAtCursor,
     wrapSelection,
     saveGroup,
+    reorderGroups,
     persistGroupsIfNeeded,
     restoreOfflineDraft,
     discardOfflineDraft,

@@ -12,8 +12,20 @@
    =========================================================================== */
 
 /* ===== 外壳：顶部精简栏 + 内容区 + 底部 Tab =====
-   安全区用 env(safe-area-inset-*) 兜刘海与手势条，需要 index.html 里
-   viewport 带 viewport-fit=cover 才会生效。 */
+   安全区：iOS 吃 env(safe-area-inset-*)（viewport-fit=cover）；
+   Android 10 WebView 的 env() 经常是 0，由 ImeInsetBridge 写入
+   --km-safe-*-from-native，再和 env() 取 max。 */
+html[data-platform="mobile"] {
+  --km-safe-top-from-native: 0px;
+  --km-safe-bottom-from-native: 0px;
+  --km-safe-left-from-native: 0px;
+  --km-safe-right-from-native: 0px;
+  --km-safe-top: max(env(safe-area-inset-top, 0px), var(--km-safe-top-from-native, 0px));
+  --km-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--km-safe-bottom-from-native, 0px));
+  --km-safe-left: max(env(safe-area-inset-left, 0px), var(--km-safe-left-from-native, 0px));
+  --km-safe-right: max(env(safe-area-inset-right, 0px), var(--km-safe-right-from-native, 0px));
+}
+
 .m-shell {
   width: 100%; height: 100%;
   display: flex; flex-direction: column;
@@ -22,8 +34,9 @@
 }
 .m-topbar {
   flex: 0 0 auto;
-  min-height: calc(56px + env(safe-area-inset-top));
-  padding: env(safe-area-inset-top) 10px 0 14px;
+  box-sizing: border-box;
+  min-height: calc(56px + var(--km-safe-top));
+  padding: var(--km-safe-top) 10px 0 14px;
   display: flex; align-items: center; gap: 10px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
@@ -36,17 +49,32 @@
 .m-topbar-page {
   font-size: 17px; font-weight: 700; color: var(--text);
   line-height: 1.2; letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .m-topbar-spacer { flex: 1; }
+.m-topbar-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 0;
+  margin-right: -2px;
+}
 .m-icon-btn {
   /* 触摸目标 ≥44px，不要照搬桌面的 26px 图标按钮 */
-  width: 44px; height: 44px; flex: 0 0 44px;
+  width: 40px; height: 44px; flex: 0 0 40px;
   display: flex; align-items: center; justify-content: center;
   border: 0; border-radius: 12px; background: transparent;
   color: var(--text-soft); cursor: pointer;
+  text-decoration: none;
   -webkit-tap-highlight-color: transparent;
 }
 .m-icon-btn:active { background: var(--gray-soft); color: var(--text); }
+.m-icon-btn.is-on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
 
 .m-content {
   flex: 1; min-height: 0;
@@ -59,19 +87,27 @@
 
 .m-tabbar {
   flex: 0 0 auto;
-  height: calc(58px + env(safe-area-inset-bottom));
-  padding-bottom: env(safe-area-inset-bottom);
+  box-sizing: border-box;
+  min-height: calc(58px + var(--km-safe-bottom));
+  height: auto;
+  padding-bottom: var(--km-safe-bottom);
   display: flex; align-items: stretch;
   background: var(--bg-elev);
   border-top: 1px solid var(--border);
 }
 .m-tab {
-  flex: 1 1 0; min-width: 0;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  flex: 1 1 0; min-width: 0; min-height: 58px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   color: var(--text-mute); text-decoration: none;
-  font-size: 11px; font-weight: 550;
+  font-size: 10.5px; font-weight: 550;
   -webkit-tap-highlight-color: transparent;
   transition: color 0.12s ease;
+}
+.m-tab span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .m-tab.active { color: var(--accent); font-weight: 700; }
 .m-tab.active svg { color: var(--accent); }
@@ -217,12 +253,12 @@ html[data-platform="mobile"] .tb-ws-path { max-width: 100%; }
 html[data-platform="mobile"] .s3-guide-tabs { grid-template-columns: 1fr 1fr; }
 
 /* 页头竖排 / 网格单列 / 分组 tab 横向滑动 等紧凑细节 */
-html[data-platform="mobile"] { letter-spacing: 0.01em; }
+html[data-platform="mobile"] { letter-spacing: 0.01em; } /* 安全区变量见文件顶部 html[data-platform=mobile] */
 html[data-platform="mobile"] .page-head.is-compact {
   flex-direction: column;
   align-items: stretch;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 html[data-platform="mobile"] .page-head-actions {
   width: 100%;
@@ -232,6 +268,14 @@ html[data-platform="mobile"] .page-head-actions .view-switcher {
 }
 html[data-platform="mobile"] .page-head-actions .btn {
   flex: 1 1 auto;
+  min-height: 36px;
+  height: 36px;
+  padding: 0 12px;
+  font-size: 12.5px;
+  border-radius: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 html[data-platform="mobile"] .page-head-actions .btn.primary {
   flex: 1 1 100%;
@@ -249,15 +293,324 @@ html[data-platform="mobile"] .row.between {
   justify-content: space-between;
   align-items: center;
 }
-html[data-platform="mobile"] .group-tabs {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
-  padding-bottom: 2px;
+
+/* ========================================================
+   移动端全新分组 UI 规范 (Mobile Group Filter & Picker)
+   ======================================================== */
+html[data-platform="mobile"] .group-filter-row {
+  display: block;
+  width: 100%;
 }
-html[data-platform="mobile"] .group-tab {
-  flex: 0 0 auto;
-  min-height: 34px;
+html[data-platform="mobile"] .group-tab.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow: 0 1px 3px rgba(99, 102, 241, 0.12);
+  font-weight: 700;
+}
+html[data-platform="mobile"] .group-tab.on .group-tab-count {
+  background: rgba(99, 102, 241, 0.18);
+  color: var(--accent);
+}
+
+.m-group-filter-bar {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  margin: 3px 0 6px;
+}
+
+.m-group-track {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding: 3px 40px 3px 0;
+}
+.m-group-track::-webkit-scrollbar {
+  display: none;
+}
+
+.m-group-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 29px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 500;
+  flex-shrink: 0;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.16s ease;
+}
+.m-group-pill:active {
+  transform: scale(0.96);
+  background: var(--gray-soft);
+}
+
+/* 激活态：绝不用深黑大底！使用纯粹清爽的主题强调色 */
+.m-group-pill.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow: 0 1px 3px rgba(99, 102, 241, 0.12);
+  font-weight: 700;
+}
+
+.m-group-pill-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.m-group-pill-text {
+  line-height: 1;
+}
+
+.m-group-pill-count {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: var(--gray-soft);
+  color: var(--text-muted);
+  line-height: 1.1;
+}
+.m-group-pill.is-active .m-group-pill-count {
+  background: rgba(99, 102, 241, 0.18);
+  color: var(--accent);
+}
+
+.m-group-pill.is-create {
+  border-style: dashed;
+  border-color: var(--border-strong);
+  background: transparent;
+  color: var(--text-soft);
+}
+.m-group-pill.is-create:active {
+  background: var(--gray-soft);
+  color: var(--text);
+}
+
+/* 右侧更多全览按钮与渐变蒙层 */
+.m-group-more-box {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  padding-left: 20px;
+  background: linear-gradient(90deg, transparent 0%, var(--bg) 38%, var(--bg) 100%);
+  pointer-events: none;
+  z-index: 2;
+}
+
+.m-group-more-btn {
+  pointer-events: auto;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text-soft);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.15s ease;
+}
+.m-group-more-btn:active,
+.m-group-more-btn.is-open {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 移动端表单触控卡片选择条 */
+.m-group-form-picker {
+  width: 100%;
+}
+.m-group-cell-btn {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 0.15s ease;
+}
+.m-group-cell-btn:active {
+  background: var(--gray-soft);
+}
+.m-group-cell-val {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 550;
+}
+.m-group-cell-name.is-none {
+  color: var(--text-soft);
+  font-weight: 400;
+}
+.m-group-cell-arrow {
+  color: var(--text-muted);
+}
+.m-group-cell-new-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.m-group-picker-create {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--gray-soft);
+  border-radius: 12px;
+}
+.m-group-picker-create .input {
+  flex: 1;
+  background: var(--panel);
+}
+
+/* 内嵌分组选择列表（用于 sheet 内部） */
+.m-group-inline-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.m-group-inline-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 2px;
+}
+.m-group-inline-item {
+  width: 100%;
+  min-height: 40px;
+  padding: 0 6px 0 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+  font-size: 13.5px;
+  font-weight: 500;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.14s ease;
+}
+.m-group-inline-item:active {
+  background: var(--gray-soft);
+}
+.m-group-inline-item.on {
+  background: var(--accent-soft);
+  border-color: rgba(99, 102, 241, 0.4);
+  color: var(--accent);
+  font-weight: 700;
+}
+.m-group-inline-item .group-menu-item-pick {
+  min-height: 40px;
+  padding: 0 8px;
+}
+.m-group-inline-item-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.m-group-inline-create {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.m-group-inline-create .input {
+  flex: 1;
+  min-height: 38px;
+  font-size: 13px;
+}
+
+/* 抽屉内菜单增强 */
+html[data-platform="mobile"] .group-menu-sheet {
+  max-height: 75vh;
+  display: flex;
+  flex-direction: column;
+}
+html[data-platform="mobile"] .group-menu-item {
+  min-height: 44px;
+  padding: 0 6px 0 8px;
+  border-radius: 12px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: nowrap;
+}
+html[data-platform="mobile"] .group-menu-item-pick {
+  min-height: 44px;
+  padding: 0 6px;
+}
+html[data-platform="mobile"] .group-reorder-btn {
+  width: 32px;
+  height: 32px;
+}
+html[data-platform="mobile"] .group-menu-item.on {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 700;
+}
+html[data-platform="mobile"] .group-menu-create {
+  min-height: 44px;
+  margin-top: 10px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--accent);
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+html[data-platform="mobile"] .group-menu-sheet .group-menu-body {
+  padding: 0 2px 8px;
 }
 html[data-platform="mobile"] .identity-card,
 html[data-platform="mobile"] .totp-card {
@@ -266,10 +619,38 @@ html[data-platform="mobile"] .totp-card {
 html[data-platform="mobile"] .totp-card:hover {
   transform: none;
 }
-html[data-platform="mobile"] .unlock-stage {
+html[data-platform="mobile"] .unlock-stage,
+html[data-platform="mobile"] .center-stage {
   align-items: center;
   justify-content: center;
-  padding: calc(12px + env(safe-area-inset-top)) 16px calc(20px + env(safe-area-inset-bottom));
+  box-sizing: border-box;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: calc(12px + var(--km-safe-top)) 16px calc(20px + var(--km-safe-bottom) + var(--km-ime-inset, 0px));
+}
+html[data-platform="mobile"] .unlock-stage.is-ime,
+html[data-platform="mobile"][data-km-ime="1"] .unlock-stage {
+  justify-content: flex-end;
+}
+html[data-platform="mobile"] .unlock-stage.is-ime .unlock-card .app-logo,
+html[data-platform="mobile"][data-km-ime="1"] .unlock-stage .unlock-card .app-logo {
+  width: 32px !important;
+  height: 32px !important;
+  margin-bottom: 4px !important;
+}
+html[data-platform="mobile"] .unlock-stage.is-ime .unlock-card .title-lg,
+html[data-platform="mobile"][data-km-ime="1"] .unlock-stage .unlock-card .title-lg {
+  font-size: 18px;
+}
+html[data-platform="mobile"] .unlock-stage.is-ime .unlock-card .muted,
+html[data-platform="mobile"][data-km-ime="1"] .unlock-stage .unlock-card .muted {
+  margin-bottom: 10px !important;
+}
+html[data-platform="mobile"] .qr-scanner-topbar {
+  top: calc(12px + var(--km-safe-top));
+}
+html[data-platform="mobile"] .qr-scanner-foot {
+  bottom: calc(28px + var(--km-safe-bottom));
 }
 html[data-platform="mobile"] .unlock-card {
   width: 100%;
@@ -285,6 +666,9 @@ html[data-platform="mobile"] .unlock-card {
 html[data-platform="mobile"] .unlock-card .title-lg {
   font-size: 22px;
   font-weight: 750;
+}
+html[data-platform="mobile"] .unlock-field-cluster {
+  width: 100%;
 }
 html[data-platform="mobile"] .settings-nav {
   flex-wrap: nowrap;
@@ -305,7 +689,7 @@ html[data-platform="mobile"] .sync-action-btns {
   min-width: 0;
 }
 html[data-platform="mobile"] .app-toast {
-  bottom: calc(68px + env(safe-area-inset-bottom));
+  bottom: calc(68px + var(--km-safe-bottom));
 }
 html[data-platform="mobile"] .m-bio-methods {
   display: flex;
@@ -406,7 +790,7 @@ html[data-platform="mobile"] .startup-lock-bar {
   justify-content: flex-start;
   min-height: 0;
   overflow: auto;
-  padding: calc(10px + env(safe-area-inset-top)) 14px calc(20px + env(safe-area-inset-bottom));
+  padding: calc(10px + var(--km-safe-top)) 14px calc(20px + var(--km-safe-bottom));
   background: var(--bg);
 }
 .init-mobile-head {
@@ -473,43 +857,48 @@ html[data-platform="mobile"] .startup-lock-bar {
   padding: 4px 0 0 !important;
 }
 
-/* 2FA / 账密共用：常驻搜索 + 明确添加按钮 */
+/* 列表顶栏：搜索 / 导出 / 新建 统一 36px，少占竖向空间 */
 .m-list-toolbar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex-wrap: nowrap;
 }
 .m-list-search {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 44px;
-  padding: 0 12px;
+  gap: 6px;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--panel);
   box-shadow: var(--shadow);
 }
 .m-list-search:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 .m-list-search-icon {
   flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
   color: var(--text-mute);
 }
 .m-list-search input {
   flex: 1;
   min-width: 0;
+  height: 100%;
+  min-height: 0;
   border: 0;
   background: transparent;
   color: var(--text);
-  font-size: 16px;
+  font-size: 13.5px;
   line-height: 1.2;
   outline: none;
-  min-height: 42px;
   -webkit-appearance: none;
   appearance: none;
 }
@@ -522,9 +911,9 @@ html[data-platform="mobile"] .startup-lock-bar {
   color: var(--text-mute);
 }
 .m-list-search-clear {
-  flex: 0 0 28px;
-  width: 28px;
-  height: 28px;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -535,46 +924,59 @@ html[data-platform="mobile"] .startup-lock-bar {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
-.m-list-side-btn {
+.m-list-search-clear svg {
+  width: 12px;
+  height: 12px;
+}
+.m-list-side-btn,
+.m-list-add-btn {
   flex: 0 0 auto;
-  min-height: 44px;
-  padding: 0 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--panel);
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 650;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 12.5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
+  white-space: nowrap;
   cursor: pointer;
-  box-shadow: var(--shadow);
   -webkit-tap-highlight-color: transparent;
+}
+.m-list-side-btn svg,
+.m-list-add-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+.m-list-side-btn span,
+.m-list-add-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.m-list-side-btn {
+  max-width: 28vw;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 650;
+  box-shadow: var(--shadow);
 }
 .m-list-side-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
 .m-list-add-btn {
-  flex: 0 0 auto;
-  min-height: 44px;
-  min-width: 84px;
-  padding: 0 14px;
+  min-width: 0;
+  max-width: 42vw;
   border: 0;
-  border-radius: 12px;
   background: var(--accent-gradient, var(--accent));
   color: var(--accent-contrast, #fff);
-  font-size: 14px;
   font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  cursor: pointer;
-  box-shadow: 0 4px 12px rgba(99, 102, 241, 0.28);
-  -webkit-tap-highlight-color: transparent;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.24);
 }
 .m-list-add-btn:active {
   filter: brightness(0.96);
@@ -601,7 +1003,7 @@ html[data-platform="mobile"] .startup-lock-bar {
 }
 .m-list-sheet {
   width: 100%;
-  padding: 8px 12px calc(12px + env(safe-area-inset-bottom));
+  padding: 8px 12px calc(12px + var(--km-safe-bottom));
   border-radius: 18px 18px 0 0;
   background: var(--bg-elev, var(--panel));
   border-top: 1px solid var(--border);
@@ -690,7 +1092,7 @@ html[data-platform="mobile"] .startup-lock-bar {
 html[data-platform="mobile"] .account-editor-mobile.dialog-card {
   width: 100%;
   max-width: none;
-  max-height: calc(100dvh - 12px - env(safe-area-inset-top));
+  max-height: calc(100dvh - 12px - var(--km-safe-top));
 }
 html[data-platform="mobile"] .account-editor-mobile .input,
 html[data-platform="mobile"] .account-editor-mobile select {
@@ -715,7 +1117,7 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  padding: calc(10px + var(--km-safe-top)) 16px 10px;
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -784,7 +1186,7 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
-  padding: 16px 14px calc(80px + env(safe-area-inset-bottom));
+  padding: 16px 14px calc(80px + var(--km-safe-bottom));
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -800,7 +1202,7 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  padding: 10px 16px calc(10px + var(--km-safe-bottom));
   background: var(--bg-elev);
   border-top: 1px solid var(--border);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.06);
@@ -1106,10 +1508,10 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   height: 100dvh;
   overflow: hidden;
   animation: mSubpageSlideIn 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-  --km-safe-top: max(env(safe-area-inset-top, 0px), 12px);
-  --km-safe-bottom: max(env(safe-area-inset-bottom, 0px), 14px);
-  --km-safe-left: env(safe-area-inset-left, 0px);
-  --km-safe-right: env(safe-area-inset-right, 0px);
+  --km-safe-top: max(env(safe-area-inset-top, 0px), var(--km-safe-top-from-native, 0px));
+  --km-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--km-safe-bottom-from-native, 0px));
+  --km-safe-left: max(env(safe-area-inset-left, 0px), var(--km-safe-left-from-native, 0px));
+  --km-safe-right: max(env(safe-area-inset-right, 0px), var(--km-safe-right-from-native, 0px));
 }
 
 @keyframes mSubpageSlideIn {
@@ -2300,7 +2702,7 @@ html[data-platform="mobile"] .m-account-pwd-copy:disabled {
 .m-file-fab {
   position: fixed;
   right: 16px;
-  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  bottom: calc(72px + var(--km-safe-bottom));
   width: 56px;
   height: 56px;
   border: 0;
@@ -2510,10 +2912,10 @@ html[data-platform="mobile"] .notes-mobile-detail {
   height: 100%;
   height: 100dvh;
   overflow: hidden;
-  --km-safe-top: max(env(safe-area-inset-top, 0px), 36px);
-  --km-safe-bottom: max(env(safe-area-inset-bottom, 0px), 24px);
-  --km-safe-left: env(safe-area-inset-left, 0px);
-  --km-safe-right: env(safe-area-inset-right, 0px);
+  --km-safe-top: max(env(safe-area-inset-top, 0px), var(--km-safe-top-from-native, 0px));
+  --km-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--km-safe-bottom-from-native, 0px));
+  --km-safe-left: max(env(safe-area-inset-left, 0px), var(--km-safe-left-from-native, 0px));
+  --km-safe-right: max(env(safe-area-inset-right, 0px), var(--km-safe-right-from-native, 0px));
 }
 
 html[data-platform="mobile"] .note-preview-phone .notes-mobile-detail {
@@ -2533,6 +2935,8 @@ html[data-platform="mobile"] .m-note-mobile-editor {
   position: relative;
   overflow: hidden;
   height: 100%;
+  box-sizing: border-box;
+  padding-bottom: var(--km-ime-inset, 0px);
 }
 
 /* 1. 顶部紧凑沉浸导航栏（完全适配状态栏安全区） */
@@ -2583,6 +2987,88 @@ html[data-platform="mobile"] .m-note-topbar-actions {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+html[data-platform="mobile"] .m-note-layout-wrap {
+  position: relative;
+  z-index: 30;
+}
+
+html[data-platform="mobile"] .m-note-layout-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 28px;
+  max-width: 88px;
+  padding: 0 7px 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text-soft);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .m-note-layout-select span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-platform="mobile"] .m-note-layout-select.is-open,
+html[data-platform="mobile"] .m-note-layout-select:active {
+  background: var(--gray-soft);
+  color: var(--text);
+  border-color: var(--border-strong, var(--border));
+}
+
+html[data-platform="mobile"] .m-note-layout-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+
+html[data-platform="mobile"] .m-note-layout-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 2;
+  min-width: 132px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.16);
+}
+
+html[data-platform="mobile"] .m-note-layout-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .m-note-layout-item span {
+  flex: 1;
+  text-align: left;
+}
+html[data-platform="mobile"] .m-note-layout-item.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+html[data-platform="mobile"] .m-note-layout-item:active {
+  background: var(--gray-soft);
 }
 
 /* 紧凑保存状态/按钮 */
@@ -2652,151 +3138,59 @@ html[data-platform="mobile"] .m-note-canvas {
   border: none !important;
 }
 
-/* 思源笔记风格：紧凑属性栏 */
-html[data-platform="mobile"] .m-note-props-bar {
+html[data-platform="mobile"] .m-note-chrome {
   flex: 0 0 auto;
   display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 0 2px;
+}
+html[data-platform="mobile"] .m-note-chrome .note-title-field {
+  flex-direction: row;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
-  padding: 6px 0 10px;
-  overflow: hidden;
-}
-
-html[data-platform="mobile"] .m-note-prop-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 24px;
-  padding: 0 9px;
-  border-radius: 999px;
-  border: 1px dashed var(--border);
-  background: transparent;
-  color: var(--text-mute);
-  font-size: 11.5px;
-  font-weight: 500;
-  cursor: pointer;
-  flex-shrink: 0;
-  -webkit-tap-highlight-color: transparent;
-}
-html[data-platform="mobile"] .m-note-prop-btn:active {
-  background: var(--gray-soft);
-  color: var(--text);
-}
-
-html[data-platform="mobile"] .m-note-prop-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 24px;
-  padding: 0 9px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--gray-soft);
-  color: var(--text-soft);
-  font-size: 11.5px;
-  font-weight: 550;
-  cursor: pointer;
-  flex-shrink: 0;
-  -webkit-tap-highlight-color: transparent;
-}
-html[data-platform="mobile"] .m-note-prop-pill:active {
-  border-color: var(--accent);
-}
-html[data-platform="mobile"] .m-note-pill-arrow {
-  opacity: 0.6;
-}
-
-html[data-platform="mobile"] .m-note-tags-scroll {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-  flex: 1;
   min-width: 0;
 }
-html[data-platform="mobile"] .m-note-tags-scroll::-webkit-scrollbar {
-  display: none;
-}
-
-html[data-platform="mobile"] .m-note-tag-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 23px;
-  padding: 0 6px 0 9px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 550;
-  flex-shrink: 0;
-}
-
-html[data-platform="mobile"] .m-note-tag-chip-del {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  border: none;
-  background: rgba(0, 0, 0, 0.12);
-  color: inherit;
-  cursor: pointer;
-  padding: 0;
-}
-
-html[data-platform="mobile"] .m-note-tag-input-inline {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-html[data-platform="mobile"] .m-note-tag-input {
-  height: 24px;
-  min-width: 80px;
-  max-width: 130px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  padding: 0 6px;
-  font-size: 11px;
-  background: var(--input-bg);
-  color: var(--text);
-  outline: none;
-}
-
-/* 思源笔记风格：无边框沉浸大标题（去除非必要的底部分割线） */
-html[data-platform="mobile"] .m-note-title-wrap {
+html[data-platform="mobile"] .m-note-chrome .note-title-label {
   flex: 0 0 auto;
-  padding: 8px 0 12px;
-  border-bottom: none;
-  margin-bottom: 0;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
 }
-
-html[data-platform="mobile"] .m-note-title-textarea {
-  display: block;
-  width: 100%;
-  border: none !important;
-  outline: none !important;
-  background: transparent;
-  font-size: 22px;
-  font-weight: 700;
-  line-height: 1.35;
-  color: var(--text);
-  padding: 0;
-  margin: 0;
-  resize: none;
-  overflow-x: hidden;
-  overflow-y: auto;
-  max-height: 96px;
-  font-family: inherit;
-  caret-color: #4f46e5 !important;
-  caret-color: var(--accent, #4f46e5) !important;
+html[data-platform="mobile"] .m-note-chrome .note-title-control {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 32px;
+  min-height: 32px;
+  border-radius: 8px;
 }
-html[data-platform="mobile"] .m-note-title-textarea::placeholder {
-  color: var(--text-mute);
-  font-weight: 600;
-  opacity: 0.5;
+html[data-platform="mobile"] .m-note-chrome .note-title-input {
+  height: 32px;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+html[data-platform="mobile"] .m-note-chrome .note-editor-meta {
+  padding: 8px 0 6px;
+  gap: 6px;
+}
+html[data-platform="mobile"] .m-note-chrome .note-group-select {
+  max-width: 112px;
+  min-height: 28px;
+  height: 28px;
+}
+html[data-platform="mobile"] .m-note-chrome .note-tag {
+  height: 28px;
+  font-size: 12px;
+}
+html[data-platform="mobile"] .m-note-chrome .note-tag-add,
+html[data-platform="mobile"] .m-note-chrome .note-chip-input {
+  height: 28px;
+}
+html[data-platform="mobile"] .m-note-chrome .note-tag-suggest {
+  max-width: min(220px, 70vw);
 }
 
 /* 彻底清除 Android WebView / WebKit 自动生成的焦点黄色边框 */
@@ -2841,6 +3235,37 @@ html[data-platform="mobile"] .m-note-content-area {
   border: none !important;
   outline: none !important;
 }
+html[data-platform="mobile"] .m-note-content-area.is-split .m-note-editor-host,
+html[data-platform="mobile"] .m-note-content-area.is-split .m-note-preview-host {
+  flex: 1 1 50%;
+  min-height: 0;
+  height: auto;
+  max-height: none;
+}
+html[data-platform="mobile"] .m-note-split-rule {
+  flex: 0 0 auto;
+  height: 1px;
+  background: var(--border);
+  position: relative;
+}
+html[data-platform="mobile"] .m-note-split-rule::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 36px;
+  height: 4px;
+  margin: -2px 0 0 -18px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+html[data-platform="mobile"] .m-note-content-area.is-split .m-note-editor-host .cm-scroller {
+  padding-bottom: 16px;
+}
+html[data-platform="mobile"] .m-note-content-area.is-split .m-note-preview-host .note-preview {
+  padding-top: 8px;
+  padding-bottom: 16px;
+}
 
 html[data-platform="mobile"] .m-note-editor-host {
   flex: 1;
@@ -2878,6 +3303,7 @@ html[data-platform="mobile"] .m-note-editor-host .cm-scroller {
   border: none !important;
   outline: none !important;
   -webkit-overflow-scrolling: touch;
+  overflow-anchor: none;
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.15) transparent;
 }
@@ -2889,7 +3315,7 @@ html[data-platform="mobile"] .m-note-editor-host .cm-scroller::-webkit-scrollbar
   border-radius: 999px;
 }
 html[data-platform="mobile"] .m-note-editor-host .cm-content {
-  padding: 4px 4px calc(48px + var(--km-note-ime, 0px));
+  padding: 4px 4px 48px;
   font-size: 16px;
   line-height: 1.75;
   border: none !important;
@@ -2966,7 +3392,7 @@ html[data-platform="mobile"] .note-cm .cm-md-strong {
   color: var(--text);
 }
 
-/* 预览区域 */
+/* 预览区域：仅移动端护眼纸色，桌面 .note-preview 不跟这套 */
 html[data-platform="mobile"] .m-note-preview-host {
   flex: 1;
   min-height: 0;
@@ -2974,13 +3400,119 @@ html[data-platform="mobile"] .m-note-preview-host {
   flex-direction: column;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  margin: 0 -4px;
+  padding: 0 12px;
+  border-radius: 12px;
+  background: #f3ead8;
+  color: #3f3428;
 }
 
 html[data-platform="mobile"] .m-note-preview-host .note-preview {
   flex: 1;
-  padding: 8px 0 24px;
+  padding: 10px 0 24px;
   font-size: 15px;
-  line-height: 1.7;
+  line-height: 1.75;
+  color: #3f3428;
+  background: transparent;
+}
+html[data-platform="mobile"] .m-note-preview-host .note-preview-empty {
+  color: #8a7b68;
+}
+html[data-platform="mobile"] .m-note-preview-host .note-preview h1,
+html[data-platform="mobile"] .m-note-preview-host .note-preview h2,
+html[data-platform="mobile"] .m-note-preview-host .note-preview h3,
+html[data-platform="mobile"] .m-note-preview-host .note-preview h4 {
+  color: #2f271e;
+}
+html[data-platform="mobile"] .m-note-preview-host .note-preview h2 {
+  border-bottom-color: rgba(90, 70, 40, 0.18);
+}
+html[data-platform="mobile"] .m-note-preview-host .note-preview code,
+html[data-platform="mobile"] .m-note-preview-host .note-preview pre {
+  background: rgba(90, 70, 40, 0.08);
+}
+html[data-platform="mobile"] .m-note-preview-host .note-preview pre {
+  border-color: rgba(90, 70, 40, 0.14);
+}
+html[data-platform="mobile"] .m-note-preview-host .note-preview th {
+  background: rgba(90, 70, 40, 0.1);
+}
+html[data-platform="mobile"] .m-note-preview-host .note-preview th,
+html[data-platform="mobile"] .m-note-preview-host .note-preview td {
+  border-color: rgba(90, 70, 40, 0.2);
+}
+html[data-platform="mobile"] .m-note-preview-host .m-note-preview-status {
+  color: #8a7b68;
+}
+
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host {
+  background: #1e261c;
+  color: #d6dec8;
+}
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview {
+  color: #d6dec8;
+}
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview-empty,
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .m-note-preview-status {
+  color: #8b9680;
+}
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview h1,
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview h2,
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview h3,
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview h4 {
+  color: #e8f0d8;
+}
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview h2 {
+  border-bottom-color: rgba(214, 222, 200, 0.16);
+}
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview code,
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview pre {
+  background: rgba(0, 0, 0, 0.28);
+}
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview pre {
+  border-color: rgba(214, 222, 200, 0.12);
+}
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview th {
+  background: rgba(214, 222, 200, 0.08);
+}
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview th,
+html[data-theme="dark"][data-platform="mobile"] .m-note-preview-host .note-preview td {
+  border-color: rgba(214, 222, 200, 0.16);
+}
+
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host {
+  background: #172033;
+  color: #dce6f0;
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview {
+  color: #dce6f0;
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview-empty,
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .m-note-preview-status {
+  color: #8ea0b5;
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview h1,
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview h2,
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview h3,
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview h4 {
+  color: #e8f2ff;
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview h2 {
+  border-bottom-color: rgba(220, 230, 240, 0.14);
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview code,
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview pre {
+  background: rgba(0, 0, 0, 0.28);
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview pre {
+  border-color: rgba(220, 230, 240, 0.12);
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview th {
+  background: rgba(220, 230, 240, 0.08);
+}
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview th,
+html[data-theme="navy"][data-platform="mobile"] .m-note-preview-host .note-preview td {
+  border-color: rgba(220, 230, 240, 0.16);
 }
 html[data-platform="mobile"] .m-note-preview-host .note-preview.is-hard-breaks p,
 html[data-platform="mobile"] .m-note-preview-host .note-preview.is-hard-breaks li {
@@ -2998,14 +3530,14 @@ html[data-platform="mobile"] .m-note-preview-status {
   gap: 4px;
 }
 
-/* 3. 底部键盘吸附工具栏（完全适配底部虚拟导航栏与安全区） */
+/* 3. 底部工具栏：默认贴底；输入法盖住 WebView 时吸到键盘上方 */
 html[data-platform="mobile"] .m-note-acc-bar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  min-height: calc(48px + var(--km-safe-bottom));
-  padding-bottom: calc(var(--km-safe-bottom) + 24px);
+  min-height: 48px;
   padding-top: 6px;
+  padding-bottom: var(--km-safe-bottom);
   padding-left: calc(8px + var(--km-safe-left));
   padding-right: calc(8px + var(--km-safe-right));
   background: var(--bg-elev);
@@ -3014,6 +3546,11 @@ html[data-platform="mobile"] .m-note-acc-bar {
   z-index: 25;
   box-shadow: 0 -3px 12px rgba(0, 0, 0, 0.05);
   box-sizing: border-box;
+  position: relative;
+  overflow: visible;
+}
+html[data-platform="mobile"][data-km-ime="1"] .m-note-acc-bar {
+  padding-bottom: 6px;
 }
 
 html[data-platform="mobile"] .m-note-acc-scroll {
@@ -3150,6 +3687,50 @@ html[data-platform="mobile"] .m-acc-dismiss-btn {
 html[data-platform="mobile"] .m-acc-dismiss-btn:active {
   background: var(--gray-soft);
   color: var(--text);
+}
+
+html[data-platform="mobile"] .m-acc-btn.is-open {
+  background: var(--gray-soft);
+  color: var(--accent);
+}
+html[data-platform="mobile"] .m-acc-heading-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+}
+html[data-platform="mobile"] .m-acc-heading-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  min-width: 132px;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-elev);
+  box-shadow: 0 -10px 28px rgba(15, 23, 42, 0.16);
+}
+html[data-platform="mobile"] .m-acc-heading-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 550;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .m-acc-heading-item span {
+  flex: 1;
+  text-align: left;
+}
+html[data-platform="mobile"] .m-acc-heading-item:active {
+  background: var(--gray-soft);
 }
 
 /* 4. 底部动作抽屉（Action Sheet） */
@@ -3162,7 +3743,7 @@ html[data-platform="mobile"] .m-note-sheet {
   background: var(--bg-elev);
   border-top-left-radius: 18px;
   border-top-right-radius: 18px;
-  padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
+  padding: 12px 16px calc(16px + var(--km-safe-bottom));
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -3262,13 +3843,31 @@ html[data-platform="mobile"] .m-note-group-option {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 13px 16px;
+  gap: 4px;
+  padding: 6px 8px 6px 16px;
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--border);
   color: var(--text);
   font-size: 14px;
   font-weight: 550;
+  flex-wrap: nowrap;
+  -webkit-tap-highlight-color: transparent;
+}
+html[data-platform="mobile"] .m-note-group-option > .group-menu-item-pick,
+html[data-platform="mobile"] .m-note-group-option.is-plain {
+  flex: 1;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  font: inherit;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
@@ -3291,7 +3890,7 @@ html[data-platform="mobile"] .m-note-group-option.is-create {
 /* 输入法弹出时整块弹层（含底部按钮）抬到键盘上方，收起后落回正中 */
 html[data-platform="mobile"] .wizard-overlay {
   box-sizing: border-box;
-  padding-bottom: calc(12px + var(--km-ime-inset, 0px));
+  padding-bottom: calc(12px + max(var(--km-ime-inset, 0px), var(--km-safe-bottom)));
   transition: padding-bottom 0.22s ease;
 }
 html[data-platform="mobile"][data-km-ime="1"] .wizard-overlay {

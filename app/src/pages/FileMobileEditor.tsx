@@ -137,6 +137,7 @@ export function FileMobileEditor({
               groups={m.groups}
               value={editor.group}
               onChange={(name) => patch({ group: name || undefined })}
+              onReorder={m.writesLocked ? undefined : m.reorderGroups}
             />
           </div>
         </section>

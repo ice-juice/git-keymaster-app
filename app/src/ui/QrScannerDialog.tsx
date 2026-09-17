@@ -310,7 +310,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
             <button
               type="button"
               className="btn ghost sm"
-              onClick={startCamera}
+              onClick={() => void startCamera()}
             >
               <RefreshCw size={14} /> {i18n.t("qrscan.retry")}
             </button>

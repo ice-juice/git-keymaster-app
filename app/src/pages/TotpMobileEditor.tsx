@@ -249,6 +249,7 @@ export function TotpMobileEditor({
               groups={m.groups}
               value={value.group}
               onChange={(group) => m.setEditor({ ...value, group })}
+              onReorder={m.writesLocked ? undefined : m.reorderGroups}
             />
           </div>
 

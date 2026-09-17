@@ -33,6 +33,7 @@ import { startActivityHeartbeat } from "./shared/activityHeartbeat";
 import { clearAllDrafts } from "./shared/noteDrafts";
 import { useScreenCaptureGuard } from "./shared/hooks/useScreenCaptureGuard";
 import { useImeInset } from "./shared/hooks/useImeInset";
+import { useSafeAreaInset } from "./shared/hooks/useSafeAreaInset";
 
 function AppShell({ compact }: { compact: boolean }) {
   if (compact) {
@@ -65,6 +66,7 @@ export default function App() {
 
   const compact = useIsCompact();
   useImeInset(compact);
+  useSafeAreaInset(compact);
   const privacyCover = useScreenCaptureGuard();
   // 本机 Git / SSH 工具链相关页面在移动端没有消费者，连路由都不注册，
   // 避免深链接或历史记录把用户带到一个必然报错的页面。

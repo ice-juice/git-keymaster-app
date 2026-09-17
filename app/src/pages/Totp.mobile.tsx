@@ -442,7 +442,13 @@ export function TotpMobile() {
               <div className="m-note-sheet-title">{t("totp.batchGroupTitle")}</div>
               <div className="m-note-sheet-meta">{t("totp.batchGroupMeta", { n: selectedCount })}</div>
             </div>
-            <GroupPicker groups={m.groups} value={sheetGroup} onChange={setSheetGroup} />
+            <GroupPicker
+              groups={m.groups}
+              value={sheetGroup}
+              onChange={setSheetGroup}
+              inline
+              onReorder={m.writesLocked ? undefined : m.reorderGroups}
+            />
             {m.writesLocked && <div className="hint">{t("totp.batchGroupLocked")}</div>}
             <div className="m-totp-sheet-foot">
               <button

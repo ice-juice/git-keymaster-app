@@ -2,6 +2,13 @@ import { useEffect } from "react";
 
 export type MobileBackDecision = "stay" | "home" | "exit";
 
+/** 移动端底栏五个主页面，系统返回按根页处理，不先跳回总览。 */
+export const MOBILE_TAB_ROOTS = ["/", "/totp", "/accounts", "/notes", "/files"] as const;
+
+export function isMobileTabRoot(pathname: string) {
+  return (MOBILE_TAB_ROOTS as readonly string[]).includes(pathname);
+}
+
 type BackFn = () => boolean;
 
 const stack: BackFn[] = [];
@@ -40,7 +47,7 @@ export function decideMobileRootBack(opts: {
     if (!opts.android) return { decision: "stay", goParent: false };
     return { decision: opts.backgroundRun ? "home" : "exit", goParent: false };
   }
-  if (opts.pathname !== "/") return { decision: "stay", goParent: true };
+  if (!isMobileTabRoot(opts.pathname)) return { decision: "stay", goParent: true };
   if (!opts.android) return { decision: "stay", goParent: false };
   return { decision: opts.backgroundRun ? "home" : "exit", goParent: false };
 }

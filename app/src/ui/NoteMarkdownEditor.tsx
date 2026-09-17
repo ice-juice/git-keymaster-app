@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { markdown } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
@@ -9,7 +9,7 @@ import { useApp } from "../store";
 
 export type NoteMarkdownEditorHandle = {
   wrapSelection: (before: string, after?: string) => void;
-  insertAtCursor: (text: string) => void;
+  insertAtCursor: (text: string, cursorOffset?: number) => void;
   focus: () => void;
   setScrollRatio: (ratio: number) => void;
   getMarkdown: () => string | undefined;
@@ -24,6 +24,49 @@ function revealSelection(view: EditorView) {
       y: "nearest",
       yMargin: 48,
     }),
+  });
+}
+
+function clampPos(docLen: number, pos: number) {
+  return Math.max(0, Math.min(docLen, pos));
+}
+
+/** 局部改字并保住选区；视口只跟光标行，禁止被拉到文档末尾。 */
+function applyEditorChange(
+  view: EditorView,
+  spec: {
+    changes: { from: number; to: number; insert: string };
+    selection: EditorSelection;
+  },
+) {
+  const scrollEl = view.scrollDOM;
+  const prevTop = scrollEl.scrollTop;
+  const prevMax = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+  const wasAtEnd = prevMax > 0 && prevTop >= prevMax - 4;
+
+  view.dispatch({
+    changes: spec.changes,
+    selection: spec.selection,
+    effects: EditorView.scrollIntoView(spec.selection.main.head, {
+      y: "nearest",
+      yMargin: 48,
+    }),
+  });
+
+  if (!view.hasFocus) {
+    view.contentDOM.focus({ preventScroll: true });
+  }
+
+  const head = view.state.selection.main.head;
+  const nearDocEnd = head >= view.state.doc.length - 1;
+
+  requestAnimationFrame(() => {
+    const max = Math.max(0, scrollEl.scrollHeight - scrollEl.clientHeight);
+    const nowAtEnd = max > 0 && scrollEl.scrollTop >= max - 8;
+    if (nowAtEnd && !nearDocEnd && !wasAtEnd) {
+      scrollEl.scrollTop = prevTop;
+    }
+    revealSelection(view);
   });
 }
 
@@ -116,28 +159,25 @@ const chromeTheme = EditorView.theme({
   },
 });
 
-function applyInsert(view: EditorView, text: string) {
+function applyInsert(view: EditorView, text: string, cursorOffset?: number) {
   const { from, to } = view.state.selection.main;
-  view.dispatch({
+  const offset = cursorOffset == null ? text.length : Math.max(0, Math.min(text.length, cursorOffset));
+  applyEditorChange(view, {
     changes: { from, to, insert: text },
-    selection: EditorSelection.cursor(from + text.length),
-    scrollIntoView: true,
+    selection: EditorSelection.single(from + offset),
   });
-  view.focus();
 }
 
 function applyWrap(view: EditorView, before: string, after: string) {
   const { from, to } = view.state.selection.main;
   const selected = view.state.sliceDoc(from, to);
   const insert = `${before}${selected}${after}`;
-  view.dispatch({
+  applyEditorChange(view, {
     changes: { from, to, insert },
     selection: selected
-      ? EditorSelection.range(from + before.length, from + before.length + selected.length)
-      : EditorSelection.cursor(from + before.length),
-    scrollIntoView: true,
+      ? EditorSelection.single(from + before.length, from + before.length + selected.length)
+      : EditorSelection.single(from + before.length),
   });
-  view.focus();
 }
 
 export const NoteMarkdownEditor = forwardRef<
@@ -168,16 +208,22 @@ export const NoteMarkdownEditor = forwardRef<
     onScrollRatioRef.current = onScrollRatio;
   }, [onScrollRatio]);
 
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const stableOnChange = useCallback((next: string) => {
+    onChangeRef.current(next);
+  }, []);
+
   useImperativeHandle(ref, () => ({
     wrapSelection(before, after = before) {
       const view = cmRef.current?.view;
       if (!view) return;
       applyWrap(view, before, after);
     },
-    insertAtCursor(text) {
+    insertAtCursor(text, cursorOffset) {
       const view = cmRef.current?.view;
       if (!view) return;
-      applyInsert(view, text);
+      applyInsert(view, text, cursorOffset);
     },
     focus() {
       cmRef.current?.view?.focus();
@@ -196,8 +242,11 @@ export const NoteMarkdownEditor = forwardRef<
       if (!view) return;
       const current = view.state.doc.toString();
       if (current === text) return;
-      view.dispatch({
+      const { from, to } = view.state.selection.main;
+      const nextLen = text.length;
+      applyEditorChange(view, {
         changes: { from: 0, to: current.length, insert: text },
+        selection: EditorSelection.single(clampPos(nextLen, from), clampPos(nextLen, to)),
       });
     },
     revealCursor() {
@@ -218,9 +267,7 @@ export const NoteMarkdownEditor = forwardRef<
       ...(mobile
         ? [
             EditorView.scrollMargins.of(() => {
-              const raw = getComputedStyle(document.documentElement).getPropertyValue("--km-note-ime");
-              const ime = Number.parseFloat(raw) || 0;
-              return { top: 12, bottom: 56 + ime };
+              return { top: 12, bottom: 56 };
             }),
           ]
         : []),
@@ -301,7 +348,7 @@ export const NoteMarkdownEditor = forwardRef<
         searchKeymap: true,
       }}
       extensions={extensions}
-      onChange={onChange}
+      onChange={stableOnChange}
     />
   );
 });

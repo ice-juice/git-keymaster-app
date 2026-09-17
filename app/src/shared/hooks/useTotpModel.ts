@@ -16,6 +16,7 @@ import { i18n } from "../../lib/i18n";
 import { firstOtpauth, pickQrFromGallery, scanQrWithCamera, totpImportUris } from "../../lib/qrCapture";
 import { isMobilePlatform } from "../../lib/platform";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
+import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
 import { useApp } from "../../store";
 
 const VIEW_KEY = "gam.totp.view";
@@ -56,7 +57,7 @@ export function useTotpModel() {
   const load = useCallback(async () => {
     const [list, icons] = await Promise.all([api.totpList(), api.iconListBuiltin()]);
     setEntries(list.entries);
-    setGroups(list.groups);
+    setGroups(sortGroups(list.groups));
     setBuiltins(icons);
   }, []);
 
@@ -406,6 +407,19 @@ export function useTotpModel() {
     setGroupDlg(false);
   }
 
+  async function reorderGroups(orderedNames: string[]) {
+    if (writesLocked) return;
+    const prev = groups;
+    const next = applyGroupOrder(groups, orderedNames);
+    setGroups(next);
+    try {
+      await api.totpSaveGroups(next);
+    } catch (e) {
+      setGroups(prev);
+      setErr(errMessage(e));
+    }
+  }
+
   function deleteEntry(e: TotpEntry) {
     setPendingDelete(e);
   }
@@ -558,6 +572,7 @@ export function useTotpModel() {
     scanCamera,
     scanScreen,
     saveGroup,
+    reorderGroups,
     deleteEntry,
     confirmDeleteEntry,
   };

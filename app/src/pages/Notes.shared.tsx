@@ -1,11 +1,14 @@
-import { forwardRef, useEffect, useRef, useState, type ReactNode, type UIEvent } from "react";
+import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type UIEvent } from "react";
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { ArrowUpToLine, Check, Columns2, Eye, FileCode2, Pin, Plus, Save, Trash2, Type, X } from "lucide-react";
+import { ArrowUpToLine, Check, ChevronDown, Columns2, Eye, FileCode2, Pin, Plus, Rows2, Save, Tag, Trash2, Type, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDangerDialog, Empty, ErrorDialog } from "../ui/common";
 import { GroupDialog } from "../ui/GroupDialog";
+import { GroupReorderButtons } from "../ui/GroupReorderButtons";
+import { GroupTabs } from "../ui/GroupTabs";
+import { moveGroupNames } from "../ui/groupOrder";
 import { MarkdownToolbar } from "../ui/MarkdownToolbar";
 import { applyScrollRatio, NoteMarkdownEditor, scrollRatioOf } from "../ui/NoteMarkdownEditor";
 import {
@@ -117,24 +120,22 @@ export function NotesFilters({ m, hideSearch }: { m: NotesModel; hideSearch?: bo
   const { t } = useTranslation();
   return (
     <div className="stack" style={{ gap: 8 }}>
-      <div className="row between">
-        <div className="group-tabs">
-          {m.tabs.map((g) => {
-            const count = g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length;
-            const color = m.groups.find((item) => item.name === g)?.color;
-            const label = g === "全部" ? t("notes.all") : g === "未分组" ? t("notes.ungrouped") : g;
-            return (
-              <button key={g} type="button" className={"group-tab" + (m.group === g ? " on" : "")} onClick={() => m.setGroup(g)}>
-                {color && <span className="group-tab-dot" style={{ background: color }} />}
-                <span>{label}</span>
-                <span className="group-tab-count">{count}</span>
-              </button>
-            );
-          })}
-          <button type="button" className="group-tab dashed" disabled={m.writesLocked} onClick={() => m.setGroupDlg(true)}>
-            {t("notes.newGroup")}
-          </button>
-        </div>
+      <div className="group-filter-row">
+        <GroupTabs
+          value={m.group}
+          onChange={m.setGroup}
+          items={m.tabs.map((g) => ({
+            key: g,
+            label: g === "全部" ? t("notes.all") : g === "未分组" ? t("notes.ungrouped") : g,
+            count: g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length,
+            color: m.groups.find((item) => item.name === g)?.color,
+            sortable: g !== "全部" && g !== "未分组",
+          }))}
+          onCreate={() => m.setGroupDlg(true)}
+          onReorder={m.writesLocked ? undefined : m.reorderGroups}
+          createLabel={t("notes.newGroup")}
+          createDisabled={m.writesLocked}
+        />
         {!hideSearch && (
           <input className="input" style={{ maxWidth: 260 }} placeholder={t("notes.search")} value={m.q} onChange={(e) => m.setQ(e.target.value)} />
         )}
@@ -273,9 +274,149 @@ export function NoteIndexItem({ e, m }: { e: NoteEntry; m: NotesModel }) {
   );
 }
 
+function NoteGroupField({ m }: { m: NotesModel }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const current = (m.draft.group || "").trim();
+  const matched = m.groups.find((g) => g.name.toLowerCase() === current.toLowerCase());
+  const q = query.trim().toLowerCase();
+  const groupNames = m.groups.map((g) => g.name);
+  const showOrder = !m.writesLocked && !q && groupNames.length > 1;
+  const items = [
+    { key: "", label: t("group.none"), color: null as string | null | undefined, sortable: false },
+    ...m.groups.map((g) => ({ key: g.name, label: g.name, color: g.color, sortable: true })),
+  ].filter((item) => !q || item.label.toLowerCase().includes(q) || item.key.toLowerCase().includes(q));
+
+  function apply(name: string) {
+    m.updateDraft({ group: name || undefined });
+    setOpen(false);
+    setQuery("");
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    inputRef.current?.focus();
+    function onPointer(ev: PointerEvent) {
+      if (wrapRef.current && ev.target instanceof Node && !wrapRef.current.contains(ev.target)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="note-group-picker" ref={wrapRef}>
+      <button
+        type="button"
+        className={"note-group-select" + (open ? " is-open" : "")}
+        title={t("notes.groupPlaceholder")}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {matched?.color ? <span className="group-tab-dot" style={{ background: matched.color }} /> : null}
+        <span className={"note-group-select-label" + (!current ? " is-none" : "")}>
+          {matched?.name || current || t("group.none")}
+        </span>
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div className="note-group-menu" role="listbox">
+          <input
+            ref={inputRef}
+            className="note-group-menu-input"
+            placeholder={m.groups.length ? t("group.orNew") : t("group.newPh")}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && query.trim()) {
+                e.preventDefault();
+                apply(query.trim());
+              }
+            }}
+          />
+          <div className="note-group-menu-list">
+            {items.length === 0 ? (
+              <div className="note-group-menu-empty">{t("group.noMatch")}</div>
+            ) : (
+              items.map((item) => {
+                const on = item.key === (matched?.name || "");
+                const sortIndex = item.sortable ? groupNames.indexOf(item.key) : -1;
+                const rowOrder = showOrder && item.sortable && sortIndex >= 0;
+                return (
+                  <div
+                    key={item.key || "none"}
+                    role="option"
+                    aria-selected={on}
+                    className={"note-group-menu-item" + (on ? " on" : "")}
+                  >
+                    <button
+                      type="button"
+                      className="group-menu-item-pick"
+                      onClick={() => apply(item.key)}
+                    >
+                      <span className="note-group-menu-main">
+                        {item.color ? <span className="group-tab-dot" style={{ background: item.color }} /> : null}
+                        <span>{item.label}</span>
+                      </span>
+                      {on && !rowOrder ? <Check size={12} /> : null}
+                    </button>
+                    {rowOrder ? (
+                      <GroupReorderButtons
+                        canUp={sortIndex > 0}
+                        canDown={sortIndex < groupNames.length - 1}
+                        onMove={(action) => {
+                          const next = moveGroupNames(groupNames, item.key, action);
+                          if (next) void m.reorderGroups(next);
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function NoteTagEditor({ m }: { m: NotesModel }) {
   const { t } = useTranslation();
+  const [adding, setAdding] = useState(false);
   const [raw, setRaw] = useState("");
+  const [overflows, setOverflows] = useState(false);
+  const [dragTag, setDragTag] = useState<string | null>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const rawRef = useRef(raw);
+  const tagsRef = useRef(m.draft.tags);
+  rawRef.current = raw;
+  tagsRef.current = m.draft.tags;
+
+  const suggestions = useMemo(() => {
+    const q = raw.trim().replace(/^#/, "").toLowerCase();
+    return (m.allTags || [])
+      .filter((tag) => !m.draft.tags.includes(tag))
+      .filter((tag) => !q || tag.toLowerCase().includes(q))
+      .slice(0, 8);
+  }, [m.allTags, m.draft.tags, raw]);
 
   function commit(value: string) {
     const tag = value.trim().replace(/^#/, "");
@@ -287,35 +428,242 @@ export function NoteTagEditor({ m }: { m: NotesModel }) {
     setRaw("");
   }
 
+  function closeAdd() {
+    const pending = rawRef.current;
+    if (pending.trim()) commit(pending);
+    setAdding(false);
+    setRaw("");
+  }
+
+  function moveByIndex(from: number, to: number) {
+    if (from === to || from < 0 || to < 0) return;
+    const tags = tagsRef.current;
+    if (from >= tags.length || to >= tags.length) return;
+    const next = [...tags];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    tagsRef.current = next;
+    m.updateDraft({ tags: next });
+  }
+
+  useLayoutEffect(() => {
+    const track = trackRef.current;
+    if (!track) return;
+    const check = () => setOverflows(track.scrollWidth > track.clientWidth + 2);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(track);
+    return () => ro.disconnect();
+  }, [m.draft.tags, adding]);
+
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    const track = trackRef.current;
+    if (!wrap || !track) return;
+    const onWheel = (e: WheelEvent) => {
+      if (track.scrollWidth <= track.clientWidth) return;
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (!delta) return;
+      e.preventDefault();
+      track.scrollLeft += delta;
+    };
+    wrap.addEventListener("wheel", onWheel, { passive: false });
+    return () => wrap.removeEventListener("wheel", onWheel);
+  }, []);
+
+  useEffect(() => {
+    if (!adding) return;
+    inputRef.current?.focus();
+    const track = trackRef.current;
+    if (track) track.scrollLeft = track.scrollWidth;
+  }, [adding, m.draft.tags.length]);
+
+  useEffect(() => {
+    if (!adding) return;
+    function onPointer(ev: PointerEvent) {
+      const wrap = wrapRef.current;
+      if (wrap && ev.target instanceof Node && !wrap.contains(ev.target)) {
+        closeAdd();
+      }
+    }
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") {
+        setAdding(false);
+        setRaw("");
+      }
+    }
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [adding, m.draft.tags]);
+
+  function onTrackPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest(".note-tag")) return;
+    const node = trackRef.current;
+    if (!node || node.scrollWidth <= node.clientWidth) return;
+    const scroller = node;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startScroll = scroller.scrollLeft;
+    scroller.setPointerCapture(e.pointerId);
+    scroller.classList.add("is-panning");
+
+    function move(ev: PointerEvent) {
+      scroller.scrollLeft = startScroll - (ev.clientX - startX);
+    }
+    function up() {
+      scroller.classList.remove("is-panning");
+      scroller.releasePointerCapture(e.pointerId);
+      scroller.removeEventListener("pointermove", move);
+      scroller.removeEventListener("pointerup", up);
+      scroller.removeEventListener("pointercancel", up);
+    }
+    scroller.addEventListener("pointermove", move);
+    scroller.addEventListener("pointerup", up);
+    scroller.addEventListener("pointercancel", up);
+  }
+
+  function onChipPointerDown(index: number, e: ReactPointerEvent<HTMLSpanElement>) {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest(".note-tag-x")) return;
+    e.preventDefault();
+    e.stopPropagation();
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const draggingName = tagsRef.current[index];
+    let from = index;
+    let started = false;
+
+    function insertIndexAt(clientX: number) {
+      const scroller = trackRef.current;
+      if (!scroller) return from;
+      const chips = [...scroller.querySelectorAll<HTMLElement>("[data-note-index]")];
+      if (chips.length === 0) return from;
+      for (let i = 0; i < chips.length; i++) {
+        const rect = chips[i].getBoundingClientRect();
+        if (clientX < rect.left + rect.width / 2) return i;
+      }
+      return chips.length - 1;
+    }
+
+    function onMove(ev: PointerEvent) {
+      if (!started) {
+        if (Math.abs(ev.clientX - startX) < 3 && Math.abs(ev.clientY - startY) < 3) return;
+        started = true;
+        setDragTag(draggingName);
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+      }
+      ev.preventDefault();
+      const scroller = trackRef.current;
+      if (scroller) {
+        const rect = scroller.getBoundingClientRect();
+        if (ev.clientX > rect.right - 24) scroller.scrollLeft += 12;
+        else if (ev.clientX < rect.left + 24) scroller.scrollLeft -= 12;
+      }
+      const to = insertIndexAt(ev.clientX);
+      if (to !== from) {
+        moveByIndex(from, to);
+        from = to;
+      }
+    }
+
+    function onUp() {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setDragTag(null);
+    }
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  }
+
   return (
-    <div className="note-tag-editor">
-      {m.draft.tags.map((tag) => (
-        <span key={tag} className="note-tag on">
-          #{tag}
-          <button
-            type="button"
-            className="note-tag-x"
-            onClick={() => m.updateDraft({ tags: m.draft.tags.filter((x) => x !== tag) })}
-          >
-            <X size={10} />
-          </button>
-        </span>
-      ))}
-      <input
-        className="note-chip-input"
-        placeholder={t("notes.tagsPlaceholder")}
-        value={raw}
-        onChange={(e) => setRaw(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === ",") {
-            e.preventDefault();
-            commit(raw);
-          }
-        }}
-        onBlur={() => {
-          if (raw.trim()) commit(raw);
-        }}
-      />
+    <div
+      className={"note-tag-editor" + (overflows ? " is-overflow" : "") + (dragTag ? " is-sorting" : "")}
+      ref={wrapRef}
+    >
+      <div
+        className={"note-tag-track" + (overflows ? " can-pan" : "")}
+        ref={trackRef}
+        onPointerDown={onTrackPointerDown}
+      >
+        {m.draft.tags.map((tag, index) => {
+          const tone = TAG_PALETTE[tagTone(tag)];
+          return (
+            <span
+              key={tag}
+              data-note-index={index}
+              className={"note-tag on" + (dragTag === tag ? " is-dragging" : "")}
+              style={{ backgroundColor: tone.bg, color: tone.fg, borderColor: "transparent" }}
+              title={t("notes.dragTag")}
+              draggable={false}
+              onDragStart={(e) => e.preventDefault()}
+              onPointerDown={(e) => onChipPointerDown(index, e)}
+            >
+              #{tag}
+              <button
+                type="button"
+                className="note-tag-x"
+                aria-label={t("common.delete")}
+                onClick={() => m.updateDraft({ tags: m.draft.tags.filter((x) => x !== tag) })}
+              >
+                <X size={10} />
+              </button>
+            </span>
+          );
+        })}
+      </div>
+
+      {adding ? (
+        <div className="note-tag-add-box">
+          <input
+            ref={inputRef}
+            className="note-chip-input"
+            placeholder={t("notes.tagsPlaceholder")}
+            value={raw}
+            onChange={(e) => setRaw(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === ",") {
+                e.preventDefault();
+                commit(raw);
+              } else if (e.key === "Backspace" && !raw && m.draft.tags.length) {
+                e.preventDefault();
+                m.updateDraft({ tags: m.draft.tags.slice(0, -1) });
+              }
+            }}
+          />
+          {suggestions.length > 0 && (
+            <div className="note-tag-suggest" role="listbox">
+              {suggestions.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  className="note-tag-suggest-item"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => commit(tag)}
+                >
+                  #{tag}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <button type="button" className="note-tag-add" onClick={() => setAdding(true)}>
+          <Tag size={11} />
+          <span>{t("notes.addTag")}</span>
+        </button>
+      )}
     </div>
   );
 }
@@ -491,15 +839,17 @@ export function NoteLayoutSwitch({
   layout,
   onLayout,
   modes,
+  splitStacked,
 }: {
   layout: NotesViewLayout;
   onLayout: (v: NotesViewLayout) => void;
   modes: NotesViewLayout[];
+  splitStacked?: boolean;
 }) {
   const { t } = useTranslation();
   const items: { id: NotesViewLayout; label: string; icon: ReactNode }[] = [
     { id: "edit", label: t("notes.layoutEdit"), icon: <FileCode2 size={13} /> },
-    { id: "split", label: t("notes.layoutSplit"), icon: <Columns2 size={13} /> },
+    { id: "split", label: t("notes.layoutSplit"), icon: splitStacked ? <Rows2 size={13} /> : <Columns2 size={13} /> },
     { id: "preview", label: t("notes.layoutPreview"), icon: <Eye size={13} /> },
   ];
   return (
@@ -592,18 +942,7 @@ export function NoteEditorCard({
           </label>
         </div>
         <div className="note-editor-meta">
-          <input
-            className="note-chip-input note-group-input"
-            list="note-group-options"
-            placeholder={t("notes.groupPlaceholder")}
-            value={m.draft.group || ""}
-            onChange={(e) => m.updateDraft({ group: e.target.value || undefined })}
-          />
-          <datalist id="note-group-options">
-            {m.groups.map((g) => (
-              <option key={g.name} value={g.name} />
-            ))}
-          </datalist>
+          <NoteGroupField m={m} />
           <NoteTagEditor m={m} />
         </div>
         <div className="note-editor-tools">

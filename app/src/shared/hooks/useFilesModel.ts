@@ -4,6 +4,7 @@ import { api, entryAttachments, errMessage, type FileAttachment, type FileEntry,
 import { isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
 import { resolvePlatform } from "../../platform/resolve";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
+import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
 import { showAppToast } from "../../ui/Toast";
 import { i18n } from "../../lib/i18n";
 import { useApp } from "../../store";
@@ -113,7 +114,7 @@ export function useFilesModel() {
   const load = useCallback(async () => {
     const data = await api.fileList();
     setEntries(data.entries);
-    setGroups(data.groups);
+    setGroups(sortGroups(data.groups));
     setUsageBytes(data.usageBytes);
   }, []);
 
@@ -417,6 +418,19 @@ export function useFilesModel() {
     setGroupDlg(false);
   }
 
+  async function reorderGroups(orderedNames: string[]) {
+    if (writesLocked) return;
+    const prev = groups;
+    const next = applyGroupOrder(groups, orderedNames);
+    setGroups(next);
+    try {
+      await api.fileSaveGroups(next);
+    } catch (e) {
+      setGroups(prev);
+      setErr(errMessage(e));
+    }
+  }
+
   return {
     writesLocked,
     entries,
@@ -461,6 +475,7 @@ export function useFilesModel() {
     deleteFile,
     exportFile,
     saveGroup,
+    reorderGroups,
     withAuth,
   };
 }
