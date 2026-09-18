@@ -9,11 +9,11 @@ use objc2_foundation::{ns_string, NSNotification, NSNotificationCenter};
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, Once};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Runtime};
 
 static PROTECT: AtomicBool = AtomicBool::new(true);
 static INSTALLED: Once = Once::new();
-static APP: Mutex<Option<AppHandle>> = Mutex::new(None);
+static ON_SCREENSHOT: Mutex<Option<Box<dyn Fn() + Send + Sync>>> = Mutex::new(None);
 
 /// 自定义 tag，用来找到并摘掉遮罩，避免叠多层。
 const COVER_TAG: isize = 0x5343_5254;
@@ -41,8 +41,12 @@ unsafe impl RefEncode for CGRect {
     const ENCODING_REF: Encoding = Encoding::Pointer(&Self::ENCODING);
 }
 
-pub fn install(app: &AppHandle) {
-    *APP.lock().unwrap_or_else(|e| e.into_inner()) = Some(app.clone());
+pub fn install<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    *ON_SCREENSHOT.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some(Box::new(move || {
+            let _ = app.emit("screen-captured", ());
+        }));
     INSTALLED.call_once(|| unsafe {
         install_observers();
     });
@@ -76,9 +80,9 @@ unsafe fn install_observers() {
         if !PROTECT.load(Ordering::SeqCst) {
             return;
         }
-        let app = APP.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        if let Some(app) = app {
-            let _ = app.emit("screen-captured", ());
+        let cb = ON_SCREENSHOT.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(cb) = cb.as_ref() {
+            cb();
         }
     });
 

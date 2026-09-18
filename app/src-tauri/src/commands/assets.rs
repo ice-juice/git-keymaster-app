@@ -517,15 +517,34 @@ pub fn open_url(url: String) -> Result<()> {
 
 #[cfg(target_os = "ios")]
 fn open_http_url_ios(url: &str) -> Result<()> {
+    use objc2::MainThreadMarker;
     use objc2_foundation::{NSString, NSURL};
     use objc2_ui_kit::UIApplication;
-    let ns = NSString::from_str(url);
-    let nsurl = unsafe { NSURL::URLWithString(&ns) }
-        .ok_or_else(|| AppError::Invalid("链接格式无效".into()))?;
-    #[allow(deprecated)]
-    let ok = unsafe { UIApplication::sharedApplication().openURL(&nsurl) };
-    if !ok {
-        return Err(AppError::Io("打开链接失败".into()));
+
+    fn open_now(url: &str, mtm: MainThreadMarker) -> Result<()> {
+        let ns = NSString::from_str(url);
+        let nsurl = unsafe { NSURL::URLWithString(&ns) }
+            .ok_or_else(|| AppError::Invalid("链接格式无效".into()))?;
+        #[allow(deprecated)]
+        let ok = unsafe { UIApplication::sharedApplication(mtm).openURL(&nsurl) };
+        if !ok {
+            return Err(AppError::Io("打开链接失败".into()));
+        }
+        Ok(())
     }
-    Ok(())
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        return open_now(url, mtm);
+    }
+
+    // Tauri 命令线程通常不是 UIKit 主线程；sharedApplication 必须带着 MainThreadMarker。
+    let url = url.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    dispatch2::DispatchQueue::main().exec_sync(move || {
+        let outcome = MainThreadMarker::new()
+            .ok_or_else(|| AppError::Io("打开链接失败".into()))
+            .and_then(|mtm| open_now(&url, mtm));
+        let _ = tx.send(outcome);
+    });
+    rx.recv().map_err(|_| AppError::Io("打开链接失败".into()))?
 }

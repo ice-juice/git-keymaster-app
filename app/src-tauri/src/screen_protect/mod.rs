@@ -66,7 +66,8 @@ pub fn init<R: Runtime>() -> TauriPlugin<R> {
             }
             #[cfg(target_os = "ios")]
             {
-                ios::install(app.handle());
+                let _ = api;
+                ios::install(app);
             }
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
