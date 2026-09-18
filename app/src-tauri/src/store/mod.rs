@@ -285,7 +285,8 @@ pub fn list_icon_hashes(vault: &Vault) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Identity, KeyRecord};
+    use crate::model::{AccountSecret, Identity, KeyRecord};
+    use std::collections::HashMap;
     use crate::vault::header::KdfParams;
     use crate::vault::kdf::{ITERS_FLOOR, MEM_FLOOR_KIB};
 
@@ -363,12 +364,49 @@ mod tests {
         let mut s = Secrets::default();
         s.key_passphrases.insert("k1".into(), "s3cr3t-pass".into());
         s.github_pat = Some("ghp_xxx".into());
+        s.gitlab_pat = Some("glpat-xxx".into());
+        s.gitee_pat = Some("gitee_xxx".into());
         save_secrets(&v, &s).unwrap();
         let raw = std::fs::read(secrets_path(&v)).unwrap();
-        assert!(!String::from_utf8_lossy(&raw).contains("s3cr3t-pass"));
+        let raw_s = String::from_utf8_lossy(&raw);
+        assert!(!raw_s.contains("s3cr3t-pass"));
+        assert!(!raw_s.contains("glpat-xxx"));
+        assert!(!raw_s.contains("gitee_xxx"));
         let got = load_secrets(&v).unwrap();
         assert_eq!(got.key_passphrases.get("k1").unwrap(), "s3cr3t-pass");
         assert_eq!(got.github_pat.as_deref(), Some("ghp_xxx"));
+        assert_eq!(got.gitlab_pat.as_deref(), Some("glpat-xxx"));
+        assert_eq!(got.gitee_pat.as_deref(), Some("gitee_xxx"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn account_extra_fields_encrypted_on_disk() {
+        let (v, root) = unlocked_vault();
+        let mut s = Secrets::default();
+        let mut extra = HashMap::new();
+        extra.insert("recovery".into(), "secret-answer-xyz".into());
+        s.account_secrets.insert(
+            "acc1".into(),
+            AccountSecret {
+                password: "plain-pw-secret".into(),
+                extra_fields: extra,
+                history: vec![],
+            },
+        );
+        save_secrets(&v, &s).unwrap();
+        let raw = std::fs::read(secrets_path(&v)).unwrap();
+        let text = String::from_utf8_lossy(&raw);
+        assert!(!text.contains("plain-pw-secret"));
+        assert!(!text.contains("secret-answer-xyz"));
+        let got = load_secrets(&v).unwrap();
+        assert_eq!(
+            got.account_secrets
+                .get("acc1")
+                .and_then(|a| a.extra_fields.get("recovery"))
+                .map(String::as_str),
+            Some("secret-answer-xyz")
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -257,6 +257,12 @@ pub fn import_backup(
     if payload.secrets.github_pat.is_some() && (!merge || current_secrets.github_pat.is_none()) {
         current_secrets.github_pat = payload.secrets.github_pat.clone();
     }
+    if payload.secrets.gitlab_pat.is_some() && (!merge || current_secrets.gitlab_pat.is_none()) {
+        current_secrets.gitlab_pat = payload.secrets.gitlab_pat.clone();
+    }
+    if payload.secrets.gitee_pat.is_some() && (!merge || current_secrets.gitee_pat.is_none()) {
+        current_secrets.gitee_pat = payload.secrets.gitee_pat.clone();
+    }
     let current_totp = if merge {
         store::load_totp(vault).unwrap_or_default()
     } else {

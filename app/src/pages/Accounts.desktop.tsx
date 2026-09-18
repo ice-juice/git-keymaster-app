@@ -3,10 +3,16 @@ import { useTranslation } from "react-i18next";
 import { PageHead } from "../ui/common";
 import { useAccountsModel } from "../shared/hooks/useAccountsModel";
 import { AccountsDialogs, AccountsFilters, AccountsList } from "./Accounts.shared";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 export function AccountsDesktop() {
   const { t } = useTranslation();
   const m = useAccountsModel();
+  useItemFocus(true, () => {
+    m.setGroup("全部");
+    m.setQ("");
+    m.setCollapsed({});
+  });
 
   return (
     <div className="stack-lg">

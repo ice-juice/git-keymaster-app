@@ -3941,6 +3941,40 @@ html[data-platform="mobile"] .wizard-overlay > .dialog-card {
   overflow: auto;
 }
 
+html[data-platform="mobile"] .pw-gen-touch,
+html[data-platform="mobile"] .extra-field-touch {
+  min-height: 44px;
+  min-width: 44px;
+}
+html[data-platform="mobile"] .pw-gen-pop {
+  left: 0;
+  right: auto;
+  width: min(260px, calc(100vw - 28px));
+  min-width: 0;
+  padding: 10px 12px;
+  gap: 4px;
+}
+html[data-platform="mobile"] .pw-gen-row,
+html[data-platform="mobile"] .pw-gen-check {
+  min-height: 30px;
+}
+html[data-platform="mobile"] .extra-field-row.compact {
+  grid-template-columns: 1fr;
+}
+html[data-platform="mobile"] .palette-overlay {
+  padding: max(12px, var(--km-safe-top)) 10px 16px;
+  align-items: stretch;
+}
+html[data-platform="mobile"] .palette-panel {
+  width: 100%;
+  max-height: none;
+  flex: 1;
+  border-radius: 16px;
+}
+html[data-platform="mobile"] .palette-item {
+  min-height: 48px;
+}
+
 
 
 

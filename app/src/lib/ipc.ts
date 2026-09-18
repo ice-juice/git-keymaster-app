@@ -199,12 +199,24 @@ export interface AgentStatus {
   keys: AgentKeyResolved[];
   unify: AgentUnifyStatus;
 }
+export type GitProvider = "github" | "gitlab" | "gitee";
+
+export type ProbeKind =
+  | "sshOk"
+  | "publicOwner"
+  | "publicNoClaim"
+  | "repoMissing"
+  | "keyMissing"
+  | "noAccess"
+  | "networkSsh";
+
 export interface Candidate {
   identityId: string;
   identityName: string;
   hostAlias: string;
   confidence: "certain" | "veryHigh" | "mediumHigh" | "low";
   basis: string;
+  probeKind?: ProbeKind;
 }
 export interface Inference {
   rewrittenUrl: string | null;
@@ -537,6 +549,7 @@ export const api = {
 
   // repo (M5)
   resolveUrl: (url: string) => invoke<Inference>("resolve_url", { url }),
+  probeUrlIdentity: (url: string) => invoke<Inference>("probe_url_identity", { url }),
   scanRepos: (root: string, maxDepth?: number) => invoke<RepoInfo[]>("scan_repos", { root, maxDepth }),
   scanAndImportRepos: (root: string, maxDepth?: number) =>
     invoke<ImportScanResult>("scan_and_import_repos", { root, maxDepth }),
@@ -557,6 +570,29 @@ export const api = {
   testGithubPat: () => invoke<string>("test_github_pat"),
   listGithubOrgs: () => invoke<string[]>("list_github_orgs"),
   uploadPublicKey: (keyId: string, title: string) => invoke<void>("upload_public_key", { keyId, title }),
+  gitPatStatus: (provider: GitProvider) =>
+    invoke<{ configured: boolean }>("git_pat_status", { provider }),
+  revealGitPat: (provider: GitProvider, password?: string | null) =>
+    invoke<string>("reveal_git_pat", { provider, password: password ?? null }),
+  setGitPat: (provider: GitProvider, token: string) =>
+    invoke<void>("set_git_pat", { provider, token }),
+  clearGitPat: (provider: GitProvider) => invoke<void>("clear_git_pat", { provider }),
+  testGitPat: (provider: GitProvider) => invoke<string>("test_git_pat", { provider }),
+  listGitOrgs: (provider: GitProvider) => invoke<string[]>("list_git_orgs", { provider }),
+  uploadGitPublicKey: (provider: GitProvider, keyId: string, title: string) =>
+    invoke<void>("upload_git_public_key", { provider, keyId, title }),
+  ghCliStatus: () =>
+    invoke<{ installed: boolean; loggedIn: boolean; login: string | null }>("gh_cli_status"),
+  ghCliLogin: () =>
+    invoke<{
+      started: boolean;
+      deviceCode: string | null;
+      installed: boolean;
+      loggedIn: boolean;
+      login: string | null;
+    }>("gh_cli_login"),
+  ghCliCancel: () =>
+    invoke<{ installed: boolean; loggedIn: boolean; login: string | null }>("gh_cli_cancel"),
 
   // backup (M6)
   exportVaultBackup: (destPath: string, password: string, accessPassword: string) =>
@@ -648,7 +684,7 @@ export const api = {
   accountDelete: (id: string) => invoke<void>("account_delete", { id }),
   accountSaveGroups: (groups: GroupMeta[]) => invoke<void>("account_save_groups", { groups }),
   accountRevealPassword: (id: string, password?: string) =>
-    invoke<string>("account_reveal_password", { id, password: password ?? null }),
+    invoke<AccountReveal>("account_reveal_password", { id, password: password ?? null }),
   accountTouch: (id: string) => invoke<void>("account_touch", { id }),
   accountHistoryList: (id: string) => invoke<HistoryMeta[]>("account_history_list", { id }),
   accountRevealHistory: (id: string, index: number, password?: string) =>
@@ -700,6 +736,8 @@ export const api = {
   setRevealGraceMinutes: (minutes: number) => invoke<number>("set_reveal_grace_minutes", { minutes }),
   setClipboardClearSeconds: (seconds: number) =>
     invoke<number>("set_clipboard_clear_seconds", { seconds }),
+  getClipboardWatch: () => invoke<boolean>("get_clipboard_watch"),
+  setClipboardWatch: (enabled: boolean) => invoke<boolean>("set_clipboard_watch", { enabled }),
   setAccountHistoryLimit: (limit: number) => invoke<number>("set_account_history_limit", { limit }),
   getScreenCaptureSettings: () => invoke<ScreenCaptureSettings>("get_screen_capture_settings"),
   setAllowScreenshots: (allow: boolean) =>
@@ -892,6 +930,12 @@ export interface AccountEntry {
   createdAt: string;
   updatedAt: string;
   hasPassword?: boolean;
+  extraFieldKeys?: string[];
+}
+
+export interface AccountReveal {
+  password: string;
+  extraFields: Record<string, string>;
 }
 
 export interface TotpCode {
@@ -1017,4 +1061,5 @@ export interface AccountUpsertArgs {
   pinned?: boolean;
   sortOrder?: number;
   totpRef?: string;
+  extraFields?: Record<string, string>;
 }

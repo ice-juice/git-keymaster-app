@@ -71,6 +71,8 @@
   },
   "nav": {
     "group": "Navigation",
+    "groupGit": "Git Workspace",
+    "groupVault": "Privacy Vault",
     "overview": "Identities",
     "keys": "Keys",
     "config": "SSH config",
@@ -464,6 +466,11 @@
     "min5": "5 minutes (recommended)",
     "min15": "15 minutes",
     "min30": "30 minutes",
+    "clipWatch": "Clipboard-aware clone",
+    "clipWatchTip": "Off by default. When on, only Git repo URLs are recognized and a light hint is shown. Anything else is discarded immediately and never logged.",
+    "clipWatchHint": "The clipboard is not read while locked. Turn this on only on a trusted machine.",
+    "clipWatchOn": "On — copied Git URLs suggest a clone",
+    "clipWatchOff": "Off (default, no polling)",
     "clipClear": "Clear clipboard after copy",
     "clipNever": "Don’t clear",
     "sec10": "10 seconds",
@@ -490,13 +497,13 @@
     "wsMinutes": "{{n}} min",
     "wsSleepLock": "Lock on sleep / lock screen",
     "wsSleepLockHint": "Controlled by the local lockOnSleep setting. See the security checklist.",
-    "patTitle": "GitHub personal access token",
+    "patTitle": "Git forge personal access tokens",
     "backupTitle": "Backup and cloud sync",
     "backupIntro": "Offline encrypted backup (.gambackup) and restore, plus end-to-end zero-knowledge sync to S3 / Cloudflare R2.",
     "gotoSync": "Open cloud sync and backup →",
     "navAria": "Settings sections",
     "dangerTitle": "Danger · factory reset",
-    "patTokenPh": "ghp_… or github_pat_…",
+    "patTokenPh": "Paste the PAT for the selected host",
     "currentPwPh": "Current access password",
     "newPwPh": "New access password",
     "confirmPwPh": "Re-enter to confirm",
@@ -616,20 +623,102 @@
     "phrase": "清空"
   },
   "pat": {
-    "needToken": "Paste a GitHub PAT",
-    "saved": "PAT saved. GitHub account {{name}}",
-    "tested": "Verified. GitHub account {{name}}",
+    "needToken": "Paste a {{platform}} PAT",
+    "saved": "PAT saved. {{platform}} account {{name}}",
+    "tested": "Verified. {{platform}} account {{name}}",
     "cleared": "PAT cleared",
-    "hint": "Used to add public keys to GitHub and import org lists. Create a classic token with write:public_key or admin:public_key. The token is stored in the vault and never shown again here.",
+    "cardHint": {
+      "github": "Used to upload public keys and import organizations. See the guide for the scopes to check.",
+      "gitlab": "Used to upload public keys and import groups. See the guide for the scopes to check.",
+      "gitee": "Used to upload public keys and import organizations. See the guide for the scopes to check."
+    },
+    "guideOpen": "How to create a token",
+    "guideTitle": "{{platform}} token setup",
+    "guideNote": "The token is stored in the vault and never shown again here. It is verified immediately after save.",
+    "guide": {
+      "github": {
+        "intro": "In GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic), choose Generate new token (classic). Do not use Fine-grained.",
+        "must": "Required scopes",
+        "scopes": [
+          "write:public_key — add SSH public keys to the account",
+          "read:org — import organization lists"
+        ],
+        "optional": "Publishing Releases (optional)",
+        "extra": [
+          "repo — create Releases on private and public repos",
+          "public_repo — enough if you only publish public repos"
+        ]
+      },
+      "gitlab": {
+        "intro": "Create a token in GitLab → Preferences → Access Tokens.",
+        "must": "Required scopes",
+        "scopes": [
+          "api — read account/groups, upload SSH keys; also covers publishing Releases"
+        ],
+        "optional": "",
+        "extra": []
+      },
+      "gitee": {
+        "intro": "Create a token in Gitee → Settings → Private tokens.",
+        "must": "Required scopes",
+        "scopes": [
+          "user_info — read the account",
+          "projects — orgs / repo-related access"
+        ],
+        "optional": "",
+        "extra": []
+      }
+    },
     "status": "Status",
     "configured": "Configured",
     "unconfigured": "Not configured",
+    "savedToken": "Saved token",
+    "show": "Show",
+    "hide": "Hide",
+    "replace": "Replace token",
+    "reauthHint": "Viewing or copying the token requires the workspace access password.",
     "newToken": "Paste a new token",
-    "tokenTip": "Create it in GitHub Settings → Developer settings → Personal access tokens. It is verified immediately after save.",
+    "tokenTip": {
+      "github": "Open the setup guide to see which GitHub classic scopes to check.",
+      "gitlab": "Open the setup guide to see which GitLab scopes to check.",
+      "gitee": "Open the setup guide to see which Gitee scopes to check."
+    },
+    "tokenPh": {
+      "github": "ghp_… or github_pat_…",
+      "gitlab": "glpat-…",
+      "gitee": "Paste a Gitee private token"
+    },
+    "platformLabel": "Host",
+    "platform": {
+      "github": "GitHub",
+      "gitlab": "GitLab",
+      "gitee": "Gitee"
+    },
     "saveTest": "Save and verify",
+    "working": "Verifying…",
     "test": "Test connection",
     "clear": "Clear",
-    "openGithub": "Open GitHub token page"
+    "openGithub": "Open GitHub token page",
+    "openTokenPage": "Open {{platform}} token page"
+  },
+  "ghCli": {
+    "title": "GitHub CLI",
+    "hint": "Sign the local gh CLI in so the terminal and Cursor can publish Releases. This opens GitHub’s device login page; the one-time code appears here and in the console. gh keeps the token; it is not stored here.",
+    "status": "Status",
+    "missing": "GitHub CLI is not installed",
+    "loggedOut": "Installed, not signed in",
+    "loggedIn": "Signed in",
+    "login": "Sign in with browser",
+    "relogin": "Sign in again",
+    "cancel": "Cancel sign-in",
+    "cancelled": "GitHub CLI sign-in was cancelled",
+    "loggingIn": "Getting the one-time code…",
+    "deviceCode": "Enter this code in the 8 boxes on GitHub",
+    "pasteCode": "The code is copied. Paste it in the browser, click Continue, and this page will show Signed in.",
+    "noCode": "No code yet. Check the one-time code line in the console window, or sign in again.",
+    "install": "Open install guide",
+    "ok": "Signed in to GitHub CLI as {{name}}",
+    "okNoName": "GitHub CLI is signed in"
   },
   "pages": {
     "overviewTitle": "Identities",
@@ -1300,7 +1389,40 @@
     "rename": "Rename",
     "detectEmpty": "Enter a site name, or paste a login URL.",
     "detectIcon": "Will use the “{{name}}” icon.",
-    "detectName": "We’ll match an icon from the site name on save."
+    "detectName": "We’ll match an icon from the site name on save.",
+    "generate": "Generate",
+    "generateOpts": "Generator options",
+    "pwLength": "Length",
+    "pwUpper": "Uppercase",
+    "pwLower": "Lowercase",
+    "pwDigits": "Digits",
+    "pwSymbols": "Symbols",
+    "pwNoAmbiguous": "Skip look-alikes (0/O/1/l/I)",
+    "pwNeedCharset": "Pick at least one character set",
+    "extraFields": "Custom fields",
+    "extraFieldsTip": "Security questions, recovery email, and similar. Values are encrypted like passwords and need re-auth to view.",
+    "extraFieldKeyPh": "e.g. Recovery question",
+    "extraFieldValuePh": "Encrypted on this device",
+    "addExtraField": "Add field",
+    "removeExtraField": "Remove field",
+    "revealField": "Show field",
+    "hideField": "Hide field",
+    "copyField": "Copy field"
+  },
+  "palette": {
+    "title": "Search",
+    "placeholder": "Search identities, logins, 2FA, files, notes…",
+    "empty": "No matching items",
+    "emptyHint": "Try a site, username, title, or tag",
+    "loading": "Building index…",
+    "open": "Open search",
+    "kind": {
+      "identity": "Identity",
+      "totp": "2FA",
+      "account": "Login",
+      "file": "File",
+      "note": "Note"
+    }
   },
   "overview": {
     "healthTitle": "Recheck config, agent, and SSH connectivity for all identities",
@@ -1495,6 +1617,8 @@
     "empty": "(empty)"
   },
   "repos": {
+    "tabList": "Managed Repos",
+    "tabClone": "Clone Repository",
     "scan": "Scan",
     "clone": "Clone",
     "init": "Init",
@@ -1553,7 +1677,19 @@
     "recommend": "Recommended identity: ",
     "alias": "(alias {{alias}})",
     "basis": "Reason: {{basis}}",
-    "needProbe": "Identity is unclear. Set ownership marks or probe with a PAT.",
+    "needProbe": "Identity is unclear. Click Probe to check whether the repo exists and who has access. Failures distinguish missing repo, no permission, unloaded key, or network/SSH issues — not all labeled unreachable. You can also set ownership marks first.",
+    "probe": "Probe access",
+    "probing": "Probing…",
+    "probeNone": "Probe did not pick a definite identity. Check each identity’s reason, pick one manually, or set ownership marks.",
+    "probeKind": {
+      "sshOk": "Reachable via SSH git ls-remote",
+      "publicOwner": "Public repo and owner matches this identity; SSH did not succeed, so it is not marked unreachable",
+      "publicNoClaim": "Public repo is reachable; this identity has no ownership match",
+      "repoMissing": "Repository does not exist or is not visible to this identity",
+      "keyMissing": "SSH key is not loaded or the public key is not registered",
+      "noAccess": "This identity does not have access",
+      "networkSsh": "Network or SSH configuration problem; probe did not finish"
+    },
     "noMatch": "No matching identity.",
     "useIdentity": "Identity for clone",
     "cloneLocal": "Clone / init locally",
@@ -1573,6 +1709,13 @@
     "running": "Working…",
     "urlPh": "git@github.com:owner/repo.git or https://github.com/owner/repo",
     "identityOption": "{{name}} ({{alias}})"
+  },
+  "clipboardHint": {
+    "detected": "Found {{repo}}. Suggested identity: {{name}}",
+    "detectedNoId": "Found {{repo}}. No identity matched yet",
+    "clone": "Clone",
+    "copyAlias": "Copy alias",
+    "dismiss": "Dismiss"
   },
   "identity": {
     "stepInfo": "Details",
@@ -1655,11 +1798,19 @@
     "openSshSettings": "Open {{label}} SSH settings",
     "uploaded": "Uploaded",
     "uploadPat": "Upload with PAT",
-    "pat": "GitHub PAT",
-    "patTip": "A classic token needs write:public_key or admin:public_key to add the key for you. It is stored in the vault and never shown again. Or skip this and paste the public key yourself.",
-    "patSavedAccount": "PAT saved (GitHub account {{login}}). You can upload now, or change/clear it in Settings.",
+    "pat": "{{platform}} PAT",
+    "patTip": {
+      "github": "Use a classic token (not Fine-grained). Check write:public_key and read:org. To publish Releases, also check repo. It is stored in the vault. Or skip this and paste the public key yourself.",
+      "gitlab": "Check only api to upload SSH keys, import groups, and publish Releases. It is stored in the vault. Or skip this and paste the public key yourself.",
+      "gitee": "The token needs the matching scopes to add the key for you. It is stored in the vault. Or skip this and paste the public key yourself."
+    },
+    "patSavedAccount": "PAT saved ({{platform}} account {{login}}). You can upload now, or change/clear it in Settings.",
     "patSaved": "PAT saved. You can upload now, or change/clear it in Settings.",
-    "patNeed": "No PAT yet. In GitHub → Settings → Developer settings → Personal access tokens, create a classic token with write:public_key (or admin:public_key), then paste it below.",
+    "patNeed": {
+      "github": "No PAT yet. In GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic), choose Generate new token (classic). Check write:public_key and read:org; to publish Releases also check repo. Then paste it below.",
+      "gitlab": "No PAT yet. In GitLab → Preferences → Access Tokens, create a token with the api scope, then paste it below.",
+      "gitee": "No PAT yet. In Gitee → Settings → Private tokens, create a token and paste it below."
+    },
     "savePat": "Save PAT",
     "summaryName": "Note name",
     "summaryAlias": "Host alias",
@@ -1673,8 +1824,8 @@
     "configPending": "Not written yet — start verification to save",
     "configBackup": "Original config backed up: {{path}}",
     "noKeysUrl": "Open this host’s SSH key settings yourself",
-    "needPatFirst": "Save a GitHub PAT below, or copy the public key and add it manually",
-    "uploadedMsg": "Public key uploaded to GitHub with the PAT",
+    "needPatFirst": "Save a {{platform}} PAT below, or copy the public key and add it manually",
+    "uploadedMsg": "Public key uploaded to {{platform}} with the PAT",
     "connVerify": "Connection test",
     "connVerifyTip": "The identity is not registered yet. This stages Host, loads the private key into ssh-agent, then runs ssh -T. Finish creates the identity; cancel removes Host and unloads the unbound key.",
     "willRun": "Will run ssh -T git@{{alias}}. Strict mode injects the private key first and unloads it if you cancel.",
@@ -1690,7 +1841,7 @@
     "ownersTip": "Owners / orgs / path prefixes for this identity. Pasted repo URLs look here first. Supports acme-* wildcards and multi-segment paths like git.internal/platform. One per line.",
     "ownersPh": "e.g.\nnova-labs\nacme-*\ngit.internal/platform",
     "ownersHint": "Examples: nova-labs (account), kiln-org (org), acme-* (wildcard), git.internal/platform (path)",
-    "importOrgs": "Import GitHub orgs (PAT required)",
+    "importOrgs": "Import {{platform}} orgs (PAT required)",
     "orgsImported": "Imported {{count}} org(s). You can edit the list.",
     "noOrgs": "This account has no orgs",
     "cancelBack": "Cancel and go back",

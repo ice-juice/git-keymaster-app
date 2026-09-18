@@ -13,8 +13,32 @@ import { resolvePlatform } from "../../platform/resolve";
 import { resolvePlatformBrand, platformFamily } from "../../lib/accountInput";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
+import type { ExtraFieldDraft } from "../../ui/AccountExtraFields";
 import { useApp } from "../../store";
 import { i18n } from "../../lib/i18n";
+
+export type { ExtraFieldDraft };
+
+export type AccountEditorState = Partial<AccountEntry> & {
+  password?: string;
+  isPlatformLocked?: boolean;
+  extraFieldsDraft?: ExtraFieldDraft[];
+  extraFieldsDirty?: boolean;
+};
+
+function initExtraDraft(value: AccountEditorState): AccountEditorState {
+  if (value.extraFieldsDraft) return value;
+  return {
+    ...value,
+    extraFieldsDraft: (value.extraFieldKeys ?? []).map((key) => ({
+      key,
+      value: "",
+      revealed: false,
+      existing: true,
+    })),
+    extraFieldsDirty: false,
+  };
+}
 
 export function useAccountsModel() {
   const { writesLocked } = useApp();
@@ -29,7 +53,17 @@ export function useAccountsModel() {
   const [reauth, setReauth] = useState<null | ((pw: string) => Promise<void>)>(null);
   const reauthCancel = useRef<(() => void) | null>(null);
   const [revealCfg, setRevealCfg] = useState({ grace: 5, clip: 20 });
-  const [editor, setEditor] = useState<null | (Partial<AccountEntry> & { password?: string; isPlatformLocked?: boolean })>(null);
+  const [editor, setEditorRaw] = useState<AccountEditorState | null>(null);
+
+  const setEditor = useCallback(
+    (next: AccountEditorState | null | ((prev: AccountEditorState | null) => AccountEditorState | null)) => {
+      setEditorRaw((prev) => {
+        const resolved = typeof next === "function" ? next(prev) : next;
+        return resolved ? initExtraDraft(resolved) : null;
+      });
+    },
+    [],
+  );
   const [editingPlatformModal, setEditingPlatformModal] = useState<null | { platform: string; icon?: string }>(null);
   const [historyFor, setHistoryFor] = useState<null | { id: string; items: HistoryMeta[]; shown?: Record<number, string> }>(null);
   const [pwShown, setPwShown] = useState<Record<string, string>>({});
@@ -195,9 +229,9 @@ export function useAccountsModel() {
   }, [filtered, builtins]);
 
   async function revealPw(id: string) {
-    const pw = await withAuth((p) => api.accountRevealPassword(id, p));
-    if (pw) {
-      setPwShown((m) => ({ ...m, [id]: pw }));
+    const revealed = await withAuth((p) => api.accountRevealPassword(id, p));
+    if (revealed) {
+      setPwShown((m) => ({ ...m, [id]: revealed.password }));
       await api.accountTouch(id);
     }
   }
@@ -215,7 +249,7 @@ export function useAccountsModel() {
     if (!pw) {
       const got = await withAuth((p) => api.accountRevealPassword(id, p));
       if (!got) return;
-      pw = got;
+      pw = got.password;
       setPwShown((m) => ({ ...m, [id]: pw }));
     }
     try {
@@ -248,6 +282,24 @@ export function useAccountsModel() {
       return;
     }
     triggerCopied(`totp-${totpId}`);
+  }
+
+  async function revealEditorFields(): Promise<Record<string, string> | undefined> {
+    if (!editor?.id) return {};
+    const revealed = await withAuth((p) => api.accountRevealPassword(editor.id!, p));
+    if (!revealed) return;
+    setEditor((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        extraFieldsDraft: (prev.extraFieldsDraft || []).map((row) =>
+          row.existing && !row.revealed
+            ? { ...row, value: revealed.extraFields[row.key] ?? row.value, revealed: true }
+            : row,
+        ),
+      };
+    });
+    return revealed.extraFields;
   }
 
   async function saveEditor() {
@@ -297,6 +349,24 @@ export function useAccountsModel() {
         return;
       }
       const cleanPassword = editor.password?.trim() || undefined;
+      let extraFields: Record<string, string> | undefined;
+      if (editor.extraFieldsDirty) {
+        let draft = editor.extraFieldsDraft || [];
+        if (editor.id && draft.some((row) => row.existing && !row.revealed && row.key.trim())) {
+          const revealed = await withAuth((p) => api.accountRevealPassword(editor.id!, p));
+          if (!revealed) return;
+          draft = draft.map((row) =>
+            row.existing && !row.revealed
+              ? { ...row, value: revealed.extraFields[row.key] ?? row.value, revealed: true }
+              : row,
+          );
+        }
+        extraFields = {};
+        for (const row of draft) {
+          const key = row.key.trim();
+          if (key) extraFields[key] = row.value;
+        }
+      }
       const args = {
         id: editor.id,
         platform,
@@ -310,6 +380,7 @@ export function useAccountsModel() {
         icon: brand.icon,
         pinned: editor.pinned,
         totpRef: editor.totpRef || undefined,
+        extraFields,
       };
       if (editor.id) await api.accountUpdate(args);
       else await api.accountAdd(args);
@@ -475,6 +546,7 @@ export function useAccountsModel() {
     copyPw,
     revealLinkedTotp,
     copyLinkedTotp,
+    revealEditorFields,
     saveEditor,
     saveGroup,
     reorderGroups,

@@ -212,6 +212,7 @@ export function NoteIndexItem({ e, m }: { e: NoteEntry; m: NotesModel }) {
         (checked ? " is-checked" : "") +
         (m.selectionMode ? " is-selecting" : "")
       }
+      data-focus-id={e.id}
       onContextMenu={(ev) => {
         ev.preventDefault();
         setMenu({ x: ev.clientX, y: ev.clientY });

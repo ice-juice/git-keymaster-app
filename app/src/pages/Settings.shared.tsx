@@ -15,11 +15,13 @@ import {
   FileCog,
   Play,
   Fingerprint,
+  Terminal,
 } from "lucide-react";
 import {
   api,
   errMessage,
   type BiometricStatus,
+  type GitProvider,
   type NetworkProxy,
   type ProxyTestResult,
   type SecurityChecklist,
@@ -30,11 +32,16 @@ import {
   type UpdateSource,
 } from "../lib/ipc";
 import { writeClipboard } from "../lib/clipboard";
+import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../lib/secretsUi";
+import { notifyClipboardWatchChanged } from "../shared/clipboardWatch";
 import { useApp } from "../store";
 import { THEME_OPTIONS } from "../lib/theme";
 import { getNotesAutoSave, setNotesAutoSaveStored, UNLOCK_ANIM_STYLES } from "../lib/prefs";
 import { PageHead, Card, FieldLabel, Badge, ErrorDialog } from "../ui/common";
+import { PatGuideDialog } from "../ui/PatGuideDialog";
+import { ReauthDialog } from "../ui/ReauthDialog";
 import { LanguageCard } from "../ui/LanguageCard";
+import { isMobilePlatform } from "../lib/platform";
 
 function closeActionLabel(action: "tray" | "quit" | null | undefined, t: (key: string) => string): string {
   if (action === "tray") return t("settings.closeTray");
@@ -42,45 +49,108 @@ function closeActionLabel(action: "tray" | "quit" | null | undefined, t: (key: s
   return t("settings.closeAsk");
 }
 
+const PAT_PROVIDERS: { id: GitProvider; tokenUrl: string }[] = [
+  { id: "github", tokenUrl: "https://github.com/settings/tokens/new" },
+  { id: "gitlab", tokenUrl: "https://gitlab.com/-/user_settings/personal_access_tokens" },
+  { id: "gitee", tokenUrl: "https://gitee.com/profile/personal_access_tokens" },
+];
+
+const PAT_MASK = "••••••••••••••••••••";
+
 export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
   const { t } = useTranslation();
+  const [provider, setProvider] = useState<GitProvider>("github");
   const [configured, setConfigured] = useState(false);
   const [login, setLogin] = useState("");
   const [token, setToken] = useState("");
+  const [revealed, setRevealed] = useState<string | null>(null);
+  const [plain, setPlain] = useState(false);
+  const [replacing, setReplacing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
+  const [guideOpen, setGuideOpen] = useState(false);
+  const [reauth, setReauth] = useState<null | ((pw: string) => Promise<void>)>(null);
+  const reauthCancel = useRef<(() => void) | null>(null);
+  const platLabel = t(`pat.platform.${provider}`);
+  const showSaved = configured && !replacing;
 
-  async function refresh() {
-    const s = await api.githubPatStatus();
+  async function refresh(next = provider) {
+    const s = await api.gitPatStatus(next);
     setConfigured(s.configured);
-    if (s.configured) {
-      try {
-        setLogin(await api.testGithubPat());
-      } catch {
-        setLogin("");
-      }
-    } else {
+    if (!s.configured) {
       setLogin("");
+      setRevealed(null);
+      setPlain(false);
+      setReplacing(false);
     }
   }
 
+  async function withAuth<T>(fn: (pw?: string) => Promise<T>): Promise<T | undefined> {
+    try {
+      return await fn();
+    } catch (e) {
+      if (!isNeedReauth(e)) {
+        setErr(errMessage(e));
+        return;
+      }
+      if (await tryBiometricReauth()) {
+        try {
+          return await fn();
+        } catch (err) {
+          if (!isNeedReauth(err)) {
+            setErr(errMessage(err));
+            return;
+          }
+        }
+      }
+      return await new Promise<T | undefined>((resolve) => {
+        reauthCancel.current = () => {
+          reauthCancel.current = null;
+          setReauth(null);
+          resolve(undefined);
+        };
+        setReauth(() => async (pw: string) => {
+          try {
+            const r = await fn(pw);
+            reauthCancel.current = null;
+            setReauth(null);
+            resolve(r);
+          } catch (err) {
+            throw new Error(errMessage(err));
+          }
+        });
+      });
+    }
+  }
+
+  async function ensureRevealed(): Promise<string | undefined> {
+    if (revealed) return revealed;
+    const token = await withAuth((pw) => api.revealGitPat(provider, pw));
+    if (token) setRevealed(token);
+    return token;
+  }
+
   useEffect(() => {
-    refresh().catch((e) => setErr(errMessage(e)));
-  }, []);
+    refresh(provider).catch((e) => setErr(errMessage(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider]);
 
   async function save() {
-    if (!token.trim()) return setErr(t("pat.needToken"));
+    if (!token.trim()) return setErr(t("pat.needToken", { platform: platLabel }));
     setErr("");
     setMsg("");
     setBusy(true);
     try {
-      await api.setGithubPat(token.trim());
-      const name = await api.testGithubPat();
+      await api.setGitPat(provider, token.trim());
+      const name = await api.testGitPat(provider);
       setLogin(name);
       setConfigured(true);
       setToken("");
-      setMsg(t("pat.saved", { name }));
+      setRevealed(null);
+      setPlain(false);
+      setReplacing(false);
+      setMsg(t("pat.saved", { name, platform: platLabel }));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -93,9 +163,9 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
     setMsg("");
     setBusy(true);
     try {
-      const name = await api.testGithubPat();
+      const name = await api.testGitPat(provider);
       setLogin(name);
-      setMsg(t("pat.tested", { name }));
+      setMsg(t("pat.tested", { name, platform: platLabel }));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -108,9 +178,13 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
     setMsg("");
     setBusy(true);
     try {
-      await api.clearGithubPat();
+      await api.clearGitPat(provider);
       setConfigured(false);
       setLogin("");
+      setToken("");
+      setRevealed(null);
+      setPlain(false);
+      setReplacing(false);
       setMsg(t("pat.cleared"));
     } catch (e) {
       setErr(errMessage(e));
@@ -119,12 +193,56 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
     }
   }
 
+  const tokenPage = PAT_PROVIDERS.find((p) => p.id === provider)?.tokenUrl ?? PAT_PROVIDERS[0].tokenUrl;
+
   return (
     <div className="stack">
       <ErrorDialog message={err} onClose={() => setErr("")} />
       {msg && <div className="callout info">{msg}</div>}
+      {guideOpen && (
+        <PatGuideDialog provider={provider} tokenUrl={tokenPage} onClose={() => setGuideOpen(false)} />
+      )}
+      {reauth && (
+        <ReauthDialog
+          hint={t("pat.reauthHint")}
+          onCancel={() => reauthCancel.current?.()}
+          onConfirm={(pw) => reauth(pw)}
+        />
+      )}
       <div className="muted" style={{ fontSize: 12 }}>
-        {t("pat.hint")}
+        {t(`pat.cardHint.${provider}`)}
+      </div>
+      <div className="field">
+        <label className="field-label">{t("pat.platformLabel")}</label>
+        <div className="row" style={{ flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+          <select
+            className="input"
+            value={provider}
+            style={{ flex: 1, minWidth: 160 }}
+            onChange={(e) => {
+              setProvider(e.target.value as GitProvider);
+              setToken("");
+              setRevealed(null);
+              setPlain(false);
+              setReplacing(false);
+              setMsg("");
+              setErr("");
+            }}
+          >
+            {PAT_PROVIDERS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {t(`pat.platform.${p.id}`)}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn ghost sm" onClick={() => setGuideOpen(true)}>
+            {t("pat.guideOpen")}
+          </button>
+          <button type="button" className="btn ghost sm" onClick={() => api.openUrl(tokenPage)}>
+            <ExternalLink size={12} style={{ marginRight: 3 }} />
+            {t("pat.openTokenPage", { platform: platLabel })}
+          </button>
+        </div>
       </div>
       <div className="kv">
         <span className="muted">{t("pat.status")}</span>
@@ -137,31 +255,286 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
         </span>
       </div>
       <div className="field">
-        <FieldLabel name={t("pat.newToken")} tip={t("pat.tokenTip")} />
-        <input
-          className="input mono"
-          type="password"
-          autoComplete="off"
-          placeholder={t("settings.patTokenPh")}
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
+        <FieldLabel
+          name={showSaved ? t("pat.savedToken") : t("pat.newToken")}
+          tip={t(`pat.tokenTip.${provider}`)}
         />
+        {showSaved ? (
+          <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+            <input
+              className="input mono"
+              type={plain && revealed ? "text" : "password"}
+              autoComplete="off"
+              readOnly
+              value={plain && revealed ? revealed : PAT_MASK}
+              style={{ flex: 1, minWidth: 180, letterSpacing: plain && revealed ? "normal" : "0.12em" }}
+            />
+            <button
+              type="button"
+              className="btn sm"
+              disabled={busy}
+              onClick={() => {
+                void (async () => {
+                  if (plain && revealed) {
+                    setPlain(false);
+                    return;
+                  }
+                  const got = await ensureRevealed();
+                  if (got) setPlain(true);
+                })();
+              }}
+            >
+              {plain && revealed ? t("pat.hide") : t("pat.show")}
+            </button>
+            <button
+              type="button"
+              className="btn sm"
+              disabled={busy}
+              onClick={() => {
+                void (async () => {
+                  const got = await ensureRevealed();
+                  if (got) await copyWithClear(got);
+                })();
+              }}
+            >
+              {t("common.copy")}
+            </button>
+            <button
+              type="button"
+              className="btn ghost sm"
+              disabled={busy || writesLocked}
+              onClick={() => {
+                setReplacing(true);
+                setToken("");
+                setRevealed(null);
+                setPlain(false);
+              }}
+            >
+              {t("pat.replace")}
+            </button>
+          </div>
+        ) : (
+          <input
+            className="input mono"
+            type="password"
+            autoComplete="off"
+            placeholder={t(`pat.tokenPh.${provider}`)}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+          />
+        )}
       </div>
       <div className="row" style={{ flexWrap: "wrap", marginTop: 4 }}>
-        <button type="button" className="btn primary sm" disabled={busy || writesLocked || !token.trim()} onClick={save}>
-          {t("pat.saveTest")}
-        </button>
-        <button type="button" className="btn sm" disabled={busy || !configured} onClick={test}>
-          {t("pat.test")}
+        {!showSaved && (
+          <button type="button" className="btn primary sm" disabled={busy || writesLocked || !token.trim()} onClick={() => void save()}>
+            {busy ? t("pat.working") : t("pat.saveTest")}
+          </button>
+        )}
+        {replacing && (
+          <button
+            type="button"
+            className="btn ghost sm"
+            disabled={busy}
+            onClick={() => {
+              setReplacing(false);
+              setToken("");
+            }}
+          >
+            {t("common.cancel")}
+          </button>
+        )}
+        <button type="button" className="btn sm" disabled={busy || !configured} onClick={() => void test()}>
+          {busy ? t("pat.working") : t("pat.test")}
         </button>
         <button type="button" className="btn ghost sm" disabled={busy || writesLocked || !configured} onClick={clear}>
           {t("pat.clear")}
         </button>
-        <button type="button" className="btn ghost sm" onClick={() => api.openUrl("https://github.com/settings/tokens")}>
-          <ExternalLink size={12} style={{ marginRight: 3 }} />
-          {t("pat.openGithub")}
-        </button>
       </div>
+    </div>
+  );
+}
+
+const GH_CLI_INSTALL_URL = "https://cli.github.com/";
+const GH_CLI_DEVICE_URL = "https://github.com/login/device";
+
+export function GhCliSettings() {
+  const { t } = useTranslation();
+  const [installed, setInstalled] = useState(false);
+  const [loggedIn, setLoggedIn] = useState(false);
+  const [login, setLogin] = useState("");
+  const [deviceCode, setDeviceCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const cancelSeq = useRef(0);
+
+  async function refresh() {
+    const s = await api.ghCliStatus();
+    setInstalled(s.installed);
+    setLoggedIn(s.loggedIn);
+    setLogin(s.login ?? "");
+    return s;
+  }
+
+  useEffect(() => {
+    refresh().catch((e) => setErr(errMessage(e)));
+  }, []);
+
+  useEffect(() => {
+    if (!deviceCode || loggedIn) return;
+    const timer = window.setInterval(() => {
+      refresh()
+        .then((s) => {
+          if (s.loggedIn) {
+            setDeviceCode("");
+            setBusy(false);
+            setMsg(s.login ? t("ghCli.ok", { name: s.login }) : t("ghCli.okNoName"));
+          }
+        })
+        .catch(() => undefined);
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [deviceCode, loggedIn, t]);
+
+  async function loginWeb() {
+    setErr("");
+    setMsg("");
+    setDeviceCode("");
+    setBusy(true);
+    const seq = cancelSeq.current;
+    try {
+      await api.openUrl(GH_CLI_DEVICE_URL);
+      const s = await api.ghCliLogin();
+      if (seq !== cancelSeq.current) return;
+      setInstalled(s.installed);
+      setLoggedIn(s.loggedIn);
+      setLogin(s.login ?? "");
+      if (s.loggedIn) {
+        setMsg(s.login ? t("ghCli.ok", { name: s.login }) : t("ghCli.okNoName"));
+        setBusy(false);
+        return;
+      }
+      if (s.deviceCode) {
+        setDeviceCode(s.deviceCode);
+        setMsg(t("ghCli.pasteCode"));
+      } else {
+        setMsg(t("ghCli.noCode"));
+      }
+    } catch (e) {
+      setErr(errMessage(e));
+      refresh().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelLogin() {
+    setErr("");
+    cancelSeq.current += 1;
+    setBusy(true);
+    try {
+      const s = await api.ghCliCancel();
+      setInstalled(s.installed);
+      setLoggedIn(s.loggedIn);
+      setLogin(s.login ?? "");
+      setDeviceCode("");
+      setMsg(t("ghCli.cancelled"));
+    } catch (e) {
+      setErr(errMessage(e));
+      refresh().catch(() => undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="stack" id="setting-gh-cli">
+      <ErrorDialog message={err} onClose={() => setErr("")} />
+      {msg && <div className="callout info">{msg}</div>}
+      <div className="muted" style={{ fontSize: 12 }}>
+        {t("ghCli.hint")}
+      </div>
+      <div className="kv">
+        <span className="muted">{t("ghCli.status")}</span>
+        <span>
+          {!installed ? (
+            <Badge kind="warn">{t("ghCli.missing")}</Badge>
+          ) : loggedIn ? (
+            <Badge kind="good">
+              {t("ghCli.loggedIn")}
+              {login ? ` · ${login}` : ""}
+            </Badge>
+          ) : (
+            <Badge kind="warn">{t("ghCli.loggedOut")}</Badge>
+          )}
+        </span>
+      </div>
+      {deviceCode && !loggedIn && (
+        <div className="callout info" style={{ fontSize: 13 }}>
+          <div className="muted">{t("ghCli.deviceCode")}</div>
+          <div className="mono" style={{ fontSize: 28, letterSpacing: "0.12em", marginTop: 6 }}>
+            {deviceCode}
+          </div>
+        </div>
+      )}
+      <div className="row" style={{ flexWrap: "wrap", gap: 6 }}>
+        <button type="button" className="btn primary sm" disabled={busy || !installed} onClick={() => void loginWeb()}>
+          <Terminal size={12} style={{ marginRight: 3 }} />
+          {busy ? t("ghCli.loggingIn") : loggedIn ? t("ghCli.relogin") : t("ghCli.login")}
+        </button>
+        {installed && (
+          <button type="button" className="btn ghost sm" onClick={() => void cancelLogin()}>
+            {t("ghCli.cancel")}
+          </button>
+        )}
+        {!installed && (
+          <button type="button" className="btn ghost sm" onClick={() => api.openUrl(GH_CLI_INSTALL_URL)}>
+            <ExternalLink size={12} style={{ marginRight: 3 }} />
+            {t("ghCli.install")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function ClipboardWatchField() {
+  const { t } = useTranslation();
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api.getClipboardWatch().then(setOn).catch(() => setOn(false));
+  }, []);
+
+  async function toggle(next: boolean) {
+    setBusy(true);
+    try {
+      const saved = await api.setClipboardWatch(next);
+      setOn(saved);
+      notifyClipboardWatchChanged();
+    } catch {
+      /* 保持原值 */
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="field" id="setting-clipboard-watch">
+      <FieldLabel name={t("settings.clipWatch")} tip={t("settings.clipWatchTip")} />
+      <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
+        {t("settings.clipWatchHint")}
+      </div>
+      <label className="row" style={{ gap: 8, cursor: busy ? "wait" : "pointer" }}>
+        <input
+          type="checkbox"
+          checked={on}
+          disabled={busy}
+          onChange={(e) => void toggle(e.target.checked)}
+        />
+        <span>{on ? t("settings.clipWatchOn") : t("settings.clipWatchOff")}</span>
+      </label>
     </div>
   );
 }
@@ -1686,6 +2059,7 @@ export function SettingsView() {
                       </button>
                     </div>
                   </div>
+                  <ClipboardWatchField />
                   <div className="field">
                     <label className="field-label">{t("settings.histLimit")}</label>
                     <div className="row">
@@ -1798,6 +2172,12 @@ export function SettingsView() {
               <Card title={t("settings.patTitle")}>
                 <GithubPatSettings writesLocked={!!status?.writesLocked} />
               </Card>
+
+              {!isMobilePlatform() && (
+                <Card title={t("ghCli.title")}>
+                  <GhCliSettings />
+                </Card>
+              )}
 
               <Card title={t("settings.backupTitle")}>
                 <div className="stack">

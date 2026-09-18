@@ -23,6 +23,7 @@ import { pushMobileBack } from "../shared/mobileBack";
 import { useAccountsModel, type AccountsModel } from "../shared/hooks/useAccountsModel";
 import { AccountsDialogs, AccountsFilters } from "./Accounts.shared";
 import { AccountMobileEditor } from "./AccountMobileEditor";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 function AccountMobileCard({
   e,
@@ -43,7 +44,7 @@ function AccountMobileCard({
   const meta = [e.displayName, e.note].filter(Boolean).join(" · ");
 
   return (
-    <div className="m-account-card">
+    <div className="m-account-card" data-focus-id={e.id}>
       <div className="m-account-top">
         <div className="m-account-id">
           <div className="m-account-user-title">
@@ -317,6 +318,11 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
 export function AccountsMobile() {
   const { t } = useTranslation();
   const m = useAccountsModel();
+  useItemFocus(true, () => {
+    m.setGroup("全部");
+    m.setQ("");
+    m.setCollapsed({});
+  });
 
   return (
     <div className="stack-lg">

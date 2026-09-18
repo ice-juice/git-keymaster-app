@@ -69,7 +69,7 @@ export function FileCard({ e, m }: { e: FileEntry; m: FilesModel }) {
   const color = m.groups.find((g) => g.name === e.group)?.color;
   const summary = attachmentSummary(e, t);
   return (
-    <div className="file-card">
+    <div className="file-card" data-focus-id={e.id}>
       {e.group && (
         <div className="file-card-head">
           <Badge kind="info">
@@ -130,7 +130,7 @@ export function FilesTable({ m }: { m: FilesModel }) {
         </thead>
         <tbody>
           {m.filteredEntries.map((e) => (
-            <tr key={e.id}>
+            <tr key={e.id} data-focus-id={e.id}>
               <td>
                 <div className="file-card-name" title={e.name}>
                   {e.name}

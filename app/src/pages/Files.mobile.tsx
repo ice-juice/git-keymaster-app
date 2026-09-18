@@ -8,11 +8,12 @@ import { editFromEntry, FilesDialogs, FilesFilters } from "./Files.shared";
 import { formatBytes, formatUpdatedAt, useFilesModel, type FilesModel } from "../shared/hooks/useFilesModel";
 import { entryAttachments, type FileEntry } from "../lib/ipc";
 import { FileMobileEditor } from "./FileMobileEditor";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 function FileMobileCard({ e, m }: { e: FileEntry; m: FilesModel }) {
   const { t } = useTranslation();
   return (
-    <div className="m-file-card">
+    <div className="m-file-card" data-focus-id={e.id}>
       <div className="m-file-card-main">
         <div className="m-file-card-name">{e.name}</div>
         <div className="m-file-card-sub">
@@ -36,6 +37,10 @@ export function FilesMobile() {
   const { t } = useTranslation();
   const m = useFilesModel();
   const inputRef = useRef<HTMLInputElement>(null);
+  useItemFocus(true, () => {
+    m.setGroup("全部");
+    m.setQ("");
+  });
 
   useEffect(() => {
     if (!m.sheetEntry) return;

@@ -3,10 +3,12 @@ import { useTranslation } from "react-i18next";
 import { PageHead, Empty, Badge } from "../ui/common";
 import { getAvatarBg, useOverviewModel } from "../shared/hooks/useOverviewModel";
 import { OverviewIdentityDialogs } from "./Overview.modals";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 export function OverviewDesktop() {
   const { t } = useTranslation();
   const m = useOverviewModel();
+  useItemFocus(m.identities.length > 0);
 
   return (
     <div className="stack-lg">
@@ -187,7 +189,7 @@ export function OverviewDesktop() {
             const isDefault = index === 0;
 
             return (
-              <div className="identity-card" key={id.id}>
+              <div className="identity-card" key={id.id} data-focus-id={id.id}>
                 <div className="id-card-head">
                   <div className="id-avatar" style={{ background: getAvatarBg(id.name) }}>
                     {initialLetter}

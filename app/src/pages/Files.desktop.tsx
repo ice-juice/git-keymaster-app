@@ -3,10 +3,15 @@ import { useTranslation } from "react-i18next";
 import { PageHead } from "../ui/common";
 import { formatBytes, useFilesModel } from "../shared/hooks/useFilesModel";
 import { FileCard, FilesDialogs, FilesEmpty, FilesFilters, FilesTable } from "./Files.shared";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 export function FilesDesktop() {
   const { t } = useTranslation();
   const m = useFilesModel();
+  useItemFocus(true, () => {
+    m.setGroup("全部");
+    m.setQ("");
+  });
 
   return (
     <div className="stack-lg">

@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderGit2, X, AlertTriangle } from "lucide-react";
@@ -28,6 +28,15 @@ function guessRepoName(url: string): string {
   return parts[parts.length - 1] || "repo";
 }
 
+function candidateBasis(c: Candidate, t: (key: string) => string): string {
+  if (c.probeKind) {
+    const key = `clone.probeKind.${c.probeKind}`;
+    const translated = t(key);
+    if (translated !== key) return translated;
+  }
+  return c.basis;
+}
+
 function modeLabel(mode: string, t: (key: string) => string): string {
   if (mode === "clone") return "git clone";
   if (mode === "init") return t("clone.modeInit");
@@ -35,15 +44,23 @@ function modeLabel(mode: string, t: (key: string) => string): string {
   return mode;
 }
 
-export function ClonePage() {
+export function ClonePage({
+  embedded = false,
+  onGoRepos,
+}: {
+  embedded?: boolean;
+  onGoRepos?: () => void;
+} = {}) {
   const { t } = useTranslation();
   const { writesLocked } = useApp();
   const nav = useNavigate();
+  const [searchParams] = useSearchParams();
   const [url, setUrl] = useState("");
   const [inf, setInf] = useState<Inference | null>(null);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [cloneBusy, setCloneBusy] = useState(false);
+  const [probeBusy, setProbeBusy] = useState(false);
   const [pickedIdentityId, setPickedIdentityId] = useState("");
   const [pending, setPending] = useState<{
     destDir: string;
@@ -62,21 +79,50 @@ export function ClonePage() {
   const activeIdentity =
     identityOptions.find((c) => c.identityId === pickedIdentityId) ?? inf?.recommended ?? identityOptions[0] ?? null;
 
-  async function resolve() {
+  async function resolve(nextUrl = url) {
     setErr("");
     setMsg("");
     setInf(null);
     setLastClone(null);
     setPending(null);
-    if (!url.trim()) return;
+    const raw = nextUrl.trim();
+    if (!raw) return;
     try {
-      const result = await api.resolveUrl(url);
+      const result = await api.resolveUrl(raw);
       setInf(result);
       setPickedIdentityId(result.recommended?.identityId ?? result.candidates[0]?.identityId ?? "");
     } catch (e) {
       setErr(errMessage(e));
     }
   }
+
+  async function probe() {
+    setErr("");
+    setMsg("");
+    if (!url.trim()) return;
+    setProbeBusy(true);
+    try {
+      const result = await api.probeUrlIdentity(url);
+      setInf(result);
+      setPickedIdentityId(result.recommended?.identityId ?? result.candidates[0]?.identityId ?? "");
+      if (!result.recommended) {
+        setMsg(t("clone.probeNone"));
+      }
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setProbeBusy(false);
+    }
+  }
+
+  useEffect(() => {
+    const q = searchParams.get("url")?.trim();
+    if (!q) return;
+    setUrl(q);
+    void resolve(q);
+    // 只在进入页时吃一次查询参数。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   async function startClone() {
     setErr("");
@@ -132,7 +178,7 @@ export function ClonePage() {
 
   return (
     <div className="stack-lg">
-      <PageHead title={t("clone.title")} desc={t("clone.desc")} />
+      {!embedded && <PageHead title={t("clone.title")} desc={t("clone.desc")} />}
       {err && <div className="err-text">{err}</div>}
       {msg && <div className="callout good">{msg}</div>}
 
@@ -146,7 +192,7 @@ export function ClonePage() {
               onChange={(e) => setUrl(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && resolve()}
             />
-            <button type="button" className="btn primary" onClick={resolve}>
+            <button type="button" className="btn primary" onClick={() => void resolve()}>
               {t("clone.parse")}
             </button>
           </div>
@@ -174,7 +220,7 @@ export function ClonePage() {
                   </span>
                   <Badge kind="good">{CONF_KEYS[inf.recommended.confidence] ? t(CONF_KEYS[inf.recommended.confidence]) : inf.recommended.confidence}</Badge>
                   <div className="muted sm" style={{ flexBasis: "100%" }}>
-                    {t("clone.basis", { basis: inf.recommended.basis })}
+                    {t("clone.basis", { basis: candidateBasis(inf.recommended, t) })}
                   </div>
                 </div>
               )}
@@ -187,13 +233,18 @@ export function ClonePage() {
                         <span className="mono muted sm"> · {c.hostAlias}</span>
                       </div>
                       <Badge>{CONF_KEYS[c.confidence] ? t(CONF_KEYS[c.confidence]) : c.confidence}</Badge>
-                      <span className="muted sm">{c.basis}</span>
+                      <span className="muted sm">{candidateBasis(c, t)}</span>
                     </div>
                   ))}
                 </div>
               )}
               {inf.needsProbe && <div className="callout warn">{t("clone.needProbe")}</div>}
               {!inf.recommended && !inf.needsProbe && <div className="muted">{t("clone.noMatch")}</div>}
+              <div className="row" style={{ flexWrap: "wrap" }}>
+                <button type="button" className="btn" disabled={probeBusy || cloneBusy} onClick={() => void probe()}>
+                  {probeBusy ? t("clone.probing") : t("clone.probe")}
+                </button>
+              </div>
 
               {identityOptions.length > 1 && (
                 <div className="field">
@@ -228,7 +279,15 @@ export function ClonePage() {
                 <div className="callout info sm">
                   {t("clone.added", { name: lastClone.identityName, mode: modeLabel(lastClone.mode, t) })}{" "}
                   <span className="mono">{lastClone.usedUrl}</span>
-                  <button type="button" className="btn sm" style={{ marginLeft: 8 }} onClick={() => nav("/repos")}>
+                  <button
+                    type="button"
+                    className="btn sm"
+                    style={{ marginLeft: 8 }}
+                    onClick={() => {
+                      if (onGoRepos) onGoRepos();
+                      else nav("/repos");
+                    }}
+                  >
                     {t("clone.goRepos")}
                   </button>
                 </div>

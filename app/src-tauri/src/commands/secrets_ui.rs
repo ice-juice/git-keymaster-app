@@ -134,6 +134,19 @@ pub fn set_clipboard_clear_seconds(state: State<AppState>, seconds: u32) -> Resu
 }
 
 #[tauri::command]
+pub fn get_clipboard_watch(state: State<AppState>) -> bool {
+    recover_lock(&state.config).clipboard_watch
+}
+
+#[tauri::command]
+pub fn set_clipboard_watch(state: State<AppState>, enabled: bool) -> Result<bool> {
+    let mut cfg = recover_lock(&state.config);
+    cfg.clipboard_watch = enabled;
+    cfg.save()?;
+    Ok(enabled)
+}
+
+#[tauri::command]
 pub fn set_account_history_limit(state: State<AppState>, limit: u32) -> Result<u32> {
     let limit = app_config::clamp_account_history_limit(limit);
     let mut cfg = recover_lock(&state.config);

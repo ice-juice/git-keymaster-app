@@ -24,6 +24,7 @@ import { useTotpModel, clipNote, type TotpModel } from "../shared/hooks/useTotpM
 import { pushMobileBack } from "../shared/mobileBack";
 import { formatCode, TotpDialogs, TotpFilters } from "./Totp.shared";
 import { TotpMobileEditor } from "./TotpMobileEditor";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 const LONG_PRESS_MS = 500;
 const MOVE_CANCEL_PX = 10;
@@ -88,6 +89,7 @@ function TotpMobileCard({
       className={
         "m-totp-card" + (selecting ? " is-selecting" : "") + (selected ? " is-checked" : "")
       }
+      data-focus-id={e.id}
       role={selecting ? "checkbox" : undefined}
       aria-checked={selecting ? selected : undefined}
       onPointerDown={onPointerDown}
@@ -255,6 +257,10 @@ function TotpMobileCard({
 export function TotpMobile() {
   const { t } = useTranslation();
   const m = useTotpModel();
+  useItemFocus(true, () => {
+    m.setGroup("全部");
+    m.setQ("");
+  });
   const [sheetOpen, setSheetOpen] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);

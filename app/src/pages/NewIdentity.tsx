@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Sun, Moon, Palette } from "lucide-react";
 import {
   api,
   errMessage,
   type AuthResult,
   type ConfigPreview,
   type CreateIdentityResult,
+  type GitProvider,
   type Identity,
   type KeyRecord,
 } from "../lib/ipc";
@@ -20,9 +20,21 @@ const DRAFT_KEY = "gam.newIdentity.draft";
 const PLATFORMS = [
   { id: "github", label: "GitHub", host: "github.com", alias: "github", keysUrl: "https://github.com/settings/keys" },
   { id: "gitlab", label: "GitLab", host: "gitlab.com", alias: "gitlab", keysUrl: "https://gitlab.com/-/user_settings/ssh_keys" },
+  { id: "gitee", label: "Gitee", host: "gitee.com", alias: "gitee", keysUrl: "https://gitee.com/profile/sshkeys" },
   { id: "gitea", label: "Gitea / 自建", host: "", alias: "git", keysUrl: "" },
   { id: "other", label: "其他", host: "", alias: "git", keysUrl: "" },
 ] as const;
+
+const PAT_TOKEN_URL: Record<GitProvider, string> = {
+  github: "https://github.com/settings/tokens/new",
+  gitlab: "https://gitlab.com/-/user_settings/personal_access_tokens",
+  gitee: "https://gitee.com/profile/personal_access_tokens",
+};
+
+function asPatProvider(platform: string): GitProvider | null {
+  if (platform === "github" || platform === "gitlab" || platform === "gitee") return platform;
+  return null;
+}
 
 interface Draft {
   step: number;
@@ -106,7 +118,7 @@ function suggestAlias(platform: string, name: string): string {
   return n ? `${p.alias}-${n}` : `${p.alias}-`;
 }
 
-export function suggestKeyComment(email: string, name: string, gitUserName: string): string {
+function suggestKeyComment(email: string, name: string, gitUserName: string): string {
   const em = email.trim();
   if (em) return em;
   const n = name.trim();
@@ -119,7 +131,7 @@ export function suggestKeyComment(email: string, name: string, gitUserName: stri
 export function NewIdentity() {
   const { t } = useTranslation();
   const nav = useNavigate();
-  const { status, theme, toggleTheme, writesLocked, startupNote } = useApp();
+  const { status, writesLocked, startupNote } = useApp();
   const STEPS = [
     t("identity.stepInfo"),
     t("identity.stepKey"),
@@ -148,24 +160,29 @@ export function NewIdentity() {
     });
   };
 
+  async function refreshPat(platform: string) {
+    const provider = asPatProvider(platform);
+    if (!provider) {
+      setPatConfigured(false);
+      setPatLogin("");
+      return;
+    }
+    const pat = await api.gitPatStatus(provider);
+    setPatConfigured(pat.configured);
+    if (!pat.configured) setPatLogin("");
+  }
+
   useEffect(() => {
     (async () => {
       try {
         setIdentities(await api.listIdentities());
         setKeys(await api.listKeys());
-        const pat = await api.githubPatStatus();
-        setPatConfigured(pat.configured);
-        if (pat.configured) {
-          try {
-            setPatLogin(await api.testGithubPat());
-          } catch {
-            setPatLogin("");
-          }
-        }
+        await refreshPat(d.platform);
       } catch (e) {
         setErr(errMessage(e));
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const locked = !!d.created || d.staged;
@@ -193,6 +210,7 @@ export function NewIdentity() {
       hostAlias: d.aliasTouched ? d.hostAlias : suggestAlias(id, d.name),
       realHost: d.hostTouched || !p.host ? d.realHost : p.host,
     });
+    refreshPat(id).catch((e) => setErr(errMessage(e)));
   }
 
   function onName(v: string) {
@@ -371,18 +389,21 @@ export function NewIdentity() {
   }
 
   async function savePat() {
+    const provider = asPatProvider(d.platform);
+    if (!provider) return;
     const token = patInput.trim();
-    if (!token) return setErr(t("pat.needToken"));
+    const platLabel = t(`pat.platform.${provider}`);
+    if (!token) return setErr(t("pat.needToken", { platform: platLabel }));
     setErr("");
     setMsg("");
     setBusy(true);
     try {
-      await api.setGithubPat(token);
-      const login = await api.testGithubPat();
+      await api.setGitPat(provider, token);
+      const login = await api.testGitPat(provider);
       setPatConfigured(true);
       setPatLogin(login);
       setPatInput("");
-      setMsg(t("pat.saved", { name: login }));
+      setMsg(t("pat.saved", { name: login, platform: platLabel }));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -391,16 +412,18 @@ export function NewIdentity() {
   }
 
   async function uploadViaPat() {
+    const provider = asPatProvider(d.platform);
+    if (!provider) return;
     const keyId = d.created?.identity.keyId || d.pendingKeyId || d.keyId;
     if (!keyId) return;
-    if (!patConfigured) return setErr(t("identity.needPatFirst"));
+    if (!patConfigured) return setErr(t("identity.needPatFirst", { platform: t(`pat.platform.${provider}`) }));
     setErr("");
     setMsg("");
     setBusy(true);
     try {
-      await api.uploadPublicKey(keyId, d.name.trim() || t("brand.name"));
+      await api.uploadGitPublicKey(provider, keyId, d.name.trim() || t("brand.name"));
       set({ uploaded: true });
-      setMsg(t("identity.uploadedMsg"));
+      setMsg(t("identity.uploadedMsg", { platform: t(`pat.platform.${provider}`) }));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -442,10 +465,12 @@ export function NewIdentity() {
   }
 
   async function importOrgs() {
+    const provider = asPatProvider(d.platform);
+    if (!provider) return;
     setErr("");
     setBusy(true);
     try {
-      const orgs = await api.listGithubOrgs();
+      const orgs = await api.listGitOrgs(provider);
       const have = new Set(
         d.ownersText
           .split(/\r?\n/)
@@ -507,25 +532,6 @@ export function NewIdentity() {
                   {startupNote || t("identity.syncLocked")}
                 </div>
               )}
-            </div>
-            <div className="row" style={{ gap: 6 }}>
-            <button
-              type="button"
-              className="btn ghost sm"
-              onClick={exitWizard}
-            >
-              {t("identity.exit")}
-            </button>
-            <button
-              type="button"
-              className="btn ghost sm"
-              style={{ display: "inline-flex", gap: 5, padding: "2px 7px" }}
-              title={t("theme.toggle")}
-              onClick={toggleTheme}
-            >
-              {theme === "light" ? <Sun size={13} /> : theme === "dark" ? <Moon size={13} /> : <Palette size={13} />}
-              <span style={{ fontSize: 11 }}>{theme === "light" ? t("theme.light") : theme === "dark" ? t("theme.dark") : t("theme.navy")}</span>
-            </button>
             </div>
           </div>
           <div className="steps">
@@ -764,32 +770,34 @@ export function NewIdentity() {
                     {t("identity.openSshSettings", { label: plat.label })}
                   </button>
                 )}
-                {d.platform === "github" && (
+                {asPatProvider(d.platform) && (
                   <button className="btn primary" disabled={busy || d.uploaded || !publicKey || !patConfigured} onClick={uploadViaPat}>
                     {d.uploaded ? t("identity.uploaded") : t("identity.uploadPat")}
                   </button>
                 )}
               </div>
-              {d.platform === "github" && (
+              {asPatProvider(d.platform) && (
                 <div className="field">
                   <FieldLabel
-                    name={t("identity.pat")}
-                    tip={t("identity.patTip")}
+                    name={t("identity.pat", { platform: t(`pat.platform.${d.platform}`) })}
+                    tip={t(`identity.patTip.${d.platform}`)}
                   />
                   {patConfigured ? (
                     <div className="callout good sm">
-                      {patLogin ? t("identity.patSavedAccount", { login: patLogin }) : t("identity.patSaved")}
+                      {patLogin
+                        ? t("identity.patSavedAccount", { login: patLogin, platform: t(`pat.platform.${d.platform}`) })
+                        : t("identity.patSaved")}
                     </div>
                   ) : (
                     <div className="stack" style={{ gap: 8 }}>
                       <div className="muted sm">
-                        {t("identity.patNeed")}
+                        {t(`identity.patNeed.${d.platform}`)}
                       </div>
                       <input
                         className="input mono"
                         type="password"
                         autoComplete="off"
-                        placeholder="ghp_… / github_pat_…"
+                        placeholder={t(`pat.tokenPh.${d.platform}`)}
                         value={patInput}
                         onChange={(e) => setPatInput(e.target.value)}
                       />
@@ -797,8 +805,12 @@ export function NewIdentity() {
                         <button type="button" className="btn primary sm" disabled={busy || !patInput.trim()} onClick={savePat}>
                           {t("identity.savePat")}
                         </button>
-                        <button type="button" className="btn ghost sm" onClick={() => api.openUrl("https://github.com/settings/tokens")}>
-                          {t("pat.openGithub")}
+                        <button
+                          type="button"
+                          className="btn ghost sm"
+                          onClick={() => api.openUrl(PAT_TOKEN_URL[asPatProvider(d.platform)!])}
+                        >
+                          {t("pat.openTokenPage", { platform: t(`pat.platform.${d.platform}`) })}
                         </button>
                       </div>
                     </div>
@@ -877,10 +889,10 @@ export function NewIdentity() {
                 />
                 <div className="hint">{t("identity.ownersHint")}</div>
               </div>
-              {d.platform === "github" && (
+              {asPatProvider(d.platform) && (
                 <div>
                   <button className="btn" disabled={busy} onClick={importOrgs}>
-                    {t("identity.importOrgs")}
+                    {t("identity.importOrgs", { platform: t(`pat.platform.${d.platform}`) })}
                   </button>
                 </div>
               )}
@@ -893,7 +905,7 @@ export function NewIdentity() {
 
         <div className="wizard-foot">
           <div className="row" style={{ gap: 8 }}>
-          <button type="button" className="btn ghost" onClick={exitWizard}>
+          <button type="button" className="btn danger-frame" onClick={exitWizard}>
             {t("identity.cancelBack")}
           </button>
           {d.step > 0 && (

@@ -25,6 +25,8 @@ import { IconMark } from "../ui/IconMark";
 import { GroupPicker } from "../ui/GroupPicker";
 import { type AccountsModel } from "../shared/hooks/useAccountsModel";
 import { useOverlayBack } from "../shared/mobileBack";
+import { AccountExtraFields } from "../ui/AccountExtraFields";
+import { PasswordGenerateControls } from "../ui/PasswordGenerate";
 
 export function AccountMobileEditor({
   m,
@@ -341,7 +343,7 @@ export function AccountMobileEditor({
               />
               <button
                 type="button"
-                className="btn sm"
+                className="btn sm pw-gen-touch"
                 style={{ flexShrink: 0 }}
                 onClick={() => setShowPw((prev) => !prev)}
               >
@@ -349,6 +351,11 @@ export function AccountMobileEditor({
                 <span>{showPw ? t("accounts.hide") : t("accounts.show")}</span>
               </button>
             </div>
+            <PasswordGenerateControls
+              compact
+              password={value.password || ""}
+              onFill={(pw) => m.setEditor({ ...value, password: pw })}
+            />
             <div className="m-field-hint">{t("accounts.passwordTip")}</div>
           </div>
         </section>
@@ -458,6 +465,21 @@ export function AccountMobileEditor({
               onChange={(e) => m.setEditor({ ...value, note: e.target.value })}
             />
           </div>
+
+          <AccountExtraFields
+            compact
+            draft={value.extraFieldsDraft || []}
+            disabled={m.writesLocked || m.busy}
+            canReveal={!!value.id}
+            onChange={(draft, dirty) =>
+              m.setEditor({
+                ...value,
+                extraFieldsDraft: draft,
+                extraFieldsDirty: dirty === false ? value.extraFieldsDirty : true,
+              })
+            }
+            onReveal={() => m.revealEditorFields()}
+          />
 
           {/* 置顶开关 */}
           <div

@@ -127,6 +127,12 @@ pub struct Secrets {
     pub key_passphrases: HashMap<String, String>,
     /// GitHub PAT。
     pub github_pat: Option<String>,
+    /// GitLab PAT。
+    #[serde(default)]
+    pub gitlab_pat: Option<String>,
+    /// Gitee PAT。
+    #[serde(default)]
+    pub gitee_pat: Option<String>,
     /// totpId -> Base32 种子。
     #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
     pub totp_seeds: HashMap<String, String>,
@@ -185,6 +191,9 @@ pub struct AccountEntry {
     /// 仅列表展示：密码是否还在 secrets 里。读盘时忽略，由账号列表现算后发给前端。
     #[serde(default, skip_deserializing)]
     pub has_password: bool,
+    /// 仅列表展示：自定义字段键名（不含值）。读盘时忽略，由账号列表现算后发给前端。
+    #[serde(default, skip_deserializing)]
+    pub extra_field_keys: Vec<String>,
 }
 
 /// 分组元数据。
@@ -732,6 +741,12 @@ pub fn merge_secrets_with_meta(
     if local.github_pat.is_none() {
         local.github_pat = remote.github_pat.clone();
     }
+    if local.gitlab_pat.is_none() {
+        local.gitlab_pat = remote.gitlab_pat.clone();
+    }
+    if local.gitee_pat.is_none() {
+        local.gitee_pat = remote.gitee_pat.clone();
+    }
     // 桶钥匙和代理密码是本机连接凭据：本地已有则不让对端旧值盖掉。
     if local
         .cloud_sync_secret_access_key
@@ -1041,11 +1056,28 @@ mod tests {
             created_at: "t".into(),
             updated_at: "t".into(),
             has_password: true,
+            extra_field_keys: vec!["recovery".into()],
         };
         let json = serde_json::to_value(&e).unwrap();
         assert_eq!(json.get("hasPassword").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            json.get("extraFieldKeys")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
+            Some(1)
+        );
         let loaded: AccountEntry = serde_json::from_value(json).unwrap();
         assert!(!loaded.has_password, "读盘必须忽略 hasPassword，由 account_list 现算");
+        assert!(
+            loaded.extra_field_keys.is_empty(),
+            "读盘必须忽略 extraFieldKeys，由 account_list 现算"
+        );
+    }
+
+    #[test]
+    fn account_secret_extra_fields_default_on_legacy() {
+        let s: AccountSecret = serde_json::from_str(r#"{"password":"x"}"#).unwrap();
+        assert!(s.extra_fields.is_empty());
     }
 
     fn totp(id: &str, issuer: &str, updated_at: &str) -> TotpEntry {
@@ -1178,6 +1210,7 @@ mod tests {
                 created_at: "t".into(),
                 updated_at: "t".into(),
                 has_password: false,
+                extra_field_keys: vec![],
             }],
             ..AccountData::default()
         };
@@ -1345,5 +1378,37 @@ mod tests {
         assert_eq!(a, b);
         let text = String::from_utf8(a).unwrap();
         assert!(text.find("\"a\"").unwrap() < text.find("\"b\"").unwrap());
+    }
+
+    #[test]
+    fn merge_secrets_fills_missing_forge_pats() {
+        let local = Secrets::default();
+        let remote = Secrets {
+            github_pat: Some("ghp_r".into()),
+            gitlab_pat: Some("glpat-r".into()),
+            gitee_pat: Some("gitee_r".into()),
+            ..Secrets::default()
+        };
+        let merged = merge_secrets(local, &remote);
+        assert_eq!(merged.github_pat.as_deref(), Some("ghp_r"));
+        assert_eq!(merged.gitlab_pat.as_deref(), Some("glpat-r"));
+        assert_eq!(merged.gitee_pat.as_deref(), Some("gitee_r"));
+
+        let keep_local = merge_secrets(
+            Secrets {
+                gitlab_pat: Some("glpat-local".into()),
+                ..Secrets::default()
+            },
+            &remote,
+        );
+        assert_eq!(keep_local.gitlab_pat.as_deref(), Some("glpat-local"));
+        assert_eq!(keep_local.gitee_pat.as_deref(), Some("gitee_r"));
+    }
+
+    #[test]
+    fn secrets_missing_forge_pats_deserialize() {
+        let s: Secrets = serde_json::from_str(r#"{"keyPassphrases":{},"githubPat":null}"#).unwrap();
+        assert!(s.gitlab_pat.is_none());
+        assert!(s.gitee_pat.is_none());
     }
 }

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Pencil, Trash2, X, Plus } from "lucide-react";
+import { FolderOpen, Pencil, Trash2, X, Plus, FolderGit2, Download } from "lucide-react";
 import { api, errMessage, type Identity, type ManagedRepoView } from "../lib/ipc";
 import { PageHead, Card, Empty, Badge } from "../ui/common";
 import { useApp } from "../store";
+import { ClonePage } from "./Clone";
 
 const SOURCE_KEYS: Record<string, string> = {
   scan: "repos.scan",
@@ -17,8 +18,11 @@ const SOURCE_KEYS: Record<string, string> = {
 
 export function Repos() {
   const { t } = useTranslation();
-  const nav = useNavigate();
   const { writesLocked } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get("tab");
+  const hasUrlParam = !!searchParams.get("url");
+  const [tab, setTabState] = useState<"list" | "clone">(rawTab === "clone" || hasUrlParam ? "clone" : "list");
   const [repos, setRepos] = useState<ManagedRepoView[]>([]);
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [root, setRoot] = useState("");
@@ -28,6 +32,30 @@ export function Repos() {
   const [removingBusy, setRemovingBusy] = useState(false);
   const [editing, setEditing] = useState<ManagedRepoView | null>(null);
   const [removing, setRemoving] = useState<ManagedRepoView | null>(null);
+
+  useEffect(() => {
+    const next = searchParams.get("tab");
+    if (next === "clone" || searchParams.get("url")) {
+      setTabState("clone");
+    } else if (next === "list") {
+      setTabState("list");
+    }
+  }, [searchParams]);
+
+  function switchTab(next: "list" | "clone") {
+    setTabState(next);
+    const newParams = new URLSearchParams(searchParams);
+    if (next === "clone") {
+      newParams.set("tab", "clone");
+    } else {
+      newParams.delete("tab");
+      newParams.delete("url");
+    }
+    setSearchParams(newParams, { replace: true });
+    if (next === "list") {
+      void load();
+    }
+  }
 
   async function load() {
     try {
@@ -113,86 +141,142 @@ export function Repos() {
         title={t("repos.title")}
         desc={t("repos.desc")}
         actions={
-          <button type="button" className="btn primary" disabled={writesLocked} onClick={() => nav("/clone")}>
-            <Plus size={13} />
-            <span>{t("repos.goClone")}</span>
-          </button>
+          <div className="row" style={{ gap: 6, alignItems: "center" }}>
+            <div
+              style={{
+                display: "inline-flex",
+                gap: 3,
+                background: "rgba(255, 255, 255, 0.05)",
+                padding: "3px 4px",
+                borderRadius: 8,
+                border: "1px solid var(--border)",
+              }}
+            >
+              <button
+                type="button"
+                className={`btn sm ${tab === "list" ? "primary" : "ghost"}`}
+                style={{ padding: "4px 10px", fontSize: 12 }}
+                onClick={() => switchTab("list")}
+              >
+                <FolderGit2 size={13} />
+                <span>{t("repos.tabList")}</span>
+                {repos.length > 0 && (
+                  <span
+                    className="nav-badge"
+                    style={{
+                      marginLeft: 4,
+                      background: tab === "list" ? "rgba(255, 255, 255, 0.25)" : "var(--sidebar-badge-bg)",
+                      color: tab === "list" ? "#fff" : "var(--text-soft)",
+                    }}
+                  >
+                    {repos.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className={`btn sm ${tab === "clone" ? "primary" : "ghost"}`}
+                style={{ padding: "4px 10px", fontSize: 12 }}
+                onClick={() => switchTab("clone")}
+              >
+                <Download size={13} />
+                <span>{t("repos.tabClone")}</span>
+              </button>
+            </div>
+          </div>
         }
       />
       {err && <div className="err-text">{err}</div>}
       {msg && <div className="callout good">{msg}</div>}
 
-      <Card title={t("repos.scanTitle")}>
-        <div className="stack">
-          <div className="path-pick">
-            <input
-              className="input mono"
-              placeholder={t("repos.rootPh")}
-              value={root}
-              onChange={(e) => setRoot(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && scanImport()}
-            />
-            <button type="button" className="btn" onClick={pickRoot}>
-              {t("common.browse")}
-            </button>
-            <button type="button" className="btn primary" disabled={busy || writesLocked} onClick={scanImport}>
-              {busy ? t("repos.scanning") : t("repos.scanImport")}
-            </button>
-          </div>
-          <div className="muted sm">{t("repos.scanHint")}</div>
-        </div>
-      </Card>
-
-      <Card title={t("repos.registered", { n: repos.length })}>
-        {repos.length === 0 ? (
-          <Empty icon="📦" text={t("repos.empty")} />
-        ) : (
-          <div className="list">
-            {repos.map((r) => (
-              <div className="list-row" key={r.id} style={{ alignItems: "flex-start" }}>
-                <div className="grow">
-                  <div className="row" style={{ gap: 6 }}>
-                    <strong>{r.name}</strong>
-                    <Badge>{SOURCE_KEYS[r.source] ? t(SOURCE_KEYS[r.source]) : r.source}</Badge>
-                    {!r.exists && <Badge kind="danger">{t("repos.missingDir")}</Badge>}
-                    {r.needsAliasFix && <Badge kind="warn">{t("repos.aliasFix")}</Badge>}
-                    {r.identityName && <Badge kind="info">{r.identityName}</Badge>}
-                  </div>
-                  <div className="mono muted sm">{r.path}</div>
-                  <div className="mono sm" style={{ marginTop: 2 }}>
-                    {r.remoteUrl ?? t("repos.noRemote")}
-                  </div>
-                </div>
-                <div className="row" style={{ gap: 4 }}>
-                  <button
-                    type="button"
-                    className="btn sm"
-                    disabled={!r.exists}
-                    title={t("repos.openExplorer")}
-                    onClick={() => openDir(r.path)}
-                  >
-                    <FolderOpen size={12} />
-                    <span>{t("common.open")}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn sm"
-                    disabled={!r.exists || writesLocked}
-                    onClick={() => setEditing(r)}
-                    title={writesLocked ? t("repos.syncLocked") : t("repos.changeUrlTip")}
-                  >
-                    <Pencil size={12} />
-                    <span>{t("repos.changeUrl")}</span>
-                  </button>
-                  <button type="button" className="btn ghost sm" disabled={writesLocked} onClick={() => setRemoving(r)} title={t("repos.removeOnly")}>
-                    <Trash2 size={12} />
-                  </button>
-                </div>
+      {tab === "clone" ? (
+        <ClonePage embedded onGoRepos={() => switchTab("list")} />
+      ) : (
+        <>
+          <Card title={t("repos.scanTitle")}>
+            <div className="stack">
+              <div className="path-pick">
+                <input
+                  className="input mono"
+                  placeholder={t("repos.rootPh")}
+                  value={root}
+                  onChange={(e) => setRoot(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && scanImport()}
+                />
+                <button type="button" className="btn" onClick={pickRoot}>
+                  {t("common.browse")}
+                </button>
+                <button type="button" className="btn primary" disabled={busy || writesLocked} onClick={scanImport}>
+                  {busy ? t("repos.scanning") : t("repos.scanImport")}
+                </button>
               </div>
-            ))}
-          </div>
-        )}
-      </Card>
+              <div className="muted sm">{t("repos.scanHint")}</div>
+            </div>
+          </Card>
+
+          <Card title={t("repos.registered", { n: repos.length })}>
+            {repos.length === 0 ? (
+              <div className="stack" style={{ alignItems: "center", padding: "16px 0", gap: 10 }}>
+                <Empty icon="📦" text={t("repos.empty")} />
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  disabled={writesLocked}
+                  onClick={() => switchTab("clone")}
+                >
+                  <Plus size={13} />
+                  <span>{t("repos.goClone")}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="list">
+                {repos.map((r) => (
+                  <div className="list-row" key={r.id} style={{ alignItems: "flex-start" }}>
+                    <div className="grow">
+                      <div className="row" style={{ gap: 6 }}>
+                        <strong>{r.name}</strong>
+                        <Badge>{SOURCE_KEYS[r.source] ? t(SOURCE_KEYS[r.source]) : r.source}</Badge>
+                        {!r.exists && <Badge kind="danger">{t("repos.missingDir")}</Badge>}
+                        {r.needsAliasFix && <Badge kind="warn">{t("repos.aliasFix")}</Badge>}
+                        {r.identityName && <Badge kind="info">{r.identityName}</Badge>}
+                      </div>
+                      <div className="mono muted sm">{r.path}</div>
+                      <div className="mono sm" style={{ marginTop: 2 }}>
+                        {r.remoteUrl ?? t("repos.noRemote")}
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 4 }}>
+                      <button
+                        type="button"
+                        className="btn sm"
+                        disabled={!r.exists}
+                        title={t("repos.openExplorer")}
+                        onClick={() => openDir(r.path)}
+                      >
+                        <FolderOpen size={12} />
+                        <span>{t("common.open")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn sm"
+                        disabled={!r.exists || writesLocked}
+                        onClick={() => setEditing(r)}
+                        title={writesLocked ? t("repos.syncLocked") : t("repos.changeUrlTip")}
+                      >
+                        <Pencil size={12} />
+                        <span>{t("repos.changeUrl")}</span>
+                      </button>
+                      <button type="button" className="btn ghost sm" disabled={writesLocked} onClick={() => setRemoving(r)} title={t("repos.removeOnly")}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </>
+      )}
 
       {editing && (
         <RemoteEditModal

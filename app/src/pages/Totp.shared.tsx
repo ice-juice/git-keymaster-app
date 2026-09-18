@@ -93,7 +93,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
         const seedMissing = e.hasSeed === false;
         const isCopied = m.copiedId === e.id;
         return (
-          <div key={e.id} className="totp-list-row">
+          <div key={e.id} className="totp-list-row" data-focus-id={e.id}>
             <div className="totp-list-identity">
               <IconMark icon={e.icon} builtins={m.builtins} label={e.issuer} size={32} />
               <div style={{ minWidth: 0, overflow: "hidden" }}>
@@ -463,7 +463,7 @@ function TotpCard({
   const { t } = useTranslation();
   const seedMissing = e.hasSeed === false;
   return (
-    <div className="totp-card">
+    <div className="totp-card" data-focus-id={e.id}>
       <div className="totp-card-head">
         <div className="row" style={{ minWidth: 0, gap: 10 }}>
           <IconMark icon={e.icon} builtins={builtins} label={e.issuer} size={36} />

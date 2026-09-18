@@ -1,4 +1,4 @@
-//! GitHub API 薄封装（PAT 可选功能）：上传公钥、拉取账号与所属组织。
+//! GitLab API 薄封装（PAT 可选功能）：上传公钥、拉取账号与所属群组。
 //! Token 只从 vault 取用，绝不落明文、日志脱敏。
 
 use crate::app_config::NetworkProxy;
@@ -6,15 +6,15 @@ use crate::error::{AppError, Result};
 use crate::net;
 use serde::Serialize;
 
-const API: &str = "https://api.github.com";
+const API: &str = "https://gitlab.com/api/v4";
 const UA: &str = crate::identity::USER_AGENT;
 
 pub fn user_url() -> String {
     format!("{API}/user")
 }
 
-pub fn orgs_url() -> String {
-    format!("{API}/user/orgs?per_page=100")
+pub fn groups_url() -> String {
+    format!("{API}/groups?min_access_level=10&per_page=100")
 }
 
 pub fn keys_url() -> String {
@@ -38,26 +38,24 @@ fn client(proxy: Option<&NetworkProxy>) -> Result<reqwest::blocking::Client> {
 pub fn whoami(token: &str, proxy: Option<&NetworkProxy>) -> Result<String> {
     let resp = client(proxy)?
         .get(user_url())
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github+json")
+        .header("PRIVATE-TOKEN", token)
         .send()
         .map_err(|e| AppError::Other(format!("请求失败：{e}")))?;
     if !resp.status().is_success() {
         return Err(AppError::Invalid(format!("PAT 校验失败：HTTP {}", resp.status())));
     }
     let v: serde_json::Value = resp.json().map_err(|e| AppError::Serde(e.to_string()))?;
-    v.get("login")
+    v.get("username")
         .and_then(|l| l.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| AppError::Other("响应缺少 login 字段".into()))
+        .ok_or_else(|| AppError::Other("响应缺少 username 字段".into()))
 }
 
-/// 拉取账号所属组织（`GET /user/orgs`）。
+/// 拉取账号所属群组（`GET /groups`）。
 pub fn list_orgs(token: &str, proxy: Option<&NetworkProxy>) -> Result<Vec<String>> {
     let resp = client(proxy)?
-        .get(orgs_url())
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github+json")
+        .get(groups_url())
+        .header("PRIVATE-TOKEN", token)
         .send()
         .map_err(|e| AppError::Other(format!("请求失败：{e}")))?;
     if !resp.status().is_success() {
@@ -68,7 +66,12 @@ pub fn list_orgs(token: &str, proxy: Option<&NetworkProxy>) -> Result<Vec<String
         .as_array()
         .map(|a| {
             a.iter()
-                .filter_map(|o| o.get("login").and_then(|l| l.as_str()).map(|s| s.to_string()))
+                .filter_map(|o| {
+                    o.get("full_path")
+                        .or_else(|| o.get("path"))
+                        .and_then(|l| l.as_str())
+                        .map(|s| s.to_string())
+                })
                 .collect()
         })
         .unwrap_or_default())
@@ -80,7 +83,7 @@ struct AddKeyBody<'a> {
     key: &'a str,
 }
 
-/// 上传公钥（`POST /user/keys`，需 `admin:public_key`）。
+/// 上传公钥（`POST /user/keys`）。
 pub fn upload_public_key(
     token: &str,
     title: &str,
@@ -93,8 +96,7 @@ pub fn upload_public_key(
     };
     let resp = client(proxy)?
         .post(keys_url())
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github+json")
+        .header("PRIVATE-TOKEN", token)
         .json(&body)
         .send()
         .map_err(|e| AppError::Other(format!("请求失败：{e}")))?;
@@ -103,7 +105,7 @@ pub fn upload_public_key(
     } else {
         let code = resp.status();
         let text = resp.text().unwrap_or_default();
-        if text.contains("key is already in use") {
+        if text.contains("has already been taken") || text.contains("already exists") {
             return Err(AppError::Invalid("该公钥已在此账号中".into()));
         }
         Err(AppError::Invalid(format!("上传公钥失败：HTTP {code}")))
@@ -115,9 +117,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn github_api_urls() {
-        assert_eq!(user_url(), "https://api.github.com/user");
-        assert_eq!(orgs_url(), "https://api.github.com/user/orgs?per_page=100");
-        assert_eq!(keys_url(), "https://api.github.com/user/keys");
+    fn gitlab_api_urls() {
+        assert_eq!(user_url(), "https://gitlab.com/api/v4/user");
+        assert_eq!(
+            groups_url(),
+            "https://gitlab.com/api/v4/groups?min_access_level=10&per_page=100"
+        );
+        assert_eq!(keys_url(), "https://gitlab.com/api/v4/user/keys");
     }
 }

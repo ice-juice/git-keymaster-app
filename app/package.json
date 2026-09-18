@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "test:unit": "node --experimental-strip-types --test src/shared/password.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },

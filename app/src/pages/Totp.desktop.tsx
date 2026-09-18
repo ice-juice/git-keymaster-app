@@ -5,6 +5,7 @@ import { PageHead, Empty } from "../ui/common";
 import { can } from "../platform/capabilities";
 import { useTotpModel, type TotpModel } from "../shared/hooks/useTotpModel";
 import { TotpDialogs, TotpEntries, TotpFilters, TotpViewSwitcher } from "./Totp.shared";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 function TotpDesktopAddMenu({ m }: { m: TotpModel }) {
   const { t } = useTranslation();
@@ -112,6 +113,10 @@ function TotpDesktopAddMenu({ m }: { m: TotpModel }) {
 export function TotpDesktop() {
   const { t } = useTranslation();
   const m = useTotpModel();
+  useItemFocus(true, () => {
+    m.setGroup("全部");
+    m.setQ("");
+  });
 
   return (
     <div className="stack-lg">

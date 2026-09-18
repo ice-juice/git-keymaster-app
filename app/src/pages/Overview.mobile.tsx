@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Badge, Empty } from "../ui/common";
 import { useOverviewModel } from "../shared/hooks/useOverviewModel";
 import { OverviewIdentityDialogs } from "./Overview.modals";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 function getAvatarBg(name: string): string {
   const colors = [
@@ -23,6 +24,7 @@ function getAvatarBg(name: string): string {
 export function OverviewMobile() {
   const { t } = useTranslation();
   const m = useOverviewModel();
+  useItemFocus(m.identities.length > 0);
 
   return (
     <div className="stack-lg">
@@ -67,7 +69,7 @@ export function OverviewMobile() {
             const isDefault = index === 0;
 
             return (
-              <div className="m-id-card" key={id.id}>
+              <div className="m-id-card" key={id.id} data-focus-id={id.id}>
                 {/* 1. 卡片头 */}
                 <div className="m-id-card-head">
                   <div className="m-id-avatar" style={{ background: getAvatarBg(id.name) }}>

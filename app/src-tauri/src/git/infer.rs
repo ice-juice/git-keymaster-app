@@ -27,6 +27,9 @@ pub struct Candidate {
     pub confidence: Confidence,
     /// 推断依据（中文，明写出来供用户核对）。
     pub basis: String,
+    /// 实测结果分类（有则前端按 i18n 展示，避免一律写「不可达」）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub probe_kind: Option<ProbeKind>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -142,6 +145,201 @@ fn finalize(parsed: &ParsedRepo, recommended: Option<Candidate>, candidates: Vec
     }
 }
 
+/// 实测失败原因（命令层根据 git/ssh stderr 填写）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProbeFailClass {
+    RepoMissing,
+    KeyMissing,
+    NoAccess,
+    NetworkSsh,
+}
+
+/// 给 UI 用的实测分类（camelCase 与前端 i18n key 对齐）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProbeKind {
+    SshOk,
+    PublicOwner,
+    PublicNoClaim,
+    RepoMissing,
+    KeyMissing,
+    NoAccess,
+    NetworkSsh,
+}
+
+/// `git ls-remote` 实测结果（命令层填写，此处只做排序与和本地推断合并）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProbeHit {
+    pub identity_id: String,
+    pub ssh_ok: bool,
+    pub fail: ProbeFailClass,
+}
+
+/// 选出要实测的身份：别名精确命中优先，否则同主机，再否则全部。
+pub fn identities_for_probe<'a>(parsed: &ParsedRepo, identities: &'a [Identity]) -> Vec<&'a Identity> {
+    if parsed.is_alias {
+        if let Some(host) = &parsed.host {
+            let hits: Vec<&Identity> = identities
+                .iter()
+                .filter(|i| i.host_alias.eq_ignore_ascii_case(host))
+                .collect();
+            if !hits.is_empty() {
+                return hits;
+            }
+        }
+    }
+    if let Some(host) = &parsed.host {
+        let hits: Vec<&Identity> = identities
+            .iter()
+            .filter(|i| i.real_host.eq_ignore_ascii_case(host))
+            .collect();
+        if !hits.is_empty() {
+            return hits;
+        }
+    }
+    identities.iter().collect()
+}
+
+/// owner 命中归属标识，或首段等于身份名。
+pub fn identity_matches_owner(id: &Identity, owner: &str) -> bool {
+    let owner_lc = owner.trim().to_lowercase();
+    match owners::best_match(&id.owners, &owner_lc) {
+        MatchKind::Exact | MatchKind::Wildcard => true,
+        MatchKind::None => {
+            let first = owner_lc.split('/').next().unwrap_or(&owner_lc);
+            id.name.eq_ignore_ascii_case(first)
+        }
+    }
+}
+
+/// 根据 `git ls-remote` 退出码与 stderr 区分失败原因（警告文本本身不构成失败）。
+pub fn classify_ls_remote(code: i32, stderr: &str) -> ProbeFailClass {
+    if code == 0 {
+        return ProbeFailClass::NetworkSsh;
+    }
+    let lower = stderr.to_lowercase();
+    if lower.contains("repository not found")
+        || lower.contains("project you were looking for could not be found")
+        || lower.contains("the requested url returned error: 404")
+        || (lower.contains("not found") && lower.contains("repositor"))
+    {
+        return ProbeFailClass::RepoMissing;
+    }
+    if lower.contains("the requested url returned error: 403")
+        || (lower.contains("authentication failed") && !lower.contains("publickey"))
+    {
+        return ProbeFailClass::NoAccess;
+    }
+    if lower.contains("permission denied")
+        || lower.contains("publickey")
+        || lower.contains("could not read from remote repository")
+    {
+        return ProbeFailClass::KeyMissing;
+    }
+    ProbeFailClass::NetworkSsh
+}
+
+fn fail_label(fail: ProbeFailClass) -> (ProbeKind, &'static str) {
+    match fail {
+        ProbeFailClass::RepoMissing => (ProbeKind::RepoMissing, "仓库不存在，或当前身份不可见"),
+        ProbeFailClass::KeyMissing => (ProbeKind::KeyMissing, "SSH 密钥未加载或公钥未登记，无法实测权限"),
+        ProbeFailClass::NoAccess => (ProbeKind::NoAccess, "该身份无权限访问此仓库"),
+        ProbeFailClass::NetworkSsh => (ProbeKind::NetworkSsh, "网络或 SSH 配置问题，未能实测"),
+    }
+}
+
+/// 合并本地推断与实测：SSH 可达升 Certain；公开仓 + owner 匹配时，SSH 失败不得标成不可达。
+pub fn apply_probe_hits(
+    parsed: &ParsedRepo,
+    identities: &[Identity],
+    history: &HashMap<String, String>,
+    hits: &[ProbeHit],
+    public_https_ok: bool,
+) -> Inference {
+    let local = infer(parsed, identities, history);
+    let mut candidates = Vec::new();
+    for hit in hits {
+        let Some(id) = identities.iter().find(|i| i.id == hit.identity_id) else {
+            continue;
+        };
+        let owns = identity_matches_owner(id, &parsed.owner);
+        let local_cand = local.candidates.iter().find(|c| c.identity_id == id.id);
+        if hit.ssh_ok {
+            candidates.push(mk_probe(
+                id,
+                Confidence::Certain,
+                "git ls-remote 实测可达".into(),
+                ProbeKind::SshOk,
+            ));
+            continue;
+        }
+        if public_https_ok && owns {
+            let conf = match local_cand.map(|c| c.confidence) {
+                Some(Confidence::Low) | None => Confidence::VeryHigh,
+                Some(other) => other,
+            };
+            candidates.push(mk_probe(
+                id,
+                conf,
+                format!(
+                    "公开仓库且 owner `{}` 匹配身份 *{}*；SSH 探测未成功，未当作不可达",
+                    parsed.owner, id.name
+                ),
+                ProbeKind::PublicOwner,
+            ));
+            continue;
+        }
+        if public_https_ok {
+            candidates.push(mk_probe(
+                id,
+                Confidence::Low,
+                "仓库公开可达，该身份无归属依据".into(),
+                ProbeKind::PublicNoClaim,
+            ));
+            continue;
+        }
+        let (kind, basis) = fail_label(hit.fail);
+        if let Some(lc) = local_cand {
+            if matches!(
+                lc.confidence,
+                Confidence::Certain | Confidence::VeryHigh | Confidence::MediumHigh
+            ) {
+                candidates.push(mk_probe(
+                    id,
+                    lc.confidence,
+                    format!("{}；本地依据：{}", basis, lc.basis),
+                    kind,
+                ));
+                continue;
+            }
+        }
+        candidates.push(mk_probe(id, Confidence::Low, basis.into(), kind));
+    }
+    candidates.sort_by(|a, b| {
+        conf_rank(a.confidence).cmp(&conf_rank(b.confidence)).then_with(|| {
+            let ao = identities
+                .iter()
+                .find(|i| i.id == a.identity_id)
+                .is_some_and(|id| identity_matches_owner(id, &parsed.owner));
+            let bo = identities
+                .iter()
+                .find(|i| i.id == b.identity_id)
+                .is_some_and(|id| identity_matches_owner(id, &parsed.owner));
+            bo.cmp(&ao)
+        })
+    });
+    let recommended = candidates
+        .iter()
+        .find(|c| {
+            matches!(
+                c.confidence,
+                Confidence::Certain | Confidence::VeryHigh | Confidence::MediumHigh
+            )
+        })
+        .cloned();
+    finalize(parsed, recommended, candidates)
+}
+
 fn mk(id: &Identity, confidence: Confidence, basis: String) -> Candidate {
     Candidate {
         identity_id: id.id.clone(),
@@ -149,6 +347,18 @@ fn mk(id: &Identity, confidence: Confidence, basis: String) -> Candidate {
         host_alias: id.host_alias.clone(),
         confidence,
         basis,
+        probe_kind: None,
+    }
+}
+
+fn mk_probe(id: &Identity, confidence: Confidence, basis: String, probe_kind: ProbeKind) -> Candidate {
+    Candidate {
+        identity_id: id.id.clone(),
+        identity_name: id.name.clone(),
+        host_alias: id.host_alias.clone(),
+        confidence,
+        basis,
+        probe_kind: Some(probe_kind),
     }
 }
 
@@ -238,6 +448,22 @@ mod tests {
         let rec = inf.recommended.unwrap();
         assert_eq!(rec.identity_name, "octocat");
         assert_eq!(rec.confidence, Confidence::VeryHigh);
+        assert!(!inf.needs_probe);
+    }
+
+    #[test]
+    fn owner_equals_identity_name_is_very_high_without_probe() {
+        let ids = vec![
+            id("ice-juice", "github-ice-juice", "github.com", &[]),
+            id("mgcp", "github-mgfk", "github.com", &[]),
+        ];
+        let parsed = parse_repo_url("git@github.com:ice-juice/git-keymaster-app.git").unwrap();
+        let inf = infer(&parsed, &ids, &HashMap::new());
+        let rec = inf.recommended.unwrap();
+        assert_eq!(rec.identity_name, "ice-juice");
+        assert_eq!(rec.confidence, Confidence::VeryHigh);
+        assert!(!inf.needs_probe);
+        assert!(inf.candidates.iter().all(|c| c.basis != "实测不可达"));
     }
 
     #[test]
@@ -297,5 +523,188 @@ mod tests {
         let inf = infer(&parsed, &ids, &HashMap::new());
         // 精确匹配的 b 应排在前。
         assert_eq!(inf.recommended.unwrap().identity_name, "b");
+    }
+
+    #[test]
+    fn probe_unique_reachable_recommends_and_rewrites() {
+        let ids = vec![
+            id("techn4950", "github-techn", "github.com", &[]),
+            id("other", "github-other", "github.com", &[]),
+        ];
+        let parsed = parse_repo_url("https://github.com/unknownorg/repo.git").unwrap();
+        let inf = apply_probe_hits(
+            &parsed,
+            &ids,
+            &HashMap::new(),
+            &[
+                ProbeHit {
+                    identity_id: "id-techn4950".into(),
+                    ssh_ok: true,
+                    fail: ProbeFailClass::NetworkSsh,
+                },
+                ProbeHit {
+                    identity_id: "id-other".into(),
+                    ssh_ok: false,
+                    fail: ProbeFailClass::KeyMissing,
+                },
+            ],
+            false,
+        );
+        let rec = inf.recommended.unwrap();
+        assert_eq!(rec.identity_name, "techn4950");
+        assert_eq!(rec.confidence, Confidence::Certain);
+        assert_eq!(rec.basis, "git ls-remote 实测可达");
+        assert_eq!(
+            inf.rewritten_url.as_deref(),
+            Some("git@github-techn:unknownorg/repo.git")
+        );
+        assert!(!inf.needs_probe);
+        assert_eq!(inf.candidates[0].identity_name, "techn4950");
+        assert_eq!(inf.candidates[1].identity_name, "other");
+        assert_ne!(inf.candidates[1].basis, "实测不可达");
+        assert_eq!(inf.candidates[1].probe_kind, Some(ProbeKind::KeyMissing));
+    }
+
+    #[test]
+    fn probe_none_reachable_still_needs_probe() {
+        let ids = vec![
+            id("techn4950", "github-techn", "github.com", &[]),
+            id("other", "github-other", "github.com", &[]),
+        ];
+        let parsed = parse_repo_url("https://github.com/unknownorg/repo.git").unwrap();
+        let inf = apply_probe_hits(
+            &parsed,
+            &ids,
+            &HashMap::new(),
+            &[
+                ProbeHit {
+                    identity_id: "id-techn4950".into(),
+                    ssh_ok: false,
+                    fail: ProbeFailClass::KeyMissing,
+                },
+                ProbeHit {
+                    identity_id: "id-other".into(),
+                    ssh_ok: false,
+                    fail: ProbeFailClass::NetworkSsh,
+                },
+            ],
+            false,
+        );
+        assert!(inf.recommended.is_none());
+        assert!(inf.needs_probe);
+        assert!(inf.rewritten_url.is_none());
+        assert!(inf.candidates.iter().all(|c| c.basis != "实测不可达"));
+        assert!(inf.candidates.iter().any(|c| c.probe_kind == Some(ProbeKind::KeyMissing)));
+        assert!(inf.candidates.iter().any(|c| c.probe_kind == Some(ProbeKind::NetworkSsh)));
+    }
+
+    #[test]
+    fn probe_multiple_reachable_keeps_first_certain() {
+        let ids = vec![
+            id("alpha", "gh-a", "github.com", &[]),
+            id("beta", "gh-b", "github.com", &[]),
+        ];
+        let parsed = parse_repo_url("https://github.com/shared/repo.git").unwrap();
+        let inf = apply_probe_hits(
+            &parsed,
+            &ids,
+            &HashMap::new(),
+            &[
+                ProbeHit {
+                    identity_id: "id-alpha".into(),
+                    ssh_ok: true,
+                    fail: ProbeFailClass::NetworkSsh,
+                },
+                ProbeHit {
+                    identity_id: "id-beta".into(),
+                    ssh_ok: true,
+                    fail: ProbeFailClass::NetworkSsh,
+                },
+            ],
+            false,
+        );
+        assert_eq!(inf.recommended.unwrap().identity_name, "alpha");
+        assert_eq!(inf.candidates.len(), 2);
+        assert!(inf.candidates.iter().all(|c| c.confidence == Confidence::Certain));
+        assert!(!inf.needs_probe);
+    }
+
+    #[test]
+    fn identities_for_probe_prefers_alias_then_host() {
+        let ids = vec![
+            id("techn4950", "github-techn", "github.com", &[]),
+            id("other", "github-other", "github.com", &[]),
+            id("box", "git-box", "ssh.boxexchanger.net", &[]),
+        ];
+        let alias = parse_repo_url("git@github-techn:owner/repo.git").unwrap();
+        let alias_hits = identities_for_probe(&alias, &ids);
+        assert_eq!(alias_hits.len(), 1);
+        assert_eq!(alias_hits[0].name, "techn4950");
+
+        let host = parse_repo_url("https://github.com/owner/repo.git").unwrap();
+        let host_hits = identities_for_probe(&host, &ids);
+        assert_eq!(host_hits.len(), 2);
+        assert!(host_hits.iter().all(|i| i.real_host == "github.com"));
+    }
+
+    #[test]
+    fn probe_ssh_fail_public_owner_not_unreachable() {
+        let ids = vec![
+            id("ice-juice", "github-ice-juice", "github.com", &[]),
+            id("mgcp", "github-mgfk", "github.com", &[]),
+        ];
+        let parsed = parse_repo_url("git@github.com:ice-juice/git-keymaster-app.git").unwrap();
+        let inf = apply_probe_hits(
+            &parsed,
+            &ids,
+            &HashMap::new(),
+            &[
+                ProbeHit {
+                    identity_id: "id-ice-juice".into(),
+                    ssh_ok: false,
+                    fail: ProbeFailClass::KeyMissing,
+                },
+                ProbeHit {
+                    identity_id: "id-mgcp".into(),
+                    ssh_ok: false,
+                    fail: ProbeFailClass::KeyMissing,
+                },
+            ],
+            true,
+        );
+        let rec = inf.recommended.expect("owner 匹配的公开仓不应丢掉推荐");
+        assert_eq!(rec.identity_name, "ice-juice");
+        assert_eq!(rec.confidence, Confidence::VeryHigh);
+        assert!(!inf.needs_probe);
+        assert_ne!(rec.basis, "实测不可达");
+        assert_eq!(rec.probe_kind, Some(ProbeKind::PublicOwner));
+        let other = inf.candidates.iter().find(|c| c.identity_name == "mgcp").unwrap();
+        assert_eq!(other.confidence, Confidence::Low);
+        assert_eq!(other.probe_kind, Some(ProbeKind::PublicNoClaim));
+        assert!(!inf.candidates.iter().any(|c| c.basis == "实测不可达"));
+    }
+
+    #[test]
+    fn classify_ls_remote_distinguishes_failures() {
+        assert_eq!(
+            classify_ls_remote(128, "git@github.com: Permission denied (publickey)."),
+            ProbeFailClass::KeyMissing
+        );
+        assert_eq!(
+            classify_ls_remote(128, "ERROR: Repository not found.\nfatal: Could not read from remote repository."),
+            ProbeFailClass::RepoMissing
+        );
+        assert_eq!(
+            classify_ls_remote(-1, ""),
+            ProbeFailClass::NetworkSsh
+        );
+        assert_eq!(
+            classify_ls_remote(128, "ssh: Could not resolve hostname github-ice-juice"),
+            ProbeFailClass::NetworkSsh
+        );
+        assert_eq!(
+            classify_ls_remote(128, "Host key verification failed."),
+            ProbeFailClass::NetworkSsh
+        );
     }
 }

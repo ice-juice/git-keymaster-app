@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Cloud,
+  Search,
   Settings as SettingsIcon,
   Lock,
   ShieldCheck,
@@ -17,6 +18,7 @@ import { useApp } from "../store";
 import { useAppName } from "../lib/config";
 import { isMobileTabRoot } from "../shared/mobileBack";
 import { dispatchMobileHierarchyBack, useMobileHierarchyBack } from "../shared/useMobileHierarchyBack";
+import { openCommandPalette } from "./commandPaletteBus";
 
 /**
  * 移动端外壳：顶部精简标题 + 内容区 + 底部 Tab。
@@ -80,6 +82,15 @@ export function MobileShell({ children }: { children: ReactNode }) {
         </div>
         <div className="m-topbar-spacer" />
         <div className="m-topbar-actions">
+          <button
+            type="button"
+            className="m-icon-btn"
+            aria-label={t("palette.open")}
+            title={t("palette.open")}
+            onClick={() => openCommandPalette()}
+          >
+            <Search size={18} />
+          </button>
           <NavLink
             to="/sync"
             replace

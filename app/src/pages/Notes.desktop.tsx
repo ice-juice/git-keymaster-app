@@ -10,10 +10,17 @@ import {
   NotesEmpty,
   NotesFilters,
 } from "./Notes.shared";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 export function NotesDesktop() {
   const { t } = useTranslation();
   const m = useNotesModel();
+  useItemFocus(true, (id) => {
+    m.setGroup("全部");
+    m.setQ("");
+    m.setSelectedTag(null);
+    void m.selectNote(id);
+  });
 
   return (
     <div className="stack-lg notes-page">

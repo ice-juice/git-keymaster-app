@@ -8,6 +8,7 @@ import { useNotesModel, type NotesModel } from "../shared/hooks/useNotesModel";
 import { ingestNoteImage, NoteIndexTags, NoteSelectedMark, NotesDialogs, NotesFilters } from "./Notes.shared";
 import { NoteMobileEditor } from "./NoteMobileEditor";
 import type { NoteEntry } from "../lib/ipc";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 const LONG_PRESS_MS = 500;
 const MOVE_CANCEL_PX = 10;
@@ -16,6 +17,12 @@ export function NotesMobile() {
   const { t } = useTranslation();
   const m = useNotesModel();
   const inputRef = useRef<HTMLInputElement>(null);
+  useItemFocus(true, (id) => {
+    m.setGroup("全部");
+    m.setQ("");
+    m.setSelectedTag(null);
+    void m.selectNote(id);
+  });
 
   useEffect(() => {
     if (!m.detailOpen) return;
@@ -151,6 +158,7 @@ function NoteMobileCard({ e, m }: { e: NoteEntry; m: NotesModel }) {
       className={
         "m-note-card" + (m.selectedSet.has(e.id) ? " is-checked" : "") + (m.selectionMode ? " is-selecting" : "")
       }
+      data-focus-id={e.id}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={clearPress}

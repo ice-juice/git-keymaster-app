@@ -162,6 +162,9 @@ pub struct AppConfig {
     /// 复制机密后清空剪贴板的秒数。0 = 不清空。
     #[serde(default = "default_clipboard_clear_seconds")]
     pub clipboard_clear_seconds: u32,
+    /// 剪贴板感知克隆。默认关：关时前端零轮询。
+    #[serde(default)]
+    pub clipboard_watch: bool,
     /// 每个账号保留的密码历史条数。
     #[serde(default = "default_account_history_limit")]
     pub account_history_limit: u32,
@@ -334,6 +337,7 @@ impl Default for AppConfig {
             network_proxy: None,
             reveal_grace_minutes: default_reveal_grace_minutes(),
             clipboard_clear_seconds: default_clipboard_clear_seconds(),
+            clipboard_watch: false,
             account_history_limit: default_account_history_limit(),
             biometric_unlock_enabled: false,
             biometric_reveal_enabled: false,

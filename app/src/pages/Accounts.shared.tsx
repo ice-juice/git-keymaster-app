@@ -3,7 +3,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, Copy, Eye, EyeOff, Plus, Clock, ExternalLink, Check, Pencil } from "lucide-react";
 import {
   api,
-  type AccountEntry,
   type BuiltinIconInfo,
   type GroupMeta,
   type TotpEntry,
@@ -18,8 +17,10 @@ import { GroupDialog } from "../ui/GroupDialog";
 import { GroupPicker } from "../ui/GroupPicker";
 import { GroupTabs } from "../ui/GroupTabs";
 import { useTranslation } from "react-i18next";
-import { type AccountsModel } from "../shared/hooks/useAccountsModel";
+import { type AccountEditorState, type AccountsModel } from "../shared/hooks/useAccountsModel";
 import { useOverlayBack } from "../shared/mobileBack";
+import { AccountExtraFields } from "../ui/AccountExtraFields";
+import { PasswordGenerateControls } from "../ui/PasswordGenerate";
 
 export function AccountsFilters({ m, hideSearch }: { m: AccountsModel; hideSearch?: boolean }) {
   const { t } = useTranslation();
@@ -130,7 +131,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                   const pwMissing = e.hasPassword === false;
 
                   return (
-                    <div key={e.id} className="account-item">
+                    <div key={e.id} className="account-item" data-focus-id={e.id}>
                       <div className="account-user-info">
                         <div className="account-user">
                           <span>{e.username}</span>
@@ -406,6 +407,7 @@ export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; 
           totps={m.totps}
           busy={m.busy}
           onChange={m.setEditor}
+          onRevealFields={() => m.revealEditorFields()}
           onClose={() => m.setEditor(null)}
           onSave={m.saveEditor}
           onDelete={m.editor.id ? () => m.deleteEditorAccount() : undefined}
@@ -635,20 +637,22 @@ function AccountEditor({
   totps,
   busy,
   onChange,
+  onRevealFields,
   onClose,
   onSave,
   onDelete,
   onReorderGroups,
 }: {
   compact?: boolean;
-  value: Partial<AccountEntry> & { password?: string; isPlatformLocked?: boolean };
+  value: AccountEditorState;
   builtins: BuiltinIconInfo[];
   groups: GroupMeta[];
   platforms: string[];
   existing: { platform: string; icon?: string | null }[];
   totps: TotpEntry[];
   busy: boolean;
-  onChange: (v: Partial<AccountEntry> & { password?: string; isPlatformLocked?: boolean }) => void;
+  onChange: (v: AccountEditorState) => void;
+  onRevealFields: () => Promise<Record<string, string> | undefined>;
   onClose: () => void;
   onSave: () => void;
   onDelete?: () => void;
@@ -656,7 +660,17 @@ function AccountEditor({
 }) {
   const { t } = useTranslation();
   const [showPw, setShowPw] = useState(false);
-  const hasExtra = !!(value.displayName || value.url || value.note || value.group || value.totpRef || value.pinned || (value.tags && value.tags.length));
+  const hasExtra = !!(
+    value.displayName ||
+    value.url ||
+    value.note ||
+    value.group ||
+    value.totpRef ||
+    value.pinned ||
+    (value.tags && value.tags.length) ||
+    (value.extraFieldKeys && value.extraFieldKeys.length) ||
+    (value.extraFieldsDraft && value.extraFieldsDraft.length)
+  );
   const [showMore, setShowMore] = useState(hasExtra);
   const [platformMsg, setPlatformMsg] = useState("");
   const uniquePlatforms = [...new Set(platforms.filter(Boolean))].sort();
@@ -690,7 +704,7 @@ function AccountEditor({
   }
 
   function applyUrl(raw: string) {
-    const next: Partial<AccountEntry> & { password?: string; isPlatformLocked?: boolean } = { ...value, url: raw };
+    const next: AccountEditorState = { ...value, url: raw };
     if (!value.platform?.trim() && raw.trim()) {
       const d = detectAccountSource(raw, builtins);
       if (d.kind === "url") {
@@ -713,7 +727,7 @@ function AccountEditor({
 
   return (
     <div className="wizard-overlay">
-      <div className={"card dialog-card" + (compact ? " account-editor-mobile" : "")}>
+      <div className={"card dialog-card" + (compact ? " account-editor-mobile" : " account-editor-desktop")}>
         <div className="card-head"><div className="card-title">{value.id ? (compact ? t("accounts.editCompact") : t("accounts.editTitle")) : (compact ? t("accounts.addCompact") : t("accounts.addTitle"))}</div></div>
         <div className="card-body stack">
           <div className={compact ? "stack" : "grid-sum"}>
@@ -791,6 +805,11 @@ function AccountEditor({
                 {showPw ? t("accounts.hide") : t("accounts.show")}
               </button>
             </div>
+            <PasswordGenerateControls
+              compact={compact}
+              password={value.password || ""}
+              onFill={(pw) => onChange({ ...value, password: pw })}
+            />
           </div>
 
           {!value.isPlatformLocked && (
@@ -868,6 +887,20 @@ function AccountEditor({
                   onChange={(e) => onChange({ ...value, note: e.target.value })}
                 />
               </div>
+              <AccountExtraFields
+                compact={compact}
+                draft={value.extraFieldsDraft || []}
+                disabled={busy}
+                canReveal={!!value.id}
+                onChange={(draft, dirty) =>
+                  onChange({
+                    ...value,
+                    extraFieldsDraft: draft,
+                    extraFieldsDirty: dirty === false ? value.extraFieldsDirty : true,
+                  })
+                }
+                onReveal={onRevealFields}
+              />
               <div className="field">
                 <FieldLabel
                   name={t("accounts.linkTotp")}

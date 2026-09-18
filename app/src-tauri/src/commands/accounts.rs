@@ -8,6 +8,7 @@ use crate::model::{AccountEntry, AccountSecret, GroupMeta, PasswordHistoryItem};
 use crate::store;
 use crate::util;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tauri::{AppHandle, State};
 
 fn publish(app: AppHandle) {
@@ -37,6 +38,16 @@ pub struct AccountUpsertArgs {
     pub pinned: Option<bool>,
     pub sort_order: Option<i32>,
     pub totp_ref: Option<String>,
+    #[serde(default)]
+    pub extra_fields: Option<HashMap<String, String>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountReveal {
+    pub password: String,
+    #[serde(default)]
+    pub extra_fields: HashMap<String, String>,
 }
 
 #[derive(Serialize)]
@@ -63,11 +74,15 @@ pub fn account_list(state: State<'_, AppState>) -> Result<AccountList> {
         .entries
         .into_iter()
         .map(|mut e| {
-            e.has_password = secrets
-                .account_secrets
-                .get(&e.id)
-                .map(|s| !s.password.is_empty())
-                .unwrap_or(false);
+            let secret = secrets.account_secrets.get(&e.id);
+            e.has_password = secret.map(|s| !s.password.is_empty()).unwrap_or(false);
+            e.extra_field_keys = secret
+                .map(|s| {
+                    let mut keys: Vec<String> = s.extra_fields.keys().cloned().collect();
+                    keys.sort();
+                    keys
+                })
+                .unwrap_or_default();
             e
         })
         .collect();
@@ -126,15 +141,20 @@ pub fn account_add(app: AppHandle, state: State<AppState>, args: AccountUpsertAr
         created_at: now.clone(),
         updated_at: now,
         has_password: true,
+        extra_field_keys: vec![],
     };
+    let extra_fields = sanitize_extra_fields(args.extra_fields);
+    let extra_field_keys = extra_field_keys_of(&extra_fields);
     secrets.account_secrets.insert(
         entry.id.clone(),
         AccountSecret {
             password,
-            extra_fields: Default::default(),
+            extra_fields,
             history: vec![],
         },
     );
+    let mut entry = entry;
+    entry.extra_field_keys = extra_field_keys;
     data.entries.push(entry.clone());
     store::save_secrets(v, &secrets)?;
     store::save_accounts(v, &data)?;
@@ -223,12 +243,21 @@ pub fn account_update(app: AppHandle, state: State<AppState>, args: AccountUpser
     {
         return Err(AppError::Invalid("这条记录没有密码，请重新填入".into()));
     }
+    if let Some(fields) = args.extra_fields {
+        let secret = secrets.account_secrets.entry(id.clone()).or_default();
+        secret.extra_fields = sanitize_extra_fields(Some(fields));
+    }
     let mut out = entry.clone();
     out.has_password = secrets
         .account_secrets
         .get(&id)
         .map(|s| !s.password.is_empty())
         .unwrap_or(false);
+    out.extra_field_keys = secrets
+        .account_secrets
+        .get(&id)
+        .map(|s| extra_field_keys_of(&s.extra_fields))
+        .unwrap_or_default();
     store::save_secrets(v, &secrets)?;
     store::save_accounts(v, &data)?;
     util::audit(v.root(), &format!("更新隐私账号 id={id}"));
@@ -279,7 +308,11 @@ pub fn account_save_groups(app: AppHandle, state: State<AppState>, groups: Vec<G
 }
 
 #[tauri::command]
-pub fn account_reveal_password(state: State<AppState>, id: String, password: Option<String>) -> Result<String> {
+pub fn account_reveal_password(
+    state: State<AppState>,
+    id: String,
+    password: Option<String>,
+) -> Result<AccountReveal> {
     ensure_reveal_authorized(&state, password.as_deref())?;
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
@@ -287,14 +320,18 @@ pub fn account_reveal_password(state: State<AppState>, id: String, password: Opt
         return Err(AppError::Locked);
     }
     let secrets = store::load_secrets(v)?;
-    let pw = secrets
+    let secret = secrets
         .account_secrets
         .get(&id)
-        .map(|s| s.password.clone())
-        .filter(|s| !s.is_empty())
         .ok_or_else(missing_password)?;
-    util::audit(v.root(), &format!("查看账号密码 id={id}"));
-    Ok(pw)
+    if secret.password.is_empty() {
+        return Err(missing_password());
+    }
+    util::audit(v.root(), &format!("查看账号机密 id={id}"));
+    Ok(AccountReveal {
+        password: secret.password.clone(),
+        extra_fields: secret.extra_fields.clone(),
+    })
 }
 
 #[tauri::command]
@@ -432,6 +469,26 @@ fn empty_none(s: Option<String>) -> Option<String> {
     s.map(|x| x.trim().to_string()).filter(|x| !x.is_empty())
 }
 
+fn sanitize_extra_fields(fields: Option<HashMap<String, String>>) -> HashMap<String, String> {
+    fields
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(k, v)| {
+            let key = k.trim().to_string();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key, v))
+        })
+        .collect()
+}
+
+fn extra_field_keys_of(fields: &HashMap<String, String>) -> Vec<String> {
+    let mut keys: Vec<String> = fields.keys().cloned().collect();
+    keys.sort();
+    keys
+}
+
 fn nonempty_icon(s: Option<String>) -> Option<String> {
     empty_none(s)
 }
@@ -519,6 +576,7 @@ mod tests {
             created_at: "t".into(),
             updated_at: "t".into(),
             has_password: true,
+            extra_field_keys: vec![],
         }
     }
 
@@ -568,5 +626,17 @@ mod tests {
         assert_eq!(icon.as_deref(), Some("builtin:gitlab"));
         assert_eq!(entries[0].platform, "GitHub");
         assert_eq!(entries[0].icon.as_deref(), Some("builtin:github"));
+    }
+
+    #[test]
+    fn extra_fields_drop_blank_keys() {
+        let mut raw = HashMap::new();
+        raw.insert("  ".into(), "x".into());
+        raw.insert(" recovery ".into(), "ans".into());
+        let cleaned = sanitize_extra_fields(Some(raw));
+        assert_eq!(cleaned.get("recovery").map(String::as_str), Some("ans"));
+        assert_eq!(cleaned.len(), 1);
+        assert!(sanitize_extra_fields(None).is_empty());
+        assert_eq!(extra_field_keys_of(&cleaned), vec!["recovery".to_string()]);
     }
 }

@@ -71,10 +71,12 @@
   },
   "nav": {
     "group": "导航菜单",
+    "groupGit": "Git 工作台",
+    "groupVault": "隐私保险库",
     "overview": "身份总览",
     "keys": "密钥管理",
-    "config": "SSH 配置 / 编辑",
-    "agent": "Agent托管",
+    "config": "SSH 配置",
+    "agent": "Agent 托管",
     "repos": "仓库管理",
     "clone": "克隆仓库",
     "totp": "2FA / TOTP",
@@ -464,6 +466,11 @@
     "min5": "5 分钟（推荐）",
     "min15": "15 分钟",
     "min30": "30 分钟",
+    "clipWatch": "剪贴板感知克隆",
+    "clipWatchTip": "默认关闭。开启后只识别 Git 仓库地址，弹出轻量提示；不匹配的内容立即丢弃，不会记录或上传。",
+    "clipWatchHint": "锁定后不会读取剪贴板。建议仅在本机使用时打开。",
+    "clipWatchOn": "已开启，复制 Git 地址时提示克隆",
+    "clipWatchOff": "已关闭（默认，零轮询）",
     "clipClear": "复制后清空剪贴板",
     "clipNever": "不清空",
     "sec10": "10 秒",
@@ -490,13 +497,13 @@
     "wsMinutes": "{{n}} 分钟",
     "wsSleepLock": "休眠/锁屏锁定",
     "wsSleepLockHint": "由本机配置 lockOnSleep 控制，见上方安全自查建议",
-    "patTitle": "GitHub PAT 个人访问令牌",
+    "patTitle": "Git 平台个人访问令牌",
     "backupTitle": "数据备份与云端同步",
     "backupIntro": "支持本地离线加密备份导出 (.gambackup) 与换机还原，以及 S3 / Cloudflare R2 兼容的端到端零知识加密云端同步。",
     "gotoSync": "前往云端同步与备份管理 →",
     "navAria": "设置导航",
     "dangerTitle": "高危操作 · 出厂清空还原",
-    "patTokenPh": "ghp_… 或 github_pat_…",
+    "patTokenPh": "粘贴对应平台的 PAT",
     "currentPwPh": "请输入当前生效的密码",
     "newPwPh": "新访问密码",
     "confirmPwPh": "再次输入以确认",
@@ -616,20 +623,102 @@
     "phrase": "清空"
   },
   "pat": {
-    "needToken": "请粘贴 GitHub PAT",
-    "saved": "PAT 已保存，当前 GitHub 账号 {{name}}",
-    "tested": "校验通过，GitHub 账号 {{name}}",
+    "needToken": "请粘贴 {{platform}} PAT",
+    "saved": "PAT 已保存，当前 {{platform}} 账号 {{name}}",
+    "tested": "校验通过，{{platform}} 账号 {{name}}",
     "cleared": "已清除 PAT",
-    "hint": "用于自动把公钥添加到 GitHub，以及导入组织列表。请创建 classic token，勾选 write:public_key 或 admin:public_key。令牌只保存在加密库，这里不会回显。",
+    "cardHint": {
+      "github": "用于上传公钥、导入组织。创建步骤与必须勾选的权限见说明。",
+      "gitlab": "用于上传公钥、导入群组。创建步骤与必须勾选的权限见说明。",
+      "gitee": "用于上传公钥、导入组织。创建步骤与必须勾选的权限见说明。"
+    },
+    "guideOpen": "查看创建说明",
+    "guideTitle": "{{platform}} 令牌创建说明",
+    "guideNote": "令牌只保存在加密库，这里不会回显。保存后会立即校验一次。",
+    "guide": {
+      "github": {
+        "intro": "到 GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic)，选 Generate new token (classic)。不要用 Fine-grained。",
+        "must": "必须勾选",
+        "scopes": [
+          "write:public_key — 把 SSH 公钥添加到账号",
+          "read:org — 导入组织列表"
+        ],
+        "optional": "发布 Release（可选）",
+        "extra": [
+          "repo — 私有仓和公开仓都能发 Release",
+          "public_repo — 只发公开仓时可以勾这个，不必勾 repo"
+        ]
+      },
+      "gitlab": {
+        "intro": "到 GitLab → Preferences → Access Tokens 新建令牌。",
+        "must": "必须勾选",
+        "scopes": [
+          "api — 读取账号与群组、上传 SSH 公钥；发布 Release 也用这一项"
+        ],
+        "optional": "",
+        "extra": []
+      },
+      "gitee": {
+        "intro": "到 Gitee → 设置 → 私人令牌 新建令牌。",
+        "must": "必须勾选",
+        "scopes": [
+          "user_info — 读取账号",
+          "projects — 导入组织 / 仓库相关能力"
+        ],
+        "optional": "",
+        "extra": []
+      }
+    },
     "status": "当前状态",
     "configured": "已配置",
     "unconfigured": "未配置",
+    "savedToken": "已保存的令牌",
+    "show": "显示",
+    "hide": "隐藏",
+    "replace": "更换令牌",
+    "reauthHint": "查看或复制令牌需要验证工作空间访问密码。",
     "newToken": "粘贴新令牌",
-    "tokenTip": "在 GitHub Settings → Developer settings → Personal access tokens 生成。保存后立即校验一次。",
+    "tokenTip": {
+      "github": "点「查看创建说明」看 GitHub classic token 要勾哪些权限。",
+      "gitlab": "点「查看创建说明」看 GitLab 要勾哪些权限。",
+      "gitee": "点「查看创建说明」看 Gitee 要勾哪些权限。"
+    },
+    "tokenPh": {
+      "github": "ghp_… 或 github_pat_…",
+      "gitlab": "glpat-…",
+      "gitee": "粘贴 Gitee 私人令牌"
+    },
+    "platformLabel": "平台",
+    "platform": {
+      "github": "GitHub",
+      "gitlab": "GitLab",
+      "gitee": "Gitee"
+    },
     "saveTest": "保存并校验",
+    "working": "正在校验…",
     "test": "测试连接",
     "clear": "清除",
-    "openGithub": "打开 GitHub 令牌页"
+    "openGithub": "打开 GitHub 令牌页",
+    "openTokenPage": "打开 {{platform}} 令牌页"
+  },
+  "ghCli": {
+    "title": "GitHub CLI",
+    "hint": "给本机 gh 登录后，终端和 Cursor 才能代发 Release。会打开 GitHub 设备登录页；一次性代码会出现在本页和命令窗口。令牌由 gh 保管，不写入御钥师。",
+    "status": "当前状态",
+    "missing": "未安装 GitHub CLI",
+    "loggedOut": "已安装，未登录",
+    "loggedIn": "已登录",
+    "login": "打开浏览器登录",
+    "relogin": "重新登录",
+    "cancel": "取消登录",
+    "cancelled": "已取消 GitHub CLI 登录",
+    "loggingIn": "正在获取一次性代码…",
+    "deviceCode": "把这串填进 GitHub 的 8 个格子",
+    "pasteCode": "代码已复制。填进浏览器后点 Continue，这里会自动变成已登录。",
+    "noCode": "还没读到代码。看黑色命令窗口里 one-time code 那一行，或再点一次登录。",
+    "install": "打开安装说明",
+    "ok": "已登录 GitHub CLI，账号 {{name}}",
+    "okNoName": "GitHub CLI 已登录"
   },
   "pages": {
     "overviewTitle": "身份总览",
@@ -1300,7 +1389,40 @@
     "rename": "改名",
     "detectEmpty": "填网站名，或直接粘贴登录页网址。",
     "detectIcon": "将使用「{{name}}」图标。",
-    "detectName": "保存时会按平台名自动匹配图标。"
+    "detectName": "保存时会按平台名自动匹配图标。",
+    "generate": "生成",
+    "generateOpts": "生成选项",
+    "pwLength": "长度",
+    "pwUpper": "大写字母",
+    "pwLower": "小写字母",
+    "pwDigits": "数字",
+    "pwSymbols": "符号",
+    "pwNoAmbiguous": "去掉易混字符（0/O/1/l/I）",
+    "pwNeedCharset": "请至少选择一种字符",
+    "extraFields": "自定义字段",
+    "extraFieldsTip": "安全问题、备用邮箱等。字段值按密码同等加密，查看需二次验证。",
+    "extraFieldKeyPh": "例如 安全问题",
+    "extraFieldValuePh": "仅本地加密保存",
+    "addExtraField": "添加字段",
+    "removeExtraField": "删除此字段",
+    "revealField": "显示字段",
+    "hideField": "隐藏字段",
+    "copyField": "复制字段"
+  },
+  "palette": {
+    "title": "搜索",
+    "placeholder": "搜索身份、账密、2FA、文件、备忘录…",
+    "empty": "没有匹配的条目",
+    "emptyHint": "试试平台名、用户名、标题或标签",
+    "loading": "正在建立索引…",
+    "open": "打开搜索",
+    "kind": {
+      "identity": "身份",
+      "totp": "2FA",
+      "account": "账密",
+      "file": "文件",
+      "note": "备忘录"
+    }
   },
   "overview": {
     "healthTitle": "重新检测配置、Agent与所有身份的SSH连通性",
@@ -1495,6 +1617,8 @@
     "empty": "（空）"
   },
   "repos": {
+    "tabList": "已纳管仓库",
+    "tabClone": "克隆新仓库",
     "scan": "扫描",
     "clone": "克隆",
     "init": "初始化",
@@ -1553,7 +1677,19 @@
     "recommend": "推荐身份：",
     "alias": "（别名 {{alias}}）",
     "basis": "依据：{{basis}}",
-    "needProbe": "无法确定身份，建议配置归属标识或用 PAT 探测。",
+    "needProbe": "无法确定身份。可点「实测判定」探测仓库是否存在及谁有权限；失败会区分不存在、无权限、密钥未加载或网络/SSH 问题，不会一律标成不可达。也可先配置归属标识。",
+    "probe": "实测判定",
+    "probing": "实测中…",
+    "probeNone": "实测没有给出确定身份。请查看各身份的具体原因，或手动选择、先配置归属标识。",
+    "probeKind": {
+      "sshOk": "SSH git ls-remote 实测可达",
+      "publicOwner": "公开仓库且 owner 匹配该身份；SSH 未成功，未当作不可达",
+      "publicNoClaim": "仓库公开可达，该身份无归属依据",
+      "repoMissing": "仓库不存在，或当前身份不可见",
+      "keyMissing": "SSH 密钥未加载或公钥未登记，无法实测权限",
+      "noAccess": "该身份无权限访问此仓库",
+      "networkSsh": "网络或 SSH 配置问题，未能实测"
+    },
     "noMatch": "未匹配到身份。",
     "useIdentity": "克隆使用的身份",
     "cloneLocal": "克隆 / 初始化到本地",
@@ -1573,6 +1709,13 @@
     "running": "执行中…",
     "urlPh": "git@github.com:owner/repo.git 或 https://github.com/owner/repo",
     "identityOption": "{{name}}（{{alias}}）"
+  },
+  "clipboardHint": {
+    "detected": "检测到 {{repo}}，建议身份 {{name}}",
+    "detectedNoId": "检测到 {{repo}}，尚未匹配身份",
+    "clone": "克隆",
+    "copyAlias": "复制别名",
+    "dismiss": "关闭"
   },
   "identity": {
     "stepInfo": "填信息",
@@ -1655,11 +1798,19 @@
     "openSshSettings": "打开 {{label}} SSH 设置页",
     "uploaded": "已上传",
     "uploadPat": "用 PAT 自动上传",
-    "pat": "GitHub PAT",
-    "patTip": "classic token 需要 write:public_key 或 admin:public_key，才能代你把公钥添加到 GitHub。令牌只进加密库，界面不会回显。也可跳过，改用上方「复制公钥」手动添加。",
-    "patSavedAccount": "已保存 PAT（GitHub 账号 {{login}}），可直接自动上传。也可到「设置」里更换或清除。",
+    "pat": "{{platform}} PAT",
+    "patTip": {
+      "github": "请用 classic token（不要用 Fine-grained），勾选 write:public_key 和 read:org。要发布 Release 再勾 repo。令牌只进加密库。也可跳过，改用上方「复制公钥」手动添加。",
+      "gitlab": "令牌只需勾选 api，即可上传公钥、导入群组、发布 Release。令牌只进加密库。也可跳过，改用上方「复制公钥」手动添加。",
+      "gitee": "令牌需要相应权限，才能代你把公钥添加到 Gitee。令牌只进加密库。也可跳过，改用上方「复制公钥」手动添加。"
+    },
+    "patSavedAccount": "已保存 PAT（{{platform}} 账号 {{login}}），可直接自动上传。也可到「设置」里更换或清除。",
     "patSaved": "已保存 PAT，可直接自动上传。也可到「设置」里更换或清除。",
-    "patNeed": "还没配置 PAT。到 GitHub → Settings → Developer settings → Personal access tokens 新建 classic token，勾选 write:public_key（或 admin:public_key），粘贴到下面保存。",
+    "patNeed": {
+      "github": "还没配置 PAT。到 GitHub → Settings → Developer settings → Personal access tokens → Tokens (classic) 选 Generate new token (classic)。勾选 write:public_key、read:org；要发布 Release 再勾 repo。粘贴到下面保存。",
+      "gitlab": "还没配置 PAT。到 GitLab → Preferences → Access Tokens 新建令牌并勾选 api，粘贴到下面保存。",
+      "gitee": "还没配置 PAT。到 Gitee → 设置 → 私人令牌 新建后粘贴到下面保存。"
+    },
     "savePat": "保存 PAT",
     "summaryName": "备注名",
     "summaryAlias": "Host 别名",
@@ -1673,8 +1824,8 @@
     "configPending": "尚未写入，点开始验证才会落盘",
     "configBackup": "已备份原 config：{{path}}",
     "noKeysUrl": "该平台请自行打开 SSH 公钥设置页",
-    "needPatFirst": "请先在下方保存 GitHub PAT，或改用复制公钥手动添加",
-    "uploadedMsg": "公钥已通过 PAT 上传到 GitHub",
+    "needPatFirst": "请先在下方保存 {{platform}} PAT，或改用复制公钥手动添加",
+    "uploadedMsg": "公钥已通过 PAT 上传到 {{platform}}",
     "connVerify": "连接验证",
     "connVerifyTip": "此时尚未登记身份。会临时写入 Host、把私钥加载进 ssh-agent，再执行 ssh -T。点「完成」才真正创建身份；取消则撤回 Host 并从 agent 卸下这把尚未绑定的密钥。",
     "willRun": "将执行 ssh -T git@{{alias}}。严格模式会先把私钥注入 agent，取消创建时再卸下。",
@@ -1690,7 +1841,7 @@
     "ownersTip": "这个身份名下的 owner / 组织 / 路径前缀。粘贴仓库地址时优先按这里查表，精确匹配置信度最高。支持通配 acme-*，以及自建多段路径 git.internal/platform。一行一条。",
     "ownersPh": "例如：\nnova-labs\nacme-*\ngit.internal/platform",
     "ownersHint": "示例：nova-labs（账号）、kiln-org（组织）、acme-*（通配）、git.internal/platform（多段路径）",
-    "importOrgs": "从 GitHub 组织列表导入（需已配置 PAT）",
+    "importOrgs": "从 {{platform}} 组织列表导入（需已配置 PAT）",
     "orgsImported": "已拉取 {{count}} 个组织，可再编辑",
     "noOrgs": "该账号下没有组织",
     "cancelBack": "取消并返回",

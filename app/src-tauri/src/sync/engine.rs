@@ -1724,6 +1724,8 @@ fn stable_state_hash(
         "cloneHistory": history,
         "passphrases": passes,
         "githubPat": secrets.github_pat,
+        "gitlabPat": secrets.gitlab_pat,
+        "giteePat": secrets.gitee_pat,
         "totpSeeds": seeds,
         "accountSecrets": account_secrets,
         "totpEntries": totp_entries,

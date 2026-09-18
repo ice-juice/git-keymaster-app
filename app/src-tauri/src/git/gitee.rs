@@ -1,12 +1,12 @@
-//! GitHub API 薄封装（PAT 可选功能）：上传公钥、拉取账号与所属组织。
-//! Token 只从 vault 取用，绝不落明文、日志脱敏。
+//! Gitee API 薄封装（PAT 可选功能）：上传公钥、拉取账号与所属组织。
+//! Token 只从 vault 取用，绝不落明文、日志脱敏。令牌走 query，禁止把带 token 的 URL 写入日志。
 
 use crate::app_config::NetworkProxy;
 use crate::error::{AppError, Result};
 use crate::net;
 use serde::Serialize;
 
-const API: &str = "https://api.github.com";
+const API: &str = "https://gitee.com/api/v5";
 const UA: &str = crate::identity::USER_AGENT;
 
 pub fn user_url() -> String {
@@ -14,7 +14,7 @@ pub fn user_url() -> String {
 }
 
 pub fn orgs_url() -> String {
-    format!("{API}/user/orgs?per_page=100")
+    format!("{API}/user/orgs")
 }
 
 pub fn keys_url() -> String {
@@ -38,8 +38,7 @@ fn client(proxy: Option<&NetworkProxy>) -> Result<reqwest::blocking::Client> {
 pub fn whoami(token: &str, proxy: Option<&NetworkProxy>) -> Result<String> {
     let resp = client(proxy)?
         .get(user_url())
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github+json")
+        .query(&[("access_token", token)])
         .send()
         .map_err(|e| AppError::Other(format!("请求失败：{e}")))?;
     if !resp.status().is_success() {
@@ -56,8 +55,7 @@ pub fn whoami(token: &str, proxy: Option<&NetworkProxy>) -> Result<String> {
 pub fn list_orgs(token: &str, proxy: Option<&NetworkProxy>) -> Result<Vec<String>> {
     let resp = client(proxy)?
         .get(orgs_url())
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github+json")
+        .query(&[("access_token", token), ("per_page", "100")])
         .send()
         .map_err(|e| AppError::Other(format!("请求失败：{e}")))?;
     if !resp.status().is_success() {
@@ -80,7 +78,7 @@ struct AddKeyBody<'a> {
     key: &'a str,
 }
 
-/// 上传公钥（`POST /user/keys`，需 `admin:public_key`）。
+/// 上传公钥（`POST /user/keys`）。
 pub fn upload_public_key(
     token: &str,
     title: &str,
@@ -93,8 +91,7 @@ pub fn upload_public_key(
     };
     let resp = client(proxy)?
         .post(keys_url())
-        .bearer_auth(token)
-        .header("Accept", "application/vnd.github+json")
+        .query(&[("access_token", token)])
         .json(&body)
         .send()
         .map_err(|e| AppError::Other(format!("请求失败：{e}")))?;
@@ -103,7 +100,7 @@ pub fn upload_public_key(
     } else {
         let code = resp.status();
         let text = resp.text().unwrap_or_default();
-        if text.contains("key is already in use") {
+        if text.contains("已经存在") || text.contains("already") {
             return Err(AppError::Invalid("该公钥已在此账号中".into()));
         }
         Err(AppError::Invalid(format!("上传公钥失败：HTTP {code}")))
@@ -115,9 +112,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn github_api_urls() {
-        assert_eq!(user_url(), "https://api.github.com/user");
-        assert_eq!(orgs_url(), "https://api.github.com/user/orgs?per_page=100");
-        assert_eq!(keys_url(), "https://api.github.com/user/keys");
+    fn gitee_api_urls() {
+        assert_eq!(user_url(), "https://gitee.com/api/v5/user");
+        assert_eq!(orgs_url(), "https://gitee.com/api/v5/user/orgs");
+        assert_eq!(keys_url(), "https://gitee.com/api/v5/user/keys");
+        assert!(!user_url().contains("access_token"), "URL 拼装不得带令牌");
     }
 }

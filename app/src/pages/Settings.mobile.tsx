@@ -28,6 +28,7 @@ import { writeClipboard } from "../lib/clipboard";
 import { Badge, Card, ErrorDialog, FieldLabel } from "../ui/common";
 import {
   FactoryResetPanel,
+  ClipboardWatchField,
   GithubPatSettings,
   ScreenshotSetting,
   SecurityChecklistCard,
@@ -441,6 +442,8 @@ export function SettingsMobile() {
                 </div>
               </div>
 
+              <hr className="sep" />
+              <ClipboardWatchField />
               <hr className="sep" />
 
               <div className="field">
