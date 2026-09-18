@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 static LOGIN_PID: AtomicU32 = AtomicU32::new(0);
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 static LOGIN_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
