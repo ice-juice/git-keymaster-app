@@ -120,8 +120,12 @@ export function writeXcodebuildWrapper(
   const patchLine = patcher
     ? `${shQuote(process.execPath)} ${shQuote(patcher)} >/dev/null || true\n`
     : "";
+  const iconSync = path.join(rootDir, "scripts", "sync-ios-appicon.mjs");
+  const iconLine = fs.existsSync(iconSync)
+    ? `${shQuote(process.execPath)} ${shQuote(iconSync)}\n`
+    : "";
   const script = `#!/bin/bash
-${patchLine}exec ${shQuote(realXcodebuild)} "$@" \\
+${patchLine}${iconLine}exec ${shQuote(realXcodebuild)} "$@" \\
 ${args}
 `;
   fs.writeFileSync(dest, script, { encoding: "utf8", mode: 0o755 });
@@ -193,6 +197,9 @@ function selfTest() {
   }
   if (!wrapText.includes("disable-ios-signing.mjs")) {
     throw new Error("xcodebuild 包装脚本应在调用前再打一次 pbxproj");
+  }
+  if (!wrapText.includes("sync-ios-appicon.mjs")) {
+    throw new Error("xcodebuild 包装脚本必须在编译前再同步品牌 AppIcon");
   }
   fs.rmSync(tmp, { recursive: true, force: true });
   console.log("[disable-ios-signing] self-test ok");

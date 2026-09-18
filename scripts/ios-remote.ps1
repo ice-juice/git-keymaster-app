@@ -561,6 +561,8 @@ cmd_init() {
   fi
   step "tauri icon（必须在 init 之后，覆盖默认 Tauri AppIcon）"
   npx tauri icon public/logo.svg
+  step "sync iOS AppIcon into Xcode catalog"
+  node "$REPO/scripts/sync-ios-appicon.mjs"
   log "生成完毕：$GEN"
 }
 
@@ -579,6 +581,8 @@ cmd_build() {
   cd "$APP"
   step "tauri icon（覆盖默认 AppIcon）"
   npx tauri icon public/logo.svg
+  step "sync iOS AppIcon into Xcode catalog"
+  node "$REPO/scripts/sync-ios-appicon.mjs"
   step "patch wry iOS WebKit lookup"
   node "$REPO/scripts/patch-wry-ios.mjs"
   flags=""

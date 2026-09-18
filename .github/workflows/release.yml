@@ -540,6 +540,11 @@ jobs:
         working-directory: app
         run: npx tauri icon public/logo.svg
 
+      # tauri icon 只认 gen/apple/Assets.xcassets；init 若把 AppIcon 放进子目录，
+      # 这里必须再拷一次，否则 ipa 仍是默认 Tauri 标。
+      - name: Sync iOS AppIcon into Xcode asset catalog
+        run: node scripts/sync-ios-appicon.mjs
+
       - name: Prepare unified package branding
         run: node scripts/prepare-lang.mjs unified
 

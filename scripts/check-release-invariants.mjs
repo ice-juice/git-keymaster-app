@@ -452,6 +452,9 @@ function checkRenameStem() {
   if (iosInitAt < 0 || iosIconAt < 0 || iosIconAt < iosInitAt) {
     fail("iOS job 必须先 tauri ios init，再跑 tauri icon，否则 AppIcon 是默认 Tauri 图");
   }
+  if (!yml.includes("sync-ios-appicon.mjs")) {
+    fail("iOS job 必须 sync-ios-appicon.mjs：把品牌图标拷进所有 AppIcon.appiconset，tauri icon 经常写不到");
+  }
   if (!yml.includes("patch-wry-ios.mjs")) {
     fail("iOS job 必须 patch-wry-ios.mjs：跳过 com.apple.WebKit 的 NSBundle 查询，否则真机秒退");
   }
