@@ -29,7 +29,6 @@ html[data-platform="mobile"] {
 .m-shell {
   width: 100%;
   height: 100%;
-  max-height: 100%;
   display: flex; flex-direction: column;
   overflow: hidden;
   background: var(--bg);
@@ -155,12 +154,27 @@ html[data-platform="mobile"] {
    现在一律改由平台作用域驱动，桌面永远命不中。 */
 html[data-platform="mobile"] body { font-size: 14px; letter-spacing: 0.01em; }
 
-/* iOS：用 visual viewport 锁住外壳，避免 100% 比可见区域更高而在底栏上方空出一大块。 */
+/* iOS：外壳钉在可视区域，禁止 100dvh（比 WKWebView 矮时会在底栏下面空出一块）。
+   安全区只由底栏 padding 吃一次；原生 WKWebView 的 automatic inset 已关掉。 */
 html[data-platform="mobile"][data-os="ios"],
 html[data-platform="mobile"][data-os="ios"] body,
 html[data-platform="mobile"][data-os="ios"] #root {
   height: 100%;
-  max-height: 100dvh;
+  max-height: none;
+  overflow: hidden;
+}
+html[data-platform="mobile"][data-os="ios"] .app-shell,
+html[data-platform="mobile"][data-os="ios"] .window {
+  height: 100%;
+  max-height: 100%;
+}
+html[data-platform="mobile"][data-os="ios"] .m-shell,
+html[data-platform="mobile"][data-os="ios"] .m-init-shell {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: auto;
+  max-height: none;
 }
 
 html[data-platform="mobile"] .screenshot-notice-overlay {

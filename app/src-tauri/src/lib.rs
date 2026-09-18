@@ -301,6 +301,8 @@ pub fn run() {
             app.manage(AppState::new());
             // 窗口已在，立刻按配置套防护，避免先能截再变黑。
             crate::screen_protect::apply_from_app(app.handle());
+            #[cfg(target_os = "ios")]
+            crate::mobile::ios_layout::install();
             #[cfg(windows)]
             crate::desktop_media::grant_camera(app.handle());
 
@@ -359,6 +361,8 @@ pub fn run() {
                 tauri::RunEvent::Ready => {
                     // WebView / 子 HWND 就绪后再套一次，补上冷启动漏网的合成层。
                     crate::screen_protect::apply_from_app(app);
+                    #[cfg(target_os = "ios")]
+                    crate::mobile::ios_layout::install();
                 }
                 tauri::RunEvent::Exit => {
                     crate::clipboard::clear_on_teardown();

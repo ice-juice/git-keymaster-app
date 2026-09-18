@@ -15,36 +15,6 @@ function toCssPx(n: unknown): number {
   return Number.isFinite(v) && v > 0 ? Math.round(v) : 0;
 }
 
-function measureCssEnvInset(side: "top" | "bottom" | "left" | "right"): number {
-  const el = document.createElement("div");
-  el.style.position = "fixed";
-  el.style.visibility = "hidden";
-  el.style.pointerEvents = "none";
-  const prop =
-    side === "top"
-      ? "paddingTop"
-      : side === "bottom"
-        ? "paddingBottom"
-        : side === "left"
-          ? "paddingLeft"
-          : "paddingRight";
-  el.style[prop] = `env(safe-area-inset-${side}, 0px)`;
-  document.documentElement.appendChild(el);
-  const v = toCssPx(getComputedStyle(el)[prop]);
-  el.remove();
-  return v;
-}
-
-function iosWebViewAlreadyInset(envTop: number, envBottom: number): boolean {
-  if (envBottom <= 0 && envTop <= 0) return false;
-  const visible = window.visualViewport?.height ?? window.innerHeight;
-  const screenH = window.screen.height || 0;
-  if (screenH <= 0) return false;
-  // 全屏铺满时 innerHeight ≈ screen.height；若系统已把 WebView 裁进安全区，差值会接近 inset。
-  const missing = screenH - visible;
-  return missing >= Math.max(20, envBottom) - 4;
-}
-
 function readNativeInsets(): SafeInsets {
   const w = window as Window & {
     __kmAndroidSafeInsets?: Partial<SafeInsets>;
@@ -97,20 +67,8 @@ function clearNativeInsets() {
   root.style.removeProperty("--km-safe-top");
 }
 
-function applyIosSafeAreaGuard() {
-  if (!isIOS()) return;
-  const envTop = measureCssEnvInset("top");
-  const envBottom = measureCssEnvInset("bottom");
-  if (!iosWebViewAlreadyInset(envTop, envBottom)) return;
-  const root = document.documentElement;
-  // WebView 已经避开 Home Indicator / 刘海时，CSS 不再叠加 env()。
-  root.style.setProperty("--km-safe-top", "0px");
-  root.style.setProperty("--km-safe-bottom", "0px");
-  root.style.setProperty(VARS.top, "0px");
-  root.style.setProperty(VARS.bottom, "0px");
-}
-
-/** 把 Android WindowInsets 写到 `--km-safe-*-from-native`，供 CSS 与 env() 取 max。 */
+/** 把 Android WindowInsets 写到 `--km-safe-*-from-native`，供 CSS 与 env() 取 max。
+ *  iOS 不再在 JS 里把 env() 清零：安全区只由底栏 padding 吃一次，原生 inset 已关掉。 */
 export function useSafeAreaInset(enabled: boolean) {
   useEffect(() => {
     if (!enabled) {
@@ -120,7 +78,10 @@ export function useSafeAreaInset(enabled: boolean) {
 
     const apply = () => {
       applyNativeInsets(readNativeInsets());
-      applyIosSafeAreaGuard();
+      if (isIOS()) {
+        document.documentElement.style.removeProperty("--km-safe-top");
+        document.documentElement.style.removeProperty("--km-safe-bottom");
+      }
     };
     apply();
     window.addEventListener("km-android-safe-insets", apply);
