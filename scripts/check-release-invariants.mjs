@@ -435,6 +435,12 @@ function checkRenameStem() {
   if (!yml.includes("name: ios") || !yml.includes("pack-ios-ipa.mjs") || !yml.includes("aarch64-apple-ios")) {
     fail("release.yml 必须有 ios job：macos-latest + aarch64-apple-ios + pack-ios-ipa.mjs");
   }
+  if (!yml.includes("disable-ios-signing.mjs") || !yml.includes("--wrap") || !yml.includes("tauri ios build --no-sign")) {
+    fail("iOS CI 必须改 pbxproj、包装 xcodebuild，再 tauri ios build --no-sign；`-- KEY=VAL` 进不了 xcodebuild");
+  }
+  if (/tauri ios build -- --/.test(yml) || /tauri ios build -- .*CODE_SIGNING/.test(yml)) {
+    fail("不要再用 tauri ios build -- 透传 CODE_SIGNING_*，那些参数会进 cargo runner");
+  }
   if (yml.includes("gh release upload") && /gh release upload[\s\S]{0,200}\.ipa/.test(yml)) {
     fail("联调阶段未签名 ipa 只 upload-artifact，不要挂到 GitHub Release");
   }
@@ -483,6 +489,12 @@ function runSelfTest() {
   });
   if (signTest.status !== 0) {
     fail(signTest.stderr || signTest.stdout || "sign-update-manifest self-test failed");
+  }
+  const iosSignTest = spawnSync(process.execPath, [path.join(rootDir, "scripts", "disable-ios-signing.mjs"), "--test"], {
+    encoding: "utf8",
+  });
+  if (iosSignTest.status !== 0) {
+    fail(iosSignTest.stderr || iosSignTest.stdout || "disable-ios-signing self-test failed");
   }
   console.log("[invariants] self-test ok");
 }

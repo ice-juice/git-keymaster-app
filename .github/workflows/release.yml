@@ -535,7 +535,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ ! -d src-tauri/gen/apple ]]; then
-            npx tauri ios init
+            npx tauri ios init --ci
           fi
 
       - name: Prepare unified package branding
@@ -544,12 +544,23 @@ jobs:
       - name: Verify prepared branding
         run: node scripts/check-release-invariants.mjs --prepared unified
 
+      - name: Disable iOS code signing in Xcode project
+        run: node scripts/disable-ios-signing.mjs
+
       - name: Build unsigned iOS app
         working-directory: app
         shell: bash
         run: |
           set -euo pipefail
-          npx tauri ios build -- -- CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" DEVELOPMENT_TEAM=""
+          # `tauri ios build -- KEY=VAL` 会把 KEY 丢给 cargo，到不了 xcodebuild。
+          # 2.11.4 的 --no-sign 才会走 cargo-mobile2 skip_codesign，并跳过需要证书的 export。
+          # 包装 xcodebuild：每次真正编译前再打一次 pbxproj，盖掉 Tauri 的 synchronize。
+          wrap="${RUNNER_TEMP:-/tmp}/xcodebuild-unsigned"
+          export XCODEBUILD="$(command -v xcodebuild)"
+          node ../scripts/disable-ios-signing.mjs --wrap "$wrap"
+          chmod +x "$wrap/xcodebuild"
+          export PATH="$wrap:$PATH"
+          npx tauri ios build --no-sign --ci --target aarch64
 
       - name: Pack unsigned ipa
         run: node scripts/pack-ios-ipa.mjs
