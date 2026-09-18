@@ -71,6 +71,21 @@ function assertChineseDefaults() {
       "Android strings.xml main_activity_title",
     );
   }
+
+  const iosConfPath = "app/src-tauri/tauri.ios.conf.json";
+  if (!exists(iosConfPath)) {
+    fail("必须提交 tauri.ios.conf.json");
+  }
+  const iosConf = JSON.parse(read(iosConfPath));
+  if (iosConf.bundle?.createUpdaterArtifacts !== false) {
+    fail("tauri.ios.conf.json 必须 createUpdaterArtifacts: false");
+  }
+  if (iosConf.productName && iosConf.productName !== ZH_DISPLAY_NAME) {
+    fail("tauri.ios.conf.json 若写 productName 必须是「御钥师」");
+  }
+  if (iosConf.identifier && iosConf.identifier !== "com.jeck.gitkeymaster") {
+    fail("tauri.ios.conf.json 标识符必须是 com.jeck.gitkeymaster");
+  }
 }
 
 /** 仓库默认与统一包准备后都应满足：中文默认 + 外壳双语资源。 */
@@ -416,6 +431,12 @@ function checkRenameStem() {
   }
   if (!yml.includes("TAURI_SIGNING_PRIVATE_KEY") || !yml.includes("${apks[0]}.sig")) {
     fail("release.yml 必须把同一把 minisign 私钥交给安卓/pin，并上传 APK .sig");
+  }
+  if (!yml.includes("name: ios") || !yml.includes("pack-ios-ipa.mjs") || !yml.includes("aarch64-apple-ios")) {
+    fail("release.yml 必须有 ios job：macos-latest + aarch64-apple-ios + pack-ios-ipa.mjs");
+  }
+  if (yml.includes("gh release upload") && /gh release upload[\s\S]{0,200}\.ipa/.test(yml)) {
+    fail("联调阶段未签名 ipa 只 upload-artifact，不要挂到 GitHub Release");
   }
 }
 

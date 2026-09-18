@@ -25,6 +25,7 @@ import { pushMobileBack } from "../shared/mobileBack";
 import { formatCode, TotpDialogs, TotpFilters } from "./Totp.shared";
 import { TotpMobileEditor } from "./TotpMobileEditor";
 import { useItemFocus } from "../shared/hooks/useItemFocus";
+import { can } from "../platform/capabilities";
 
 const LONG_PRESS_MS = 500;
 const MOVE_CANCEL_PX = 10;
@@ -347,13 +348,17 @@ export function TotpMobile() {
         sheetOpen={sheetOpen}
         onSheetOpenChange={setSheetOpen}
         addActions={[
-          {
-            key: "scan",
-            label: t("totp.scanImport"),
-            hint: t("totp.scanImportHint"),
-            icon: <Camera size={18} />,
-            onClick: () => void m.scanCamera(),
-          },
+          ...(can("cameraQrScan")
+            ? [
+                {
+                  key: "scan",
+                  label: t("totp.scanImport"),
+                  hint: t("totp.scanImportHint"),
+                  icon: <Camera size={18} />,
+                  onClick: () => void m.scanCamera(),
+                },
+              ]
+            : []),
           {
             key: "image",
             label: t("pages.importImage"),

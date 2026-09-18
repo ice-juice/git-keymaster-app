@@ -11,6 +11,7 @@ import {
   ChevronLeft,
   FileLock2,
   NotebookPen,
+  KeyRound,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { AppLogo } from "./AppLogo";
@@ -19,6 +20,7 @@ import { useAppName } from "../lib/config";
 import { isMobileTabRoot } from "../shared/mobileBack";
 import { dispatchMobileHierarchyBack, useMobileHierarchyBack } from "../shared/useMobileHierarchyBack";
 import { openCommandPalette } from "./commandPaletteBus";
+import { isIOS } from "../lib/platform";
 
 /**
  * 移动端外壳：顶部精简标题 + 内容区 + 底部 Tab。
@@ -55,6 +57,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
     "/notes": t("nav.notes"),
     "/sync": t("nav.sync"),
     "/settings": t("nav.settings"),
+    "/keys": t("nav.keys"),
   };
 
   const pageTitle = PAGE_TITLE[pathname] || APP_NAME;
@@ -91,6 +94,17 @@ export function MobileShell({ children }: { children: ReactNode }) {
           >
             <Search size={18} />
           </button>
+          {isIOS() && (
+            <NavLink
+              to="/keys"
+              replace
+              className={({ isActive }) => "m-icon-btn" + (isActive ? " is-on" : "")}
+              aria-label={t("nav.keys")}
+              title={t("nav.keys")}
+            >
+              <KeyRound size={18} />
+            </NavLink>
+          )}
           <NavLink
             to="/sync"
             replace

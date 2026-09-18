@@ -6,18 +6,22 @@ pub(crate) mod store;
 mod windows;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "ios")]
+mod ios;
 #[cfg(target_os = "android")]
 mod android;
-#[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "ios", target_os = "android")))]
 mod linux;
 
 #[cfg(windows)]
 use windows as backend;
 #[cfg(target_os = "macos")]
 use macos as backend;
+#[cfg(target_os = "ios")]
+use ios as backend;
 #[cfg(target_os = "android")]
 use android as backend;
-#[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
+#[cfg(not(any(windows, target_os = "macos", target_os = "ios", target_os = "android")))]
 use linux as backend;
 
 use crate::error::{AppError, Result};

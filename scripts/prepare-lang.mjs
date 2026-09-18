@@ -142,6 +142,33 @@ if (fs.existsSync(path.dirname(androidValues))) {
   writeAndroidStrings("app/src-tauri/gen/android/app/src/main/res/values-en", EN_DISPLAY_NAME);
 }
 
+function walkInfoPlists(dir, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  for (const name of fs.readdirSync(dir)) {
+    const full = path.join(dir, name);
+    const stat = fs.statSync(full);
+    if (stat.isDirectory()) {
+      if (name === "Pods" || name === "build") continue;
+      walkInfoPlists(full, out);
+    } else if (name === "Info.plist" || name.endsWith("-Info.plist")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+const appleDir = path.join(rootDir, "app/src-tauri/gen/apple");
+if (fs.existsSync(appleDir)) {
+  const face = "用于解锁工作空间并确认查看验证码或账户密码。";
+  for (const plistPath of walkInfoPlists(appleDir)) {
+    let plist = fs.readFileSync(plistPath, "utf-8");
+    plist = upsertPlistString(plist, "CFBundleDisplayName", ZH_DISPLAY_NAME);
+    plist = upsertPlistString(plist, "CFBundleName", ZH_DISPLAY_NAME);
+    plist = upsertPlistString(plist, "NSFaceIDUsageDescription", face);
+    fs.writeFileSync(plistPath, plist, "utf-8");
+  }
+}
+
 if (tauriConf.plugins?.updater) {
   tauriConf.plugins.updater.endpoints = [
     "https://github.com/ice-juice/git-keymaster-app/releases/latest/download/latest.json",

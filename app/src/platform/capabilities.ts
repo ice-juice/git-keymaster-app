@@ -1,4 +1,4 @@
-import { resolvePlatform, type Platform } from "./resolve";
+import { isIOS, resolvePlatform, type Platform } from "./resolve";
 
 /**
  * 能力矩阵：某个终端「有没有」某项能力。
@@ -36,9 +36,17 @@ const MATRIX: Record<Platform, Capabilities> = {
 };
 
 export function capabilities(): Capabilities {
-  return MATRIX[resolvePlatform()];
+  const base = MATRIX[resolvePlatform()];
+  if (isIOS()) {
+    return {
+      ...base,
+      // iOS 未接实时相机；相册选图 + rqrr 仍可用。
+      cameraQrScan: false,
+    };
+  }
+  return base;
 }
 
 export function can<K extends keyof Capabilities>(feature: K): boolean {
-  return MATRIX[resolvePlatform()][feature];
+  return capabilities()[feature];
 }

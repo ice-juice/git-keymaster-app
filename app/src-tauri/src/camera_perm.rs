@@ -52,7 +52,17 @@ pub async fn request_camera_permission(app: AppHandle) -> Result<CameraPermissio
         .map_err(|e| AppError::Other(format!("申请相机权限中断：{e}")))?;
     }
 
-    #[cfg(not(target_os = "android"))]
+    #[cfg(target_os = "ios")]
+    {
+        let _ = app;
+        // 实时相机未接；假装已授权会让前端走进坏路径。相册选图不走这里。
+        return Ok(CameraPermissionStatus {
+            granted: false,
+            permanently_denied: false,
+        });
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
     {
         let _ = app;
         Ok(CameraPermissionStatus {

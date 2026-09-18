@@ -36,6 +36,7 @@ import { encodeS3ConfigPayload, importS3ConfigFromPicker } from "../lib/s3Config
 import { firstS3ConfigJson, scanQrWithCamera } from "../lib/qrCapture";
 import { useApp } from "../store";
 import { useOverlayBack } from "../shared/mobileBack";
+import { can } from "../platform/capabilities";
 
 type S3AuthIntent = "export" | "share" | "reveal";
 
@@ -932,12 +933,12 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
           <Card
             title={t("syncPage.s3Title")}
             actions={
-              compact ? (
+              compact && can("cameraQrScan") ? (
                 <button type="button" className="m-s3-head-scan" onClick={scanS3Qr}>
                   <Camera size={14} />
                   {t("syncPage.scanImport")}
                 </button>
-              ) : (
+              ) : compact ? null : (
                 <div className="flex gap-1">
                   <span className="muted" style={{ fontSize: 11, alignSelf: "center", marginRight: 4 }}>{t("syncPage.presets")}</span>
                   <button type="button" className="btn ghost sm" onClick={() => applyPreset("r2")}>Cloudflare R2</button>

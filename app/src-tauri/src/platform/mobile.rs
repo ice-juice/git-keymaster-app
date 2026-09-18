@@ -1,9 +1,8 @@
-//! Android / iOS 实现：两个操作在移动端都没有对应物。
+//! Android / iOS 实现：沙箱目录本身只有本应用可读，不需要再收紧 ACL / chmod。
 //!
-//! - `secure_key_file`：应用沙箱目录本身就只有本应用可读，不需要再收紧 ACL / chmod。
-//! - `ssh_dir`：手机上没有会去读 `~/.ssh` 的 OpenSSH 消费者。返回沙箱内的占位目录，
-//!   仅用于让调用方的路径拼接不 panic；真正依赖它的 `ssh::managed` / `agent`
-//!   在移动端都不编译。
+//! - `secure_key_file`：移动端沙箱即隔离，空操作即可。
+//! - `ssh_dir`：返回沙箱内占位目录，供身份/密钥路径拼接。
+//!   真正会 spawn `git` / `ssh` / `ssh-agent` 的命令在移动端返回 `AppError::Unsupported`。
 
 use super::PlatformOps;
 use crate::error::Result;

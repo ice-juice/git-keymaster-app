@@ -310,6 +310,11 @@ pub fn apply_config(app: AppHandle, state: State<AppState>, entry: ManagedEntry)
 
 /// 用 `ssh -F <工作空间正本> -G <alias>` 校验解析出的 hostname 与预期一致。
 fn verify_with_ssh_g(entry: &ManagedEntry, workspace: Option<&std::path::Path>) -> bool {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (entry, workspace);
+        return false;
+    }
     let cfg = workspace.map(sys::workspace_ssh_config);
     let cfg_s = cfg.as_ref().map(|p| p.to_string_lossy().replace('\\', "/"));
     let alias = entry.alias.as_str();

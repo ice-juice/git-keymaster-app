@@ -5,6 +5,7 @@ import { api, errMessage, type KeyRecord, type ScannedKey } from "../lib/ipc";
 import { writeClipboard } from "../lib/clipboard";
 import { PageHead, Card, Empty, Badge } from "../ui/common";
 import { useApp } from "../store";
+import { can } from "../platform/capabilities";
 
 type Copied = "" | "pub" | "priv" | "pass";
 
@@ -132,6 +133,7 @@ export function Keys() {
         </Card>
       )}
 
+      {can("localGitTools") && (
       <div className="tabs">
         <button className={"tab" + (tab === "vault" ? " active" : "")} onClick={() => setTab("vault")}>
           {t("keys.vaultKeys")}
@@ -146,6 +148,7 @@ export function Keys() {
           {t("keys.systemScan")}
         </button>
       </div>
+      )}
 
       {tab === "vault" && (
         <Card>

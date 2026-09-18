@@ -409,6 +409,10 @@ fn is_agent_unreachable(hint: &str) -> bool {
 
 /// 统一使用 Git 自带 ssh-agent：先复用固定套接字，没有再启动。
 pub fn ensure() -> Result<AgentEnv> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        return Err(AppError::Unsupported("ssh-agent"));
+    }
     if let Some(env) = probe_existing_git_agent() {
         persist_git_agent_meta(&env, None);
         cleanup_stale_agent_sockets(env.auth_sock.as_deref());
@@ -713,6 +717,10 @@ fn run_ssh_add(
 /// 会把套接字落到该文件，并在 `-s` 输出里回显同一路径。不再回退到无 `-a` 的
 /// `ssh-agent -s`——那会在目录里留下 `s.*.agent.*` 随机套接字，复用从未生效。
 pub fn start_git_agent() -> Result<AgentEnv> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        return Err(AppError::Unsupported("ssh-agent"));
+    }
     let ssh = git_ssh().ok_or_else(|| AppError::Other(crate::ssh::toolchain::missing_ssh_tool("ssh")))?;
     let exe = git_ssh_agent().ok_or_else(|| AppError::Other(crate::ssh::toolchain::missing_ssh_tool("ssh-agent")))?;
     let add = git_ssh_add().ok_or_else(|| AppError::Other(crate::ssh::toolchain::missing_ssh_tool("ssh-add")))?;

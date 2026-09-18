@@ -1,8 +1,8 @@
 //! 剪贴板写入：机密路径在 Windows 同一会话内打排除标记，避免进历史 / 云剪贴板。
 //!
 //! 非机密与 macOS/Linux 降级为 `arboard`。Android 走系统 ClipboardManager。
-//! `clear_if_ours` 只清我们写入的那一份。
-#![cfg_attr(all(mobile, not(target_os = "android")), allow(dead_code))]
+//! iOS 走 UIPasteboard。`clear_if_ours` 只清我们写入的那一份。
+#![cfg_attr(all(mobile, not(any(target_os = "android", target_os = "ios"))), allow(dead_code))]
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
@@ -12,7 +12,7 @@ use tauri::Runtime;
 use tauri::{AppHandle, Manager};
 
 use sha2::{Digest, Sha256};
-#[cfg(any(test, all(desktop, not(windows))))]
+#[cfg(any(test, all(desktop, not(windows)), target_os = "ios"))]
 use zeroize::Zeroize;
 
 #[cfg(windows)]
@@ -20,6 +20,9 @@ mod windows;
 
 #[cfg(all(desktop, not(windows)))]
 mod unix;
+
+#[cfg(target_os = "ios")]
+mod ios;
 
 #[cfg(target_os = "android")]
 struct ClipboardHandle<R: Runtime>(tauri::plugin::PluginHandle<R>);
@@ -88,7 +91,11 @@ pub fn read() -> Result<String, String> {
             .and_then(|mut cb| cb.get_text())
             .map_err(|e| e.to_string())
     }
-    #[cfg(mobile)]
+    #[cfg(target_os = "ios")]
+    {
+        ios::read()
+    }
+    #[cfg(target_os = "android")]
     {
         Err("当前平台请走原生剪贴板通道".into())
     }
@@ -194,8 +201,18 @@ pub fn write(text: &str, secret: bool) -> Result<WriteOutcome, String> {
 }
 
 pub fn clear_if_ours() -> Result<(), String> {
-    #[cfg(mobile)]
+    #[cfg(target_os = "android")]
     {
+        forget_write();
+        return Ok(());
+    }
+    #[cfg(target_os = "ios")]
+    {
+        if !is_still_ours()? {
+            forget_write();
+            return Ok(());
+        }
+        ios::clear()?;
         forget_write();
         return Ok(());
     }
@@ -214,10 +231,16 @@ pub fn clear_if_ours() -> Result<(), String> {
 }
 
 fn write_plain(text: &str) -> Result<(), String> {
-    #[cfg(mobile)]
+    #[cfg(target_os = "android")]
     {
         let _ = text;
         Err("当前平台尚未接入系统剪贴板".into())
+    }
+    #[cfg(target_os = "ios")]
+    {
+        ios::write_plain(text)?;
+        remember_write(text, None);
+        Ok(())
     }
     #[cfg(desktop)]
     {
@@ -270,22 +293,35 @@ fn is_still_ours() -> Result<bool, String> {
     }
     #[cfg(all(desktop, not(windows)))]
     {
-        let expected = *LAST_HASH.lock().expect("clipboard hash lock");
-        let Some(expected) = expected else {
-            return Ok(false);
-        };
-        let mut current = match arboard::Clipboard::new().and_then(|mut cb| cb.get_text()) {
-            Ok(t) => t,
-            Err(_) => return Ok(false),
-        };
-        let matched = should_clear_by_hash(Some(expected), content_hash(&current));
-        current.zeroize();
-        Ok(matched)
+        hash_still_ours(|| {
+            arboard::Clipboard::new()
+                .and_then(|mut cb| cb.get_text())
+                .map_err(|e| e.to_string())
+        })
     }
-    #[cfg(mobile)]
+    #[cfg(target_os = "ios")]
+    {
+        hash_still_ours(ios::read)
+    }
+    #[cfg(target_os = "android")]
     {
         Ok(false)
     }
+}
+
+#[cfg(any(all(desktop, not(windows)), target_os = "ios"))]
+fn hash_still_ours(read: impl FnOnce() -> Result<String, String>) -> Result<bool, String> {
+    let expected = *LAST_HASH.lock().expect("clipboard hash lock");
+    let Some(expected) = expected else {
+        return Ok(false);
+    };
+    let mut current = match read() {
+        Ok(t) => t,
+        Err(_) => return Ok(false),
+    };
+    let matched = should_clear_by_hash(Some(expected), content_hash(&current));
+    current.zeroize();
+    Ok(matched)
 }
 
 pub(crate) fn encode_utf16_nul(text: &str) -> Vec<u16> {

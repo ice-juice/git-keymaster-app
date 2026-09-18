@@ -5,6 +5,7 @@ import { useAppName } from "../lib/config";
 import { AppLogo } from "../ui/AppLogo";
 import { S3SetupGuide, S3GuideButton } from "../ui/S3SetupGuide";
 import { useInitModel } from "../shared/hooks/useInitModel";
+import { can } from "../platform/capabilities";
 
 export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
   const { t } = useTranslation();
@@ -314,7 +315,7 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                   <div className="callout info sm">
                     {compact ? t("init.restoreCloudHintMobile") : t("init.restoreCloudHint")}
                   </div>
-                  {compact && (
+                  {compact && can("cameraQrScan") && (
                     <button type="button" className="btn primary" disabled={busy} onClick={scanS3Qr}>
                       <Camera size={16} />
                       {busy ? t("init.scanning") : t("init.scanComputerQr")}
@@ -377,7 +378,7 @@ export function InitView({ variant }: { variant: "desktop" | "mobile" }) {
                     </div>
                   )}
                   <div className="row">
-                    {compact && (
+                    {compact && can("cameraQrScan") && (
                       <button type="button" className="btn ghost sm" disabled={busy} onClick={scanS3Qr}>
                         <Camera size={13} /> {t("init.scan")}
                       </button>

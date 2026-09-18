@@ -111,6 +111,11 @@ pub fn read_ssh_config(state: State<'_, AppState>, repair: Option<bool>) -> Resu
 /// 用记事本打开工作空间内的 SSH config 正本。
 #[tauri::command]
 pub fn open_ssh_config(state: State<AppState>) -> Result<String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = state;
+        return Err(AppError::Unsupported("打开本机 SSH config"));
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let ws = state
         .config
@@ -221,6 +226,10 @@ pub fn scan_keys(state: State<'_, AppState>) -> Result<Vec<ScannedKey>> {
 /// 探测 ssh 工具链（运行 `ssh -V` 解析版本）。
 #[tauri::command(async)]
 pub fn detect_toolchain() -> Toolchain {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        return Toolchain::default();
+    }
     let mut tc = Toolchain::default();
     for (source, path) in toolchain::candidate_paths() {
         if !path.exists() {
@@ -386,6 +395,11 @@ pub fn import_key_from_path(app: AppHandle, state: State<AppState>, path: String
 /// 连接体检：对某个 Host 别名跑 `ssh -T`，解析账号名/错误。
 #[tauri::command(async)]
 pub fn test_connection(state: State<'_, AppState>, host_alias: String) -> Result<AuthResult> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (state, host_alias);
+        return Err(AppError::Unsupported("SSH 连接体检"));
+    }
     let env = {
         let current = recover_lock(&state.agent_env).clone();
         if crate::agent::is_ready(&current) {
@@ -486,13 +500,32 @@ pub fn open_url(url: String) -> Result<()> {
             return Err(AppError::Io("打开链接失败".into()));
         }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "ios")]
+    {
+        open_http_url_ios(parsed.as_str())?;
+    }
+    #[cfg(all(not(windows), not(target_os = "ios")))]
     {
         let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
         std::process::Command::new(opener)
             .arg(t)
             .spawn()
             .map_err(|e| AppError::Io(format!("打开链接失败：{e}")))?;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "ios")]
+fn open_http_url_ios(url: &str) -> Result<()> {
+    use objc2_foundation::{NSString, NSURL};
+    use objc2_ui_kit::UIApplication;
+    let ns = NSString::from_str(url);
+    let nsurl = unsafe { NSURL::URLWithString(&ns) }
+        .ok_or_else(|| AppError::Invalid("链接格式无效".into()))?;
+    #[allow(deprecated)]
+    let ok = unsafe { UIApplication::sharedApplication().openURL(&nsurl) };
+    if !ok {
+        return Err(AppError::Io("打开链接失败".into()));
     }
     Ok(())
 }

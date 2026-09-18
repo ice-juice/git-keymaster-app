@@ -23,6 +23,7 @@ import { AppLogo } from "../ui/AppLogo";
 import { useAppName } from "../lib/config";
 import { S3SetupGuide } from "../ui/S3SetupGuide";
 import { writeClipboard } from "../lib/clipboard";
+import { can } from "../platform/capabilities";
 
 export function InitMobile() {
   const { t } = useTranslation();
@@ -166,6 +167,7 @@ export function InitMobile() {
             </div>
 
             {/* 推荐大卡片：扫描二维码 */}
+            {can("cameraQrScan") && (
             <div className="m-init-qr-card">
               <div className="m-init-qr-badge">{t("init.mobileQrBadge")}</div>
               <div className="m-init-qr-title">{t("init.mobileQrTitle")}</div>
@@ -190,6 +192,7 @@ export function InitMobile() {
                 </div>
               )}
             </div>
+            )}
 
             {/* 手动填写与预设配置卡片 */}
             <div className="m-init-card">

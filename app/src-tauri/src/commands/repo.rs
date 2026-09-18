@@ -23,6 +23,11 @@ use tauri::{AppHandle, State};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn unsupported_local_git<T>() -> Result<T> {
+    Err(AppError::Unsupported("本机 Git"))
+}
+
 /// `reqwest::blocking` 不能在 `#[tauri::command(async)]` 的 Tokio 线程里创建或收尾，
 /// 否则界面会一直转圈、甚至把运行时卡死（与云同步同一类问题）。
 async fn run_pat_http<T, F>(f: F) -> Result<T>
@@ -98,6 +103,11 @@ fn run_git_timeout(
     proxy: Option<&crate::app_config::NetworkProxy>,
     timeout: Duration,
 ) -> Result<(String, String, i32)> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (env, args, proxy, timeout);
+        return unsupported_local_git();
+    }
     let mut cmd = Command::new("git");
     cmd.args(args);
     configure_git_command(&mut cmd, env, proxy)?;
@@ -162,6 +172,11 @@ fn public_https_probe_url(
 /// 对候选身份跑 `git ls-remote`：公开托管主机先 HTTPS 探仓库是否存在，再按身份走 SSH 别名。
 #[tauri::command]
 pub fn probe_url_identity(state: State<AppState>, url: String) -> Result<Inference> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (state, url);
+        return unsupported_local_git();
+    }
     let parsed = parse_repo_url(&url)?;
     let env = current_agent_env(&state);
     let proxy = {
@@ -345,6 +360,11 @@ fn upsert_from_info(
 }
 
 fn set_origin_url(repo_path: &str, url: &str) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (repo_path, url);
+        return unsupported_local_git();
+    }
     let (_o, _e, code) = sys::run("git", &["-C", repo_path, "remote", "get-url", "origin"])?;
     let (args, fail): (Vec<&str>, &str) = if code == 0 {
         (vec!["-C", repo_path, "remote", "set-url", "origin", url], "更新 origin 失败")
@@ -361,6 +381,11 @@ fn set_origin_url(repo_path: &str, url: &str) -> Result<()> {
 /// 扫描根目录下的仓库并逐个体检（不入库，供预览）。
 #[tauri::command]
 pub fn scan_repos(state: State<AppState>, root: String, max_depth: Option<usize>) -> Result<Vec<repo::RepoInfo>> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (state, root, max_depth);
+        return unsupported_local_git();
+    }
     let depth = max_depth.unwrap_or(5);
     with_vault(&state, |v| {
         let data = store::load_data(v)?;
@@ -380,6 +405,11 @@ pub fn scan_and_import_repos(
     root: String,
     max_depth: Option<usize>,
 ) -> Result<ImportScanResult> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, root, max_depth);
+        return unsupported_local_git();
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let depth = max_depth.unwrap_or(5);
     let r = with_vault(&state, |v| {
@@ -515,6 +545,11 @@ pub struct SetRepoRemoteArgs {
 /// 更换已登记仓库的 origin URL；可选同时绑定身份并改写为别名地址。
 #[tauri::command]
 pub fn set_repo_remote(app: AppHandle, state: State<AppState>, args: SetRepoRemoteArgs) -> Result<ManagedRepoView> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, args);
+        return unsupported_local_git();
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let r = with_vault(&state, |v| {
         let mut data = store::load_data(v)?;
@@ -574,6 +609,11 @@ pub fn set_repo_remote(app: AppHandle, state: State<AppState>, args: SetRepoRemo
 /// 用资源管理器打开仓库目录。
 #[tauri::command]
 pub fn open_repo_dir(path: String) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = path;
+        return unsupported_local_git();
+    }
     let p = PathBuf::from(path.trim());
     if !p.is_dir() {
         return Err(AppError::Invalid("目录不存在，无法打开".into()));
@@ -592,7 +632,7 @@ pub fn open_repo_dir(path: String) -> Result<()> {
             .spawn()
             .map_err(|e| AppError::Io(format!("打开目录失败：{e}")))?;
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     {
         std::process::Command::new("xdg-open")
             .arg(&p)
@@ -633,6 +673,11 @@ pub fn add_owner(app: AppHandle, state: State<AppState>, identity_id: String, ow
 /// 切换某仓库的身份：改 remote 为别名地址 + 设提交身份 + 学习归属。
 #[tauri::command]
 pub fn switch_repo_identity(app: AppHandle, state: State<AppState>, repo_path: String, identity_id: String) -> Result<String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, repo_path, identity_id);
+        return unsupported_local_git();
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let r = with_vault(&state, |v| {
         let mut data = store::load_data(v)?;
@@ -695,6 +740,11 @@ pub struct CloneResult {
 /// 探测选定文件夹适合 clone 还是 init，不落盘、不执行 git。
 #[tauri::command]
 pub fn inspect_clone_target(dest_dir: String, repo_name: String) -> Result<repo::ClonePlan> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (dest_dir, repo_name);
+        return unsupported_local_git();
+    }
     if dest_dir.trim().is_empty() {
         return Err(AppError::Invalid("请先选择目标文件夹".into()));
     }
@@ -716,6 +766,11 @@ fn run_git(
     args: &[&str],
     proxy: Option<&crate::app_config::NetworkProxy>,
 ) -> Result<(String, String, i32)> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (env, args, proxy);
+        return unsupported_local_git();
+    }
     let mut cmd = Command::new("git");
     cmd.args(args);
     configure_git_command(&mut cmd, env, proxy)?;
@@ -730,6 +785,11 @@ fn run_git(
 }
 
 fn apply_local_identity(repo_path: &str, name: Option<&str>, email: Option<&str>) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (repo_path, name, email);
+        return unsupported_local_git();
+    }
     if let Some(n) = name {
         sys::run("git", &["-C", repo_path, "config", "user.name", n])?;
     }
@@ -742,6 +802,11 @@ fn apply_local_identity(repo_path: &str, name: Option<&str>, email: Option<&str>
 /// 按探测结果把仓库落到本地：空目录 clone，已有项目 init，已有裸仓库补 remote。
 #[tauri::command]
 pub fn clone_repo(app: AppHandle, state: State<AppState>, args: CloneOrInitArgs) -> Result<CloneResult> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, args);
+        return unsupported_local_git();
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let parsed = parse_repo_url(&args.url)?;
     let dest = PathBuf::from(args.dest_dir.trim());

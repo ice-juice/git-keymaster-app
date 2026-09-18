@@ -98,13 +98,8 @@ windows = { version = "0.61", features = [
 ] }
 windows-future = "0.2"
 
-# 注意：`target_os = "macos"` **不覆盖 iOS**。M13 接 iOS 生物识别时，
-# 需共享的条目要显式改成 cfg(any(target_os = "macos", target_os = "ios"))。
-[target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "3"
-objc2 = "0.6"
-block2 = "0.6"
-objc2-foundation = { version = "0.3.2", features = ["NSData", "NSError", "NSString"] }
+# `target_os = "macos"` 不覆盖 iOS。Face ID / Touch ID 的 LAContext 两边共用。
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2-local-authentication = { version = "0.3.2", default-features = false, features = [
     "std",
     "LABiometryType",
@@ -113,11 +108,17 @@ objc2-local-authentication = { version = "0.3.2", default-features = false, feat
     "block2",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3.2", features = ["NSData", "NSError", "NSString"] }
+
 # 原生文件选择器只给非 Windows 的桌面平台；移动端走 tauri-plugin-dialog / SAF。
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 rfd = "0.15"
 
-# iOS：后台遮罩 + 系统截屏通知。不能彻底禁止截屏。
+# iOS：后台遮罩 + Face ID + UIPasteboard / 打开 http(s)。
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = "0.6"
 block2 = "0.6"
@@ -126,7 +127,16 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
     "NSNotification",
     "NSObject",
     "NSString",
+    "NSData",
+    "NSError",
+    "NSURL",
     "block2",
+] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "UIPasteboard",
+    "UIApplication",
+    "UIResponder",
 ] }
 
 [dev-dependencies]
