@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { ZH_DISPLAY_NAME } from "./brand.mjs";
+import { IOS_BUNDLE_EXEC, ZH_DISPLAY_NAME } from "./brand.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const rootDir = path.resolve(path.dirname(__filename), "..");
@@ -68,6 +68,77 @@ function pickApp() {
   return pool[0];
 }
 
+function run(cmd, args) {
+  const r = spawnSync(cmd, args, { encoding: "utf8" });
+  if (r.status !== 0) {
+    throw new Error(`${cmd} ${args.join(" ")} 失败：${(r.stderr || r.stdout || "").trim()}`);
+  }
+  return (r.stdout || "").trim();
+}
+
+function guessExecutable(appDir) {
+  const skip = new Set([
+    "Info.plist",
+    "PkgInfo",
+    "embedded.mobileprovision",
+    "Assets.car",
+  ]);
+  const names = fs.readdirSync(appDir);
+  const bins = names.filter((name) => {
+    if (skip.has(name) || name.endsWith(".png") || name.endsWith(".plist")) return false;
+    const full = path.join(appDir, name);
+    return fs.statSync(full).isFile();
+  });
+  if (bins.includes(IOS_BUNDLE_EXEC)) return IOS_BUNDLE_EXEC;
+  if (bins.length === 1) return bins[0];
+  throw new Error(`无法判断 .app 内可执行文件：${bins.join(", ") || "(空)"}`);
+}
+
+/**
+ * 显示名保持「御钥师」，包内 Mach-O / .app 目录改成 ASCII GitKeymaster。
+ * 中文可执行路径会让 CFBundle 在查 WebKit 时 CFRelease(NULL)。
+ */
+export function normalizeIosAppBundle(appDir, { usePlutil = process.platform === "darwin" } = {}) {
+  const plist = path.join(appDir, "Info.plist");
+  if (!fs.existsSync(plist)) {
+    throw new Error("Info.plist 不存在");
+  }
+
+  let execName = "";
+  if (usePlutil) {
+    execName = run("plutil", ["-extract", "CFBundleExecutable", "raw", "-o", "-", plist]);
+  }
+  if (!execName) {
+    execName = guessExecutable(appDir);
+  }
+
+  const oldBin = path.join(appDir, execName);
+  const newBin = path.join(appDir, IOS_BUNDLE_EXEC);
+  if (execName !== IOS_BUNDLE_EXEC) {
+    if (!fs.existsSync(oldBin)) {
+      throw new Error(`找不到可执行文件 ${execName}`);
+    }
+    if (fs.existsSync(newBin)) fs.rmSync(newBin);
+    fs.renameSync(oldBin, newBin);
+  }
+
+  if (usePlutil) {
+    run("plutil", ["-replace", "CFBundleExecutable", "-string", IOS_BUNDLE_EXEC, plist]);
+    run("plutil", ["-replace", "CFBundleDisplayName", "-string", ZH_DISPLAY_NAME, plist]);
+    run("plutil", ["-replace", "CFBundleName", "-string", ZH_DISPLAY_NAME, plist]);
+  }
+
+  const dest = path.join(path.dirname(appDir), `${IOS_BUNDLE_EXEC}.app`);
+  if (path.basename(appDir) !== `${IOS_BUNDLE_EXEC}.app`) {
+    if (fs.existsSync(dest) && dest !== appDir) {
+      fs.rmSync(dest, { recursive: true, force: true });
+    }
+    fs.renameSync(appDir, dest);
+    return dest;
+  }
+  return appDir;
+}
+
 function zipIpa(payloadDir, destIpa) {
   if (process.platform === "win32") {
     const ps = spawnSync(
@@ -104,6 +175,7 @@ function main() {
   fs.mkdirSync(payload, { recursive: true });
   const destApp = path.join(payload, path.basename(appPath));
   fs.cpSync(appPath, destApp, { recursive: true });
+  normalizeIosAppBundle(destApp);
   zipIpa(tmp, destIpa);
   fs.rmSync(tmp, { recursive: true, force: true });
 
@@ -114,10 +186,34 @@ function main() {
   console.log(`[pack-ios-ipa] ${path.relative(rootDir, destIpa)} from ${path.relative(rootDir, appPath)} (${stat.size} bytes)`);
 }
 
+function selfTest() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gam-ios-ipa-"));
+  const appDir = path.join(tmp, `${ZH_DISPLAY_NAME}.app`);
+  fs.mkdirSync(appDir);
+  fs.writeFileSync(path.join(appDir, ZH_DISPLAY_NAME), "mach-o");
+  fs.writeFileSync(path.join(appDir, "Info.plist"), "bplist-placeholder");
+  const dest = normalizeIosAppBundle(appDir, { usePlutil: false });
+  if (path.basename(dest) !== `${IOS_BUNDLE_EXEC}.app`) {
+    throw new Error(`.app 应改名为 ${IOS_BUNDLE_EXEC}.app`);
+  }
+  if (!fs.existsSync(path.join(dest, IOS_BUNDLE_EXEC))) {
+    throw new Error("包内可执行文件必须是 ASCII GitKeymaster");
+  }
+  if (fs.existsSync(path.join(dest, ZH_DISPLAY_NAME))) {
+    throw new Error("中文可执行文件名还在");
+  }
+  fs.rmSync(tmp, { recursive: true, force: true });
+  console.log("[pack-ios-ipa] self-test ok");
+}
+
 const invoked = process.argv[1] && path.basename(process.argv[1]) === "pack-ios-ipa.mjs";
 if (invoked) {
   try {
-    main();
+    if (process.argv[2] === "--test") {
+      selfTest();
+    } else {
+      main();
+    }
   } catch (err) {
     console.error(`[pack-ios-ipa] ${err.message}`);
     process.exit(1);

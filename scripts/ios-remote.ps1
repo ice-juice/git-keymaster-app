@@ -555,10 +555,12 @@ cmd_init() {
   npm install
   if [ -d "$GEN" ]; then
     log "gen/apple 已存在，跳过 tauri ios init（要重建就在 Mac 上手动删掉再跑）"
-    return 0
+  else
+    step "tauri ios init"
+    npx tauri ios init
   fi
-  step "tauri ios init"
-  npx tauri ios init
+  step "tauri icon（必须在 init 之后，覆盖默认 Tauri AppIcon）"
+  npx tauri icon public/logo.svg
   log "生成完毕：$GEN"
 }
 
@@ -575,6 +577,10 @@ cmd_build() {
   profile="$1"
   target="$2"
   cd "$APP"
+  step "tauri icon（覆盖默认 AppIcon）"
+  npx tauri icon public/logo.svg
+  step "patch wry iOS WebKit lookup"
+  node "$REPO/scripts/patch-wry-ios.mjs"
   flags=""
   if [ "$profile" = "debug" ]; then flags="--debug"; fi
   # shellcheck disable=SC2086

@@ -525,10 +525,6 @@ jobs:
         working-directory: app
         run: npm ci
 
-      - name: Update Tauri Icons from SVG
-        working-directory: app
-        run: npx tauri icon public/logo.svg
-
       - name: Init Xcode project if missing
         working-directory: app
         shell: bash
@@ -538,11 +534,20 @@ jobs:
             npx tauri ios init --ci
           fi
 
+      # 必须在 ios init 之后：init 会生成带默认 Tauri 图标的 AppIcon，
+      # 先跑 tauri icon 只会写 src-tauri/icons/，进不了 gen/apple。
+      - name: Update Tauri Icons from SVG
+        working-directory: app
+        run: npx tauri icon public/logo.svg
+
       - name: Prepare unified package branding
         run: node scripts/prepare-lang.mjs unified
 
       - name: Verify prepared branding
         run: node scripts/check-release-invariants.mjs --prepared unified
+
+      - name: Patch wry to skip iOS WebKit bundle lookup
+        run: node scripts/patch-wry-ios.mjs
 
       - name: Disable iOS code signing in Xcode project
         run: node scripts/disable-ios-signing.mjs

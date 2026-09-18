@@ -15,6 +15,7 @@ import {
   EN_DISPLAY_NAME,
   INSTALLER_STEM,
   MAIN_BINARY,
+  IOS_BUNDLE_EXEC,
   WIN_INSTALL_DIR,
   WIN_UNINSTALL_ID,
   ZH_DISPLAY_NAME,
@@ -438,6 +439,18 @@ function checkRenameStem() {
   if (!yml.includes("disable-ios-signing.mjs") || !yml.includes("--wrap") || !yml.includes("tauri ios build --no-sign")) {
     fail("iOS CI 必须改 pbxproj、包装 xcodebuild，再 tauri ios build --no-sign；`-- KEY=VAL` 进不了 xcodebuild");
   }
+  const iosInitAt = yml.indexOf("Init Xcode project if missing");
+  const iosIconAt = yml.lastIndexOf("npx tauri icon public/logo.svg");
+  if (iosInitAt < 0 || iosIconAt < 0 || iosIconAt < iosInitAt) {
+    fail("iOS job 必须先 tauri ios init，再跑 tauri icon，否则 AppIcon 是默认 Tauri 图");
+  }
+  if (!yml.includes("patch-wry-ios.mjs")) {
+    fail("iOS job 必须 patch-wry-ios.mjs：跳过 com.apple.WebKit 的 NSBundle 查询，否则真机秒退");
+  }
+  const packIos = read("scripts/pack-ios-ipa.mjs");
+  if (!packIos.includes("normalizeIosAppBundle") || !packIos.includes("IOS_BUNDLE_EXEC")) {
+    fail("pack-ios-ipa.mjs 必须把包内可执行文件改成 ASCII GitKeymaster");
+  }
   if (/tauri ios build -- --/.test(yml) || /tauri ios build -- .*CODE_SIGNING/.test(yml)) {
     fail("不要再用 tauri ios build -- 透传 CODE_SIGNING_*，那些参数会进 cargo runner");
   }
@@ -469,6 +482,9 @@ export function checkSourceInvariants() {
 }
 
 function runSelfTest() {
+  if (IOS_BUNDLE_EXEC !== WIN_INSTALL_DIR || /[^\x00-\x7F]/.test(IOS_BUNDLE_EXEC)) {
+    fail("IOS_BUNDLE_EXEC 必须是 ASCII，并与安装目录 GitKeymaster 一致");
+  }
   if (displayNameFor("zh") !== ZH_DISPLAY_NAME || displayNameFor("en") !== EN_DISPLAY_NAME) {
     fail("displayNameFor 语言映射错了");
   }
@@ -495,6 +511,18 @@ function runSelfTest() {
   });
   if (iosSignTest.status !== 0) {
     fail(iosSignTest.stderr || iosSignTest.stdout || "disable-ios-signing self-test failed");
+  }
+  const wryPatchTest = spawnSync(process.execPath, [path.join(rootDir, "scripts", "patch-wry-ios.mjs"), "--test"], {
+    encoding: "utf8",
+  });
+  if (wryPatchTest.status !== 0) {
+    fail(wryPatchTest.stderr || wryPatchTest.stdout || "patch-wry-ios self-test failed");
+  }
+  const packIosTest = spawnSync(process.execPath, [path.join(rootDir, "scripts", "pack-ios-ipa.mjs"), "--test"], {
+    encoding: "utf8",
+  });
+  if (packIosTest.status !== 0) {
+    fail(packIosTest.stderr || packIosTest.stdout || "pack-ios-ipa self-test failed");
   }
   console.log("[invariants] self-test ok");
 }

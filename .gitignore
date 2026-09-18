@@ -12,6 +12,10 @@ vault.json
 /workspace/
 /.vault/
 
+# iOS CI 临时：wry 补丁目录、本机下下来的 ipa
+app/src-tauri/vendor/
+/dist-ios/
+
 # 本机安装包与可执行文件（含私钥材料风险，不入库）
 /release/
 *.exe
