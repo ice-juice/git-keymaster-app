@@ -3,6 +3,9 @@
 //! 不用 Keychain ACL / Data Protection 钥匙串：那条路径会写 `kSecAttrSynchronizable`
 //! 或 `kSecUseDataProtectionKeychain`，未带 App ID entitlement 的签名（GitHub
 //! 分发、ad-hoc、`tauri dev`）会得到 `A required entitlement isn't present`。
+//!
+//! KEK 与指纹域状态放进**同一条**钥匙串，避免解锁时连续弹两次「允许访问钥匙串」。
+//! 同进程内第一次读成功后缓存，后续解锁只再弹 Touch ID。
 
 use crate::error::{AppError, Result};
 use block2::RcBlock;
@@ -11,7 +14,7 @@ use objc2_local_authentication::{LABiometryType, LAContext, LAError, LAPolicy};
 use security_framework::passwords::{
     delete_generic_password, generic_password, set_generic_password, PasswordOptions,
 };
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 use std::time::Duration;
 
 use super::BiometricAvailability;
@@ -19,6 +22,15 @@ use super::BiometricAvailability;
 const SERVICE: &str = "com.jeck.gitkeymaster.biometric";
 const AUTH_TIMEOUT: Duration = Duration::from_secs(120);
 const POLICY: LAPolicy = LAPolicy::DeviceOwnerAuthenticationWithBiometrics;
+const BLOB_VERSION: u8 = 1;
+
+static SESSION: Mutex<Option<CachedSecret>> = Mutex::new(None);
+
+struct CachedSecret {
+    key_ref: String,
+    kek: Vec<u8>,
+    domain: Vec<u8>,
+}
 
 pub fn availability() -> BiometricAvailability {
     let ctx = unsafe { LAContext::new() };
@@ -45,27 +57,28 @@ pub fn enroll(key_ref: &str, _challenge: &[u8]) -> Result<Vec<u8>> {
     crate::vault::crypto::fill_random(&mut raw);
     delete_item(key_ref);
     delete_item(&domain_account(key_ref));
-    set_generic_password(SERVICE, key_ref, &raw)
-        .map_err(|e| AppError::Other(format!("无法写入钥匙串：{e}")))?;
-    if !domain.is_empty() {
-        let _ = set_generic_password(SERVICE, &domain_account(key_ref), &domain);
-    }
+    write_secret(key_ref, &raw, &domain)?;
+    cache_secret(key_ref, raw.clone(), domain);
     Ok(raw)
 }
 
 pub fn derive(key_ref: &str, _challenge: &[u8]) -> Result<Vec<u8>> {
     let domain = evaluate_biometrics("解锁工作空间")?;
-    ensure_domain_current(key_ref, &domain)?;
-    generic_password(PasswordOptions::new_generic_password(SERVICE, key_ref)).map_err(map_keychain)
+    let (kek, stored_domain) = read_secret(key_ref)?;
+    ensure_domain_matches(&stored_domain, &domain)?;
+    cache_secret(key_ref, kek.clone(), stored_domain);
+    Ok(kek)
 }
 
 pub fn verify_presence(prompt: &str) -> Result<()> {
     let file = super::store::load().map_err(|_| AppError::BiometricStale)?;
     let domain = evaluate_biometrics(prompt)?;
-    ensure_domain_current(&file.key_ref, &domain)
+    let (_, stored_domain) = read_secret(&file.key_ref)?;
+    ensure_domain_matches(&stored_domain, &domain)
 }
 
 pub fn remove(key_ref: &str) -> Result<()> {
+    clear_cache();
     delete_item(key_ref);
     delete_item(&domain_account(key_ref));
     Ok(())
@@ -73,6 +86,76 @@ pub fn remove(key_ref: &str) -> Result<()> {
 
 fn domain_account(key_ref: &str) -> String {
     format!("{key_ref}.domain")
+}
+
+fn encode_blob(kek: &[u8], domain: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(3 + kek.len() + domain.len());
+    out.push(BLOB_VERSION);
+    out.extend_from_slice(&(u16::try_from(kek.len()).unwrap_or(0)).to_le_bytes());
+    out.extend_from_slice(kek);
+    out.extend_from_slice(domain);
+    out
+}
+
+fn decode_blob(raw: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+    if raw.first().copied() != Some(BLOB_VERSION) || raw.len() < 3 {
+        return None;
+    }
+    let kek_len = u16::from_le_bytes([raw[1], raw[2]]) as usize;
+    if raw.len() < 3 + kek_len {
+        return None;
+    }
+    Some((raw[3..3 + kek_len].to_vec(), raw[3 + kek_len..].to_vec()))
+}
+
+fn write_secret(key_ref: &str, kek: &[u8], domain: &[u8]) -> Result<()> {
+    set_generic_password(SERVICE, key_ref, &encode_blob(kek, domain))
+        .map_err(|e| AppError::Other(format!("无法写入钥匙串：{e}")))
+}
+
+fn read_secret(key_ref: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    if let Some(hit) = cached_secret(key_ref) {
+        return Ok(hit);
+    }
+    let raw = generic_password(PasswordOptions::new_generic_password(SERVICE, key_ref))
+        .map_err(map_keychain)?;
+    if let Some((kek, domain)) = decode_blob(&raw) {
+        return Ok((kek, domain));
+    }
+    // 旧版拆成两条钥匙串：升级时合并，避免以后每次解锁弹两次。
+    let domain = generic_password(PasswordOptions::new_generic_password(
+        SERVICE,
+        &domain_account(key_ref),
+    ))
+    .unwrap_or_default();
+    if let Err(e) = write_secret(key_ref, &raw, &domain) {
+        log::debug!("合并钥匙串项失败：{e}");
+    }
+    let _ = delete_generic_password(SERVICE, &domain_account(key_ref));
+    Ok((raw, domain))
+}
+
+fn cached_secret(key_ref: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+    let guard = SESSION.lock().unwrap_or_else(|e| e.into_inner());
+    guard.as_ref().and_then(|cached| {
+        if cached.key_ref == key_ref {
+            Some((cached.kek.clone(), cached.domain.clone()))
+        } else {
+            None
+        }
+    })
+}
+
+fn cache_secret(key_ref: &str, kek: Vec<u8>, domain: Vec<u8>) {
+    *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedSecret {
+        key_ref: key_ref.to_string(),
+        kek,
+        domain,
+    });
+}
+
+pub(crate) fn clear_cache() {
+    *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
 fn delete_item(account: &str) {
@@ -84,14 +167,7 @@ fn delete_item(account: &str) {
     }
 }
 
-fn ensure_domain_current(key_ref: &str, current: &[u8]) -> Result<()> {
-    let stored = match generic_password(PasswordOptions::new_generic_password(
-        SERVICE,
-        &domain_account(key_ref),
-    )) {
-        Ok(v) => v,
-        Err(_) => return Ok(()),
-    };
+fn ensure_domain_matches(stored: &[u8], current: &[u8]) -> Result<()> {
     if stored.is_empty() || current.is_empty() || stored == current {
         Ok(())
     } else {
@@ -168,5 +244,18 @@ fn map_keychain(e: security_framework::base::Error) -> AppError {
         AppError::BiometricStale
     } else {
         AppError::Other(format!("无法读取钥匙串：{e}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{decode_blob, encode_blob};
+
+    #[test]
+    fn blob_roundtrip_keeps_kek_and_domain() {
+        let (kek, domain) = decode_blob(&encode_blob(b"kek-bytes-32-bytes-long------", b"dom")).unwrap();
+        assert_eq!(kek, b"kek-bytes-32-bytes-long------");
+        assert_eq!(domain, b"dom");
+        assert!(decode_blob(b"legacy-raw-kek").is_none());
     }
 }

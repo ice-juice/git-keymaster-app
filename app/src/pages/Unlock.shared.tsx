@@ -38,6 +38,8 @@ export function UnlockView() {
 
   const fingerprintReady = !!(bio?.enabled && bio.available);
   const bioName = bioNoun(bio);
+  const macKeychainHint =
+    !mobile && /Mac/.test(navigator.userAgent) && !/iPhone|iPad|iPod/.test(navigator.userAgent);
 
   useEffect(() => {
     api
@@ -134,7 +136,9 @@ export function UnlockView() {
               <Fingerprint size={36} />
             </button>
             <div className="unlock-bio-hint">
-              {busy ? t("unlock.busyBio") : t("unlock.hintBio")}
+              {busy
+                ? t(macKeychainHint ? "unlock.busyBioMac" : "unlock.busyBio")
+                : t(macKeychainHint ? "unlock.hintBioMac" : "unlock.hintBio")}
             </div>
           </div>
         )}

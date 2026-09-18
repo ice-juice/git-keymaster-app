@@ -324,6 +324,7 @@ pub fn lock_in_memory(state: &AppState) {
     }
     crate::commands::sync::invalidate_cloud_view_cache();
     crate::commands::sync::invalidate_client_cache();
+    crate::biometric::clear_session_secrets();
     // 锁上了却把刚复制的密码留在剪贴板，等于没锁。
     crate::clipboard::clear_on_teardown();
     crate::commands::clear_reveal_grace(state);

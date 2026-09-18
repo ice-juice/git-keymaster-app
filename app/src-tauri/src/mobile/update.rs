@@ -4,7 +4,7 @@
 use crate::app_config::{NetworkProxy, UpdateSource};
 use crate::error::{AppError, Result};
 use crate::platform;
-use crate::update::manifest::{self, platform_asset, ANDROID_PLATFORM_KEY};
+use crate::update::manifest::{self, android_asset_matches_version, platform_asset, ANDROID_PLATFORM_KEY};
 use crate::update::UpdateCheckResult;
 use tauri::{AppHandle, Runtime};
 #[cfg(target_os = "android")]
@@ -67,7 +67,9 @@ pub async fn check(
             let latest = doc.version.clone();
             let newer = manifest::is_newer(&current_version, &latest);
             let asset_url = if cfg!(target_os = "android") {
-                platform_asset(&doc, ANDROID_PLATFORM_KEY).map(|a| a.url.clone())
+                platform_asset(&doc, ANDROID_PLATFORM_KEY)
+                    .filter(|asset| android_asset_matches_version(asset, &doc.version))
+                    .map(|a| a.url.clone())
             } else {
                 None
             };
@@ -117,12 +119,15 @@ pub async fn download_and_install(
         return Err(AppError::Invalid("不允许安装更低或相同版本".into()));
     }
     let asset = platform_asset(&doc, ANDROID_PLATFORM_KEY)
-        .ok_or_else(|| AppError::Invalid("更新清单没有 android-aarch64 安装包".into()))?;
+        .filter(|item| android_asset_matches_version(item, &doc.version))
+        .ok_or_else(|| {
+            AppError::Invalid("更新清单里的安卓包还不是当前版本，请稍后再检查更新".into())
+        })?;
     manifest::require_android_minisign(asset)?;
     let url = parse_https_download(&asset.url)?;
     let apk_signature = asset.signature.clone();
 
-    let dest = apk_cache_path(app)?;
+    let dest = apk_cache_path(app, &doc.version)?;
     let _ = app.emit(
         "update-progress",
         json!({ "phase": "started", "downloaded": 0, "total": null }),
@@ -196,13 +201,18 @@ fn verify_downloaded_apk(path: &std::path::Path, signature: &str) -> Result<()> 
 }
 
 #[cfg(target_os = "android")]
-fn apk_cache_path(app: &AppHandle) -> Result<PathBuf> {
+fn apk_cache_path(app: &AppHandle, version: &str) -> Result<PathBuf> {
     let dir = app
         .path()
         .app_cache_dir()
         .map_err(|e| AppError::Other(format!("无法解析缓存目录：{e}")))?;
     std::fs::create_dir_all(&dir)?;
-    Ok(dir.join("git-keymaster-update.apk"))
+    let _ = std::fs::remove_file(dir.join("git-keymaster-update.apk"));
+    let safe: String = version
+        .chars()
+        .filter(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    Ok(dir.join(format!("git-keymaster-update-{safe}.apk")))
 }
 
 #[cfg(target_os = "android")]
@@ -224,6 +234,8 @@ async fn download_apk(
     let resp = client
         .get(url.as_str())
         .header("User-Agent", crate::identity::USER_AGENT)
+        .header("Cache-Control", "no-cache")
+        .header("Pragma", "no-cache")
         .send()
         .await
         .map_err(|e| AppError::Other(format!("下载更新包失败：{e}")))?;

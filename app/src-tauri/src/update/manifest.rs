@@ -181,6 +181,20 @@ pub fn platform_asset<'a>(manifest: &'a LatestManifest, key: &str) -> Option<&'a
     manifest.platforms.get(key).filter(|p| !p.url.trim().is_empty())
 }
 
+/// `Git.Keymaster_1.9.0_arm64-v8a.apk` 文件名里的版本。对不上清单 version 就是旧安卓槽位。
+pub fn apk_filename_version(url: &str) -> Option<String> {
+    let name = url.rsplit(['/', '\\']).next().unwrap_or("").trim();
+    let rest = name.strip_prefix("Git.Keymaster_")?;
+    let ver = rest.split('_').next()?;
+    parse_version(ver).map(|v| v.to_string())
+}
+
+pub fn android_asset_matches_version(asset: &PlatformAsset, version: &str) -> bool {
+    !asset.signature.trim().is_empty()
+        && apk_filename_version(&asset.url)
+            .is_some_and(|found| versions_equal(&found, version))
+}
+
 /// 安卓在调系统安装器之前必须有包级 minisign；空签名等于没签。
 pub fn require_android_minisign(asset: &PlatformAsset) -> Result<()> {
     if asset.signature.trim().is_empty() {
@@ -223,6 +237,8 @@ pub async fn fetch_manifest(
         .get(url.as_str())
         .header("User-Agent", crate::identity::USER_AGENT)
         .header("Accept", "application/json")
+        .header("Cache-Control", "no-cache")
+        .header("Pragma", "no-cache")
         .timeout(Duration::from_secs(20))
         .send()
         .await
@@ -302,6 +318,27 @@ mod tests {
     #[test]
     fn parse_version_accepts_v_prefix() {
         assert_eq!(parse_version("v1.2.3").unwrap().to_string(), "1.2.3");
+    }
+
+    #[test]
+    fn android_url_must_match_manifest_version() {
+        let v19 = PlatformAsset {
+            url: "https://github.com/ice-juice/git-keymaster-app/releases/download/v1.9.0/Git.Keymaster_1.9.0_arm64-v8a.apk".into(),
+            signature: "sig".into(),
+        };
+        let stale = PlatformAsset {
+            url: "https://github.com/ice-juice/git-keymaster-app/releases/download/v1.8.0/Git.Keymaster_1.8.0_arm64-v8a.apk".into(),
+            signature: "sig".into(),
+        };
+        assert!(android_asset_matches_version(&v19, "1.9.0"));
+        assert!(!android_asset_matches_version(&stale, "1.9.0"));
+        assert!(!android_asset_matches_version(
+            &PlatformAsset {
+                url: v19.url.clone(),
+                signature: String::new(),
+            },
+            "1.9.0"
+        ));
     }
 
     #[test]

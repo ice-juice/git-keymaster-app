@@ -240,4 +240,10 @@ pub fn factory_reset_cleanup() {
         let _ = backend::remove(&file.key_ref);
     }
     store::clear();
+    clear_session_secrets();
+}
+
+pub fn clear_session_secrets() {
+    #[cfg(target_os = "macos")]
+    backend::clear_cache();
 }
