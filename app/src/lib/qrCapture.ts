@@ -71,11 +71,22 @@ export function pickImageFromGallery(): Promise<File | null> {
     const input = document.createElement("input");
     input.type = "file";
     input.accept = "image/*";
-    input.onchange = () => {
-      const file = input.files?.[0] || null;
+    // iOS WKWebView 必须挂到 DOM 才能稳定唤起相册；不要设 capture，否则会直接开相机。
+    input.setAttribute("autocomplete", "off");
+    input.style.position = "fixed";
+    input.style.left = "-9999px";
+    input.style.width = "1px";
+    input.style.height = "1px";
+    input.style.opacity = "0";
+    const done = (file: File | null) => {
+      input.remove();
       resolve(file);
     };
-    input.addEventListener("cancel", () => resolve(null));
+    input.onchange = () => {
+      done(input.files?.[0] || null);
+    };
+    input.addEventListener("cancel", () => done(null));
+    document.body.appendChild(input);
     input.click();
   });
 }

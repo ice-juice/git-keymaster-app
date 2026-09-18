@@ -2390,6 +2390,18 @@ html[data-platform="desktop"] .qr-scanner-box {
   transform: translate(-50%, 0);
 }
 
+.screenshot-notice-overlay {
+  z-index: 90;
+}
+.screenshot-notice-card {
+  max-width: min(420px, calc(100vw - 32px));
+}
+.screenshot-notice-body {
+  font-size: 14px;
+  line-height: 1.55;
+  padding: 18px 16px 8px;
+}
+
 .clipboard-clone-hint {
   position: fixed;
   left: 50%;

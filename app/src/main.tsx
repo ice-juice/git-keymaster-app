@@ -4,7 +4,7 @@ import './index.css'
 import './lib/i18n'
 import App from './App.tsx'
 import { LocaleProvider } from './lib/locale'
-import { resolvePlatform } from './platform/resolve'
+import { isAndroid, isIOS, resolvePlatform } from './platform/resolve'
 
 /**
  * 启动引导：先把平台写进 <html data-platform>，样式据此分流；
@@ -14,6 +14,7 @@ import { resolvePlatform } from './platform/resolve'
 async function bootstrap() {
   const platform = resolvePlatform()
   document.documentElement.dataset.platform = platform
+  document.documentElement.dataset.os = isIOS() ? 'ios' : isAndroid() ? 'android' : 'desktop'
   if (platform === 'mobile') {
     await import('./styles/mobile.css')
   }

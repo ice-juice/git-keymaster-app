@@ -70,11 +70,16 @@ if (tauriConf.app && tauriConf.app.windows && tauriConf.app.windows[0]) {
   tauriConf.app.windows[0].title = ZH_DISPLAY_NAME;
 }
 
+const cameraZh = "用于扫描 2FA 密钥或云存储配置二维码。";
+const faceZh = "用于解锁工作空间并确认查看验证码或账户密码。";
+
 const infoPlistPath = path.join(rootDir, "app", "src-tauri", "Info.plist");
 if (fs.existsSync(infoPlistPath)) {
   let plist = fs.readFileSync(infoPlistPath, "utf-8");
   plist = upsertPlistString(plist, "CFBundleDisplayName", ZH_DISPLAY_NAME);
   plist = upsertPlistString(plist, "CFBundleName", ZH_DISPLAY_NAME);
+  plist = upsertPlistString(plist, "NSCameraUsageDescription", cameraZh);
+  plist = upsertPlistString(plist, "NSFaceIDUsageDescription", faceZh);
   fs.writeFileSync(infoPlistPath, plist, "utf-8");
 }
 
@@ -159,12 +164,12 @@ function walkInfoPlists(dir, out = []) {
 
 const appleDir = path.join(rootDir, "app/src-tauri/gen/apple");
 if (fs.existsSync(appleDir)) {
-  const face = "用于解锁工作空间并确认查看验证码或账户密码。";
   for (const plistPath of walkInfoPlists(appleDir)) {
     let plist = fs.readFileSync(plistPath, "utf-8");
     plist = upsertPlistString(plist, "CFBundleDisplayName", ZH_DISPLAY_NAME);
     plist = upsertPlistString(plist, "CFBundleName", ZH_DISPLAY_NAME);
-    plist = upsertPlistString(plist, "NSFaceIDUsageDescription", face);
+    plist = upsertPlistString(plist, "NSCameraUsageDescription", cameraZh);
+    plist = upsertPlistString(plist, "NSFaceIDUsageDescription", faceZh);
     fs.writeFileSync(plistPath, plist, "utf-8");
   }
 }

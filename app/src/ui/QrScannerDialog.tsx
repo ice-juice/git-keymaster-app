@@ -5,7 +5,55 @@ import jsQR from "jsqr";
 import { pickQrFromGallery } from "../lib/qrCapture";
 import { api } from "../lib/ipc";
 import { i18n, displayNameForLocale } from "../lib/i18n";
-import { isMobilePlatform } from "../lib/platform";
+import { isIOS, isMobilePlatform } from "../lib/platform";
+
+function attachInlineVideo(video: HTMLVideoElement, stream: MediaStream) {
+  video.setAttribute("playsinline", "true");
+  video.setAttribute("webkit-playsinline", "true");
+  video.muted = true;
+  video.autoplay = true;
+  video.playsInline = true;
+  video.srcObject = stream;
+}
+
+async function openUserMedia(opts: {
+  deviceId?: string | null;
+  mobile: boolean;
+  ios: boolean;
+}): Promise<MediaStream> {
+  const attempts: MediaStreamConstraints[] = [];
+  if (opts.deviceId) {
+    attempts.push({
+      video: { deviceId: { exact: opts.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+  } else if (opts.mobile) {
+    // iOS Safari / WKWebView：exact facingMode 经常 OverconstrainedError，只用 ideal。
+    attempts.push({
+      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+    if (opts.ios) {
+      attempts.push({ video: { facingMode: "environment" }, audio: false });
+      attempts.push({ video: true, audio: false });
+    }
+  } else {
+    attempts.push({
+      video: { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      audio: false,
+    });
+  }
+
+  let last: unknown;
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints);
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last;
+}
 
 export interface QrScannerDialogProps {
   open: boolean;
@@ -37,6 +85,8 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const mobile = isMobilePlatform();
+  const ios = isIOS();
+  const detectorRef = useRef<{ detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>> } | null>(null);
 
   // 停止所有摄像头轨道
   const stopStream = () => {
@@ -74,25 +124,19 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         return;
       }
 
-      const chosenId = preferredId ?? deviceId;
-      const video: MediaTrackConstraints = {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      };
-      if (chosenId) {
-        video.deviceId = { exact: chosenId };
-      } else if (mobile) {
-        video.facingMode = { ideal: "environment" };
-      } else {
-        video.facingMode = { ideal: "user" };
+      if (ios) {
+        await new Promise((r) => window.setTimeout(r, 40));
       }
-      const constraints: MediaStreamConstraints = { video, audio: false };
 
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const stream = await openUserMedia({
+        deviceId: preferredId ?? deviceId,
+        mobile,
+        ios,
+      });
       streamRef.current = stream;
 
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
+        attachInlineVideo(videoRef.current, stream);
         await videoRef.current.play().catch(() => {});
       }
 
@@ -179,8 +223,32 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
     let cancelled = false;
     let timer: number | null = null;
     let detected = false;
+    let frames = 0;
+
+    if ("BarcodeDetector" in window && !detectorRef.current) {
+      try {
+        detectorRef.current = new (window as any).BarcodeDetector({ formats: ["qr_code"] });
+      } catch {
+        detectorRef.current = null;
+      }
+    }
 
     startCamera();
+
+    const onVis = () => {
+      if (cancelled) return;
+      if (document.visibilityState === "hidden") {
+        stopStream();
+        return;
+      }
+      if (!streamRef.current) {
+        void startCamera();
+      } else if (videoRef.current) {
+        void videoRef.current.play().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("pageshow", onVis);
 
     const scanFrame = async () => {
       if (cancelled || detected) return;
@@ -189,13 +257,12 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       const canvas = canvasRef.current;
 
       if (video && canvas && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        // 1. 优先尝试硬件加速 BarcodeDetector（Android Chromium 83+ 原生内置）
-        if ("BarcodeDetector" in window) {
+        // 1. 优先复用 BarcodeDetector（iOS 17+ / Android Chromium 有则用）
+        if (detectorRef.current) {
           try {
-            const detector = new (window as any).BarcodeDetector({ formats: ["qr_code"] });
-            const codes = await detector.detect(video);
+            const codes = await detectorRef.current.detect(video);
             if (codes && codes.length > 0) {
-              const rawValues = codes.map((c: any) => c.rawValue).filter(Boolean);
+              const rawValues = codes.map((c) => c.rawValue).filter(Boolean) as string[];
               if (rawValues.length > 0) {
                 detected = true;
                 handleSuccess(rawValues);
@@ -211,8 +278,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         try {
           const vw = video.videoWidth || 640;
           const vh = video.videoHeight || 480;
-          // 缩放到 640px 保证毫秒级 CPU 解码
-          const maxDim = 640;
+          const maxDim = ios ? 480 : 640;
           const scale = Math.min(1, maxDim / Math.max(vw, vh));
           const cw = Math.round(vw * scale);
           const ch = Math.round(vh * scale);
@@ -229,6 +295,23 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
               handleSuccess([code.data.trim()]);
               return;
             }
+
+            // 3. 隔若干帧再走 rqrr，避免每帧打 IPC
+            frames += 1;
+            if (frames % 12 === 0) {
+              const blob = await new Promise<Blob | null>((resolve) => {
+                canvas.toBlob((b) => resolve(b), "image/jpeg", 0.85);
+              });
+              if (blob) {
+                const bytes = new Uint8Array(await blob.arrayBuffer());
+                const texts = await api.decodeQrFromImage(Array.from(bytes));
+                if (texts && texts.length > 0) {
+                  detected = true;
+                  handleSuccess(texts);
+                  return;
+                }
+              }
+            }
           }
         } catch {
           // ignore frame error
@@ -236,7 +319,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       }
 
       if (!cancelled && !detected) {
-        timer = window.setTimeout(scanFrame, 120);
+        timer = window.setTimeout(scanFrame, ios ? 160 : 120);
       }
     };
 
@@ -245,6 +328,8 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("pageshow", onVis);
       stopStream();
     };
   }, [open]);
@@ -263,6 +348,8 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         playsInline
         autoPlay
         muted
+        // iOS WKWebView 必须同时带 webkit-playsinline，否则会强制全屏中断扫码循环
+        {...{ "webkit-playsinline": "true" }}
       />
 
       {/* 顶部操作条 */}

@@ -9,6 +9,7 @@ import {
   Palette,
   Sun,
   ClipboardPaste,
+  Image as ImageIcon,
   BookOpen,
   ChevronDown,
   ChevronUp,
@@ -166,8 +167,7 @@ export function InitMobile() {
               {t("init.restoreCloudHintMobile")}
             </div>
 
-            {/* 推荐大卡片：扫描二维码 */}
-            {can("cameraQrScan") && (
+            {/* 推荐大卡片：扫码或从相册识别。相册入口不因实时相机能力关闭而整卡隐藏。 */}
             <div className="m-init-qr-card">
               <div className="m-init-qr-badge">{t("init.mobileQrBadge")}</div>
               <div className="m-init-qr-title">{t("init.mobileQrTitle")}</div>
@@ -175,15 +175,28 @@ export function InitMobile() {
                 {t("init.mobileQrDesc")}
               </div>
 
-              <button
-                type="button"
-                className="btn primary m-init-qr-btn"
-                disabled={m.busy}
-                onClick={m.scanS3Qr}
-              >
-                <Camera size={18} />
-                <span>{m.busy ? t("init.scanningQr") : t("init.scanComputerQr")}</span>
-              </button>
+              <div className="m-init-qr-actions">
+                {can("cameraQrScan") && (
+                  <button
+                    type="button"
+                    className="btn primary m-init-qr-btn"
+                    disabled={m.busy}
+                    onClick={m.scanS3Qr}
+                  >
+                    <Camera size={18} />
+                    <span>{m.busy ? t("init.scanningQr") : t("init.scanComputerQr")}</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className={"btn m-init-qr-btn" + (can("cameraQrScan") ? " ghost" : " primary")}
+                  disabled={m.busy}
+                  onClick={m.importS3QrFromGallery}
+                >
+                  <ImageIcon size={18} />
+                  <span>{m.busy ? t("init.scanningGalleryQr") : t("init.scanGalleryQr")}</span>
+                </button>
+              </div>
 
               {m.s3Ready() && (
                 <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--green)", fontWeight: 600, marginTop: 2 }}>
@@ -192,7 +205,6 @@ export function InitMobile() {
                 </div>
               )}
             </div>
-            )}
 
             {/* 手动填写与预设配置卡片 */}
             <div className="m-init-card">

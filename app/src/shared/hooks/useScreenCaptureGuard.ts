@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { api, type ScreenCaptureSettings } from "../../lib/ipc";
-import { showAppToast } from "../../ui/Toast";
 
 const DEFAULT: ScreenCaptureSettings = {
   allowScreenshots: false,
@@ -13,6 +12,7 @@ const DEFAULT: ScreenCaptureSettings = {
 export function useScreenCaptureGuard() {
   const { t } = useTranslation();
   const [cover, setCover] = useState(false);
+  const [shotNotice, setShotNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let allow = false;
@@ -48,7 +48,8 @@ export function useScreenCaptureGuard() {
       })
       .catch(() => {});
     listen("screen-captured", () => {
-      showAppToast(t("settings.screenshotTaken"));
+      if (allow) return;
+      setShotNotice(t("settings.screenshotTaken"));
     })
       .then((fn) => {
         offShot = fn;
@@ -65,5 +66,9 @@ export function useScreenCaptureGuard() {
     };
   }, [t]);
 
-  return cover;
+  return {
+    cover,
+    shotNotice,
+    dismissShotNotice: () => setShotNotice(null),
+  };
 }

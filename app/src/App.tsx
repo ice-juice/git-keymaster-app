@@ -80,7 +80,7 @@ export default function App() {
   const compact = useIsCompact();
   useImeInset(compact);
   useSafeAreaInset(compact);
-  const privacyCover = useScreenCaptureGuard();
+  const { cover: privacyCover, shotNotice, dismissShotNotice } = useScreenCaptureGuard();
   // 本机 Git / SSH 工具链相关页面在移动端没有消费者，连路由都不注册，
   // 避免深链接或历史记录把用户带到一个必然报错的页面。
   // 平台标记（<html data-platform>）已由 main.tsx 在首帧前写好，这里无需再动。
@@ -251,6 +251,18 @@ export default function App() {
       </div>
       {unlockOverlay}
       {privacyCover && <div className="privacy-cover" aria-hidden="true" />}
+      {shotNotice && (
+        <div className="wizard-overlay screenshot-notice-overlay" role="alertdialog" aria-modal="true">
+          <div className="dialog-card card screenshot-notice-card">
+            <div className="card-body screenshot-notice-body">{shotNotice}</div>
+            <div className="card-foot">
+              <button type="button" className="btn primary" onClick={dismissShotNotice}>
+                {t("common.gotIt")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

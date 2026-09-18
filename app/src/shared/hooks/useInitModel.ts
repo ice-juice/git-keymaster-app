@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { api, errCode, errMessage, type CloudRestorePreview, type S3Config } from "../../lib/ipc";
 import { readClipboard } from "../../lib/clipboard";
 import { importS3ConfigFromPicker } from "../../lib/s3ConfigPick";
-import { firstS3ConfigJson, scanQrWithCamera } from "../../lib/qrCapture";
+import { firstS3ConfigJson, pickQrFromGallery, scanQrWithCamera } from "../../lib/qrCapture";
 import { useApp } from "../../store";
 import type { S3GuideProvider } from "../../ui/S3SetupGuide";
 
@@ -271,6 +271,19 @@ export function useInitModel(variant: "desktop" | "mobile") {
     }
   }
 
+  async function applyS3QrTexts(texts: string[] | null) {
+    if (!texts) return;
+    const raw = firstS3ConfigJson(texts);
+    if (!raw) {
+      setErr(t("init.scanNone"));
+      return;
+    }
+    const cfg = await api.importS3ConfigText(raw);
+    setS3(cfg);
+    setTestResult({ ok: true, msg: t("init.scanOk") });
+    setStep(2);
+  }
+
   async function scanS3Qr() {
     resetErr();
     setBusy(true);
@@ -280,16 +293,22 @@ export function useInitModel(variant: "desktop" | "mobile") {
         title: t("init.scanQrTitle"),
         hint: t("init.scanHintComputer"),
       });
-      if (!texts) return;
-      const raw = firstS3ConfigJson(texts);
-      if (!raw) {
-        setErr(t("init.scanNone"));
-        return;
-      }
-      const cfg = await api.importS3ConfigText(raw);
-      setS3(cfg);
-      setTestResult({ ok: true, msg: t("init.scanOk") });
-      setStep(2);
+      await applyS3QrTexts(texts);
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** iOS 引导「从相册识别配置码」：不依赖实时相机。 */
+  async function importS3QrFromGallery() {
+    resetErr();
+    setBusy(true);
+    setTestResult(null);
+    try {
+      const texts = await pickQrFromGallery();
+      await applyS3QrTexts(texts);
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -477,6 +496,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
     testS3,
     importS3File,
     scanS3Qr,
+    importS3QrFromGallery,
     goRestoreCloud,
     doPreview,
     doRestore,

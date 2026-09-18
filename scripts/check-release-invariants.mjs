@@ -61,6 +61,11 @@ function assertChineseDefaults() {
   const plist = read("app/src-tauri/Info.plist");
   expectEq(plistString(plist, "CFBundleDisplayName"), ZH_DISPLAY_NAME, "Info.plist CFBundleDisplayName");
   expectEq(plistString(plist, "CFBundleName"), ZH_DISPLAY_NAME, "Info.plist CFBundleName");
+  expectEq(
+    plistString(plist, "NSCameraUsageDescription"),
+    "用于扫描 2FA 密钥或云存储配置二维码。",
+    "Info.plist NSCameraUsageDescription",
+  );
 
   const androidStringsPath = "app/src-tauri/gen/android/app/src/main/res/values/strings.xml";
   if (exists(androidStringsPath)) {
@@ -319,6 +324,9 @@ function checkPrepareLangSource() {
   }
   if (!src.includes("SimpChinese") || !src.includes("English") || !src.includes("displayLanguageSelector: true")) {
     fail("prepare-lang.mjs 必须打开 NSIS 双语 + 语言选择器");
+  }
+  if (!src.includes('upsertPlistString(plist, "NSCameraUsageDescription"') || !src.includes("gen/apple")) {
+    fail("prepare-lang.mjs 必须把 NSCameraUsageDescription 写进 Info.plist 与 gen/apple");
   }
 }
 

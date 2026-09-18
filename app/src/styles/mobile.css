@@ -27,7 +27,9 @@ html[data-platform="mobile"] {
 }
 
 .m-shell {
-  width: 100%; height: 100%;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
   display: flex; flex-direction: column;
   overflow: hidden;
   background: var(--bg);
@@ -82,13 +84,14 @@ html[data-platform="mobile"] {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
-  padding: 14px 14px 20px;
+  /* 底栏已吃 home indicator；这里只留卡片间距，避免再叠一层安全区空白。 */
+  padding: 14px 14px 16px;
 }
 
 .m-tabbar {
   flex: 0 0 auto;
   box-sizing: border-box;
-  min-height: calc(58px + var(--km-safe-bottom));
+  /* 内容高由 .m-tab 的 58px 决定；只在底部补 home indicator，禁止 min-height 再加一遍安全区。 */
   height: auto;
   padding-bottom: var(--km-safe-bottom);
   display: flex; align-items: stretch;
@@ -151,6 +154,18 @@ html[data-platform="mobile"] {
    过去这些规则藏在 @media (max-width: 640px) 里，会误伤「被拉窄的桌面窗口」；
    现在一律改由平台作用域驱动，桌面永远命不中。 */
 html[data-platform="mobile"] body { font-size: 14px; letter-spacing: 0.01em; }
+
+/* iOS：用 visual viewport 锁住外壳，避免 100% 比可见区域更高而在底栏上方空出一大块。 */
+html[data-platform="mobile"][data-os="ios"],
+html[data-platform="mobile"][data-os="ios"] body,
+html[data-platform="mobile"][data-os="ios"] #root {
+  height: 100%;
+  max-height: 100dvh;
+}
+
+html[data-platform="mobile"] .screenshot-notice-overlay {
+  padding: max(16px, var(--km-safe-top)) 16px max(16px, var(--km-safe-bottom));
+}
 
 /* 桌面自绘标题栏与侧栏在移动端不渲染，这里兜底防止意外露出 */
 html[data-platform="mobile"] .titlebar { display: none; }
@@ -1249,15 +1264,23 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   color: var(--text-soft);
   line-height: 1.45;
 }
+.m-init-qr-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .m-init-qr-btn {
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
+  width: 100%;
   min-height: 44px;
   font-size: 14.5px;
   font-weight: 650;
   border-radius: 10px;
+}
+.m-init-qr-btn.primary {
   box-shadow: 0 4px 12px rgba(99, 102, 241, 0.2);
 }
 
