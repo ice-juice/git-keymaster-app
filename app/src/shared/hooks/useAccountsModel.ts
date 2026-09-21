@@ -12,7 +12,33 @@ import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secre
 import { resolvePlatform } from "../../platform/resolve";
 import { resolvePlatformBrand, platformFamily } from "../../lib/accountInput";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
+import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
+import type { ExtraFieldDraft } from "../../ui/AccountExtraFields";
 import { useApp } from "../../store";
+import { i18n } from "../../lib/i18n";
+
+export type { ExtraFieldDraft };
+
+export type AccountEditorState = Partial<AccountEntry> & {
+  password?: string;
+  isPlatformLocked?: boolean;
+  extraFieldsDraft?: ExtraFieldDraft[];
+  extraFieldsDirty?: boolean;
+};
+
+function initExtraDraft(value: AccountEditorState): AccountEditorState {
+  if (value.extraFieldsDraft) return value;
+  return {
+    ...value,
+    extraFieldsDraft: (value.extraFieldKeys ?? []).map((key) => ({
+      key,
+      value: "",
+      revealed: false,
+      existing: true,
+    })),
+    extraFieldsDirty: false,
+  };
+}
 
 export function useAccountsModel() {
   const { writesLocked } = useApp();
@@ -27,7 +53,17 @@ export function useAccountsModel() {
   const [reauth, setReauth] = useState<null | ((pw: string) => Promise<void>)>(null);
   const reauthCancel = useRef<(() => void) | null>(null);
   const [revealCfg, setRevealCfg] = useState({ grace: 5, clip: 20 });
-  const [editor, setEditor] = useState<null | (Partial<AccountEntry> & { password?: string; isPlatformLocked?: boolean })>(null);
+  const [editor, setEditorRaw] = useState<AccountEditorState | null>(null);
+
+  const setEditor = useCallback(
+    (next: AccountEditorState | null | ((prev: AccountEditorState | null) => AccountEditorState | null)) => {
+      setEditorRaw((prev) => {
+        const resolved = typeof next === "function" ? next(prev) : next;
+        return resolved ? initExtraDraft(resolved) : null;
+      });
+    },
+    [],
+  );
   const [editingPlatformModal, setEditingPlatformModal] = useState<null | { platform: string; icon?: string }>(null);
   const [historyFor, setHistoryFor] = useState<null | { id: string; items: HistoryMeta[]; shown?: Record<number, string> }>(null);
   const [pwShown, setPwShown] = useState<Record<string, string>>({});
@@ -44,7 +80,7 @@ export function useAccountsModel() {
   const load = useCallback(async () => {
     const [acc, totp, icons] = await Promise.all([api.accountList(), api.totpList(), api.iconListBuiltin()]);
     setEntries(acc.entries);
-    setGroups(acc.groups);
+    setGroups(sortGroups(acc.groups));
     setTotps(totp.entries);
     setBuiltins(icons);
   }, []);
@@ -104,7 +140,7 @@ export function useAccountsModel() {
     try {
       await copyWithClear(username, undefined, false);
     } catch (e) {
-      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || i18n.t("common.copyFailed"));
       return;
     }
     triggerCopied(`user-${id}`);
@@ -193,9 +229,9 @@ export function useAccountsModel() {
   }, [filtered, builtins]);
 
   async function revealPw(id: string) {
-    const pw = await withAuth((p) => api.accountRevealPassword(id, p));
-    if (pw) {
-      setPwShown((m) => ({ ...m, [id]: pw }));
+    const revealed = await withAuth((p) => api.accountRevealPassword(id, p));
+    if (revealed) {
+      setPwShown((m) => ({ ...m, [id]: revealed.password }));
       await api.accountTouch(id);
     }
   }
@@ -213,13 +249,13 @@ export function useAccountsModel() {
     if (!pw) {
       const got = await withAuth((p) => api.accountRevealPassword(id, p));
       if (!got) return;
-      pw = got;
+      pw = got.password;
       setPwShown((m) => ({ ...m, [id]: pw }));
     }
     try {
       await copyWithClear(pw);
     } catch (e) {
-      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || i18n.t("common.copyFailed"));
       return;
     }
     await api.accountTouch(id);
@@ -242,10 +278,28 @@ export function useAccountsModel() {
     try {
       await copyWithClear(item.code.replace(/\s/g, ""));
     } catch (e) {
-      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || "复制失败");
+      if (resolvePlatform() !== "mobile") setErr(errMessage(e) || i18n.t("common.copyFailed"));
       return;
     }
     triggerCopied(`totp-${totpId}`);
+  }
+
+  async function revealEditorFields(): Promise<Record<string, string> | undefined> {
+    if (!editor?.id) return {};
+    const revealed = await withAuth((p) => api.accountRevealPassword(editor.id!, p));
+    if (!revealed) return;
+    setEditor((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        extraFieldsDraft: (prev.extraFieldsDraft || []).map((row) =>
+          row.existing && !row.revealed
+            ? { ...row, value: revealed.extraFields[row.key] ?? row.value, revealed: true }
+            : row,
+        ),
+      };
+    });
+    return revealed.extraFields;
   }
 
   async function saveEditor() {
@@ -262,15 +316,15 @@ export function useAccountsModel() {
       const platformInput = (editor.platform || "").trim();
 
       if (!platformInput) {
-        setErr("平台名称不能为空");
+        setErr(i18n.t("accounts.needPlatform"));
         return;
       }
       if (!username) {
-        setErr("用户名不能为空");
+        setErr(i18n.t("accounts.needUser"));
         return;
       }
       if (!editor.id && !editor.password?.trim()) {
-        setErr("请填写密码");
+        setErr(i18n.t("accounts.needPassword"));
         return;
       }
 
@@ -287,14 +341,32 @@ export function useAccountsModel() {
           e.platform.trim().toLowerCase() === platform.toLowerCase() &&
           e.username.trim().toLowerCase() === username.toLowerCase(),
       );
-      if (dup && !window.confirm(`已存在 ${platform} / ${username}，仍要保存吗？`)) {
+      if (dup && !window.confirm(i18n.t("accounts.dupConfirm", { platform, username }))) {
         return;
       }
       if (editor.id && editor.hasPassword === false && !editor.password?.trim()) {
-        setErr("这条账号的密码已丢失，请重新填入密码。");
+        setErr(i18n.t("accounts.pwLostSave"));
         return;
       }
       const cleanPassword = editor.password?.trim() || undefined;
+      let extraFields: Record<string, string> | undefined;
+      if (editor.extraFieldsDirty) {
+        let draft = editor.extraFieldsDraft || [];
+        if (editor.id && draft.some((row) => row.existing && !row.revealed && row.key.trim())) {
+          const revealed = await withAuth((p) => api.accountRevealPassword(editor.id!, p));
+          if (!revealed) return;
+          draft = draft.map((row) =>
+            row.existing && !row.revealed
+              ? { ...row, value: revealed.extraFields[row.key] ?? row.value, revealed: true }
+              : row,
+          );
+        }
+        extraFields = {};
+        for (const row of draft) {
+          const key = row.key.trim();
+          if (key) extraFields[key] = row.value;
+        }
+      }
       const args = {
         id: editor.id,
         platform,
@@ -308,6 +380,7 @@ export function useAccountsModel() {
         icon: brand.icon,
         pinned: editor.pinned,
         totpRef: editor.totpRef || undefined,
+        extraFields,
       };
       if (editor.id) await api.accountUpdate(args);
       else await api.accountAdd(args);
@@ -328,11 +401,24 @@ export function useAccountsModel() {
     setGroupDlg(false);
   }
 
+  async function reorderGroups(orderedNames: string[]) {
+    if (writesLocked) return;
+    const prev = groups;
+    const next = applyGroupOrder(groups, orderedNames);
+    setGroups(next);
+    try {
+      await api.accountSaveGroups(next);
+    } catch (e) {
+      setGroups(prev);
+      setErr(errMessage(e));
+    }
+  }
+
   function deleteEditorAccount() {
     if (!editor?.id) return;
     setPendingDelete({
       id: editor.id,
-      platform: editor.platform?.trim() || "未命名平台",
+      platform: editor.platform?.trim() || i18n.t("accounts.unnamed"),
       username: editor.username?.trim() || "",
     });
   }
@@ -365,7 +451,7 @@ export function useAccountsModel() {
 
   async function rollbackHistory(index: number, replacedAt: string) {
     if (!historyFor) return;
-    if (!window.confirm(`确认将密码回滚到此历史版本（${replacedAt}）？`)) return;
+    if (!window.confirm(i18n.t("accounts.rollbackConfirm", { at: replacedAt }))) return;
     await api.accountRollbackHistory(historyFor.id, index);
     setHistoryFor(null);
     await load();
@@ -373,7 +459,7 @@ export function useAccountsModel() {
 
   async function clearHistory() {
     if (!historyFor) return;
-    if (!window.confirm("确定要清空该账号的所有历史版本记录吗？此操作不可逆。")) return;
+    if (!window.confirm(i18n.t("accounts.clearHistConfirm"))) return;
     await api.accountClearHistory(historyFor.id);
     setHistoryFor({ id: historyFor.id, items: [] });
   }
@@ -381,7 +467,7 @@ export function useAccountsModel() {
   async function updatePlatformBrand(oldPlatform: string, newPlatformName: string, newIcon?: string) {
     const trimmedName = newPlatformName.trim();
     if (!trimmedName) {
-      setErr("平台名称不能为空");
+      setErr(i18n.t("accounts.needPlatform"));
       return;
     }
 
@@ -460,8 +546,10 @@ export function useAccountsModel() {
     copyPw,
     revealLinkedTotp,
     copyLinkedTotp,
+    revealEditorFields,
     saveEditor,
     saveGroup,
+    reorderGroups,
     deleteEditorAccount,
     confirmDeleteEditorAccount,
     updatePlatformBrand,

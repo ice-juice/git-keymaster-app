@@ -1,19 +1,24 @@
 import { useEffect, useState } from "react";
 import type { BuiltinIconInfo } from "../lib/ipc";
 import { customIconUrl } from "../lib/secretsUi";
+import { i18n } from "../lib/i18n";
 
-const FALLBACK: BuiltinIconInfo = { id: "generic", name: "通用", color: "#6366f1", glyph: "•" };
+function fallbackIcon(): BuiltinIconInfo {
+  return { id: "generic", name: i18n.t("common.genericIcon"), color: "#6366f1", glyph: "•" };
+}
 
 export function IconMark({
   icon,
   builtins,
   label,
   size = 28,
+  color,
 }: {
   icon?: string | null;
   builtins: BuiltinIconInfo[];
   label?: string;
   size?: number;
+  color?: string;
 }) {
   const [custom, setCustom] = useState<string | null>(null);
 
@@ -48,7 +53,7 @@ export function IconMark({
   }
 
   const id = icon?.startsWith("builtin:") ? icon.slice("builtin:".length) : "";
-  const info = builtins.find((b) => b.id === id) || FALLBACK;
+  const info = builtins.find((b) => b.id === id) || fallbackIcon();
   const letter = (label || info.glyph || "?").slice(0, 2);
   return (
     <div
@@ -57,7 +62,7 @@ export function IconMark({
         width: size,
         height: size,
         borderRadius: 8,
-        background: info.color,
+        background: color || info.color,
         color: "#fff",
         fontSize: size < 26 ? 9 : 11,
         fontWeight: 700,

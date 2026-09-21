@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+
 export function CountdownRing({
   remain,
   period = 30,
@@ -7,6 +9,7 @@ export function CountdownRing({
   period?: number;
   size?: number;
 }) {
+  const { t } = useTranslation();
   const r = 12;
   const c = 2 * Math.PI * r; // ~75.398
   const safePeriod = period > 0 ? period : 30;
@@ -18,8 +21,15 @@ export function CountdownRing({
   return (
     <div
       className="countdown-ring"
-      style={{ width: size, height: size, flex: `0 0 ${size}px` }}
-      title={`动态验证码剩余 ${remain} 秒`}
+      style={
+        {
+          width: size,
+          height: size,
+          flex: `0 0 ${size}px`,
+          "--countdown-size": `${size}px`,
+        } as React.CSSProperties
+      }
+      title={t("totp.remain", { n: remain })}
     >
       <svg viewBox="0 0 32 32">
         <circle className="bg-circle" cx="16" cy="16" r={r} />

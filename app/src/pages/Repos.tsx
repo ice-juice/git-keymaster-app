@@ -1,22 +1,28 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Pencil, Trash2, X, Plus } from "lucide-react";
+import { FolderOpen, Pencil, Trash2, X, Plus, FolderGit2, Download } from "lucide-react";
 import { api, errMessage, type Identity, type ManagedRepoView } from "../lib/ipc";
 import { PageHead, Card, Empty, Badge } from "../ui/common";
 import { useApp } from "../store";
+import { ClonePage } from "./Clone";
 
-const SOURCE_LABEL: Record<string, string> = {
-  scan: "扫描",
-  clone: "克隆",
-  init: "初始化",
-  addRemote: "补远程",
-  manual: "手动",
+const SOURCE_KEYS: Record<string, string> = {
+  scan: "repos.scan",
+  clone: "repos.clone",
+  init: "repos.init",
+  addRemote: "repos.addRemote",
+  manual: "repos.manual",
 };
 
 export function Repos() {
-  const nav = useNavigate();
+  const { t } = useTranslation();
   const { writesLocked } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get("tab");
+  const hasUrlParam = !!searchParams.get("url");
+  const [tab, setTabState] = useState<"list" | "clone">(rawTab === "clone" || hasUrlParam ? "clone" : "list");
   const [repos, setRepos] = useState<ManagedRepoView[]>([]);
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [root, setRoot] = useState("");
@@ -26,6 +32,30 @@ export function Repos() {
   const [removingBusy, setRemovingBusy] = useState(false);
   const [editing, setEditing] = useState<ManagedRepoView | null>(null);
   const [removing, setRemoving] = useState<ManagedRepoView | null>(null);
+
+  useEffect(() => {
+    const next = searchParams.get("tab");
+    if (next === "clone" || searchParams.get("url")) {
+      setTabState("clone");
+    } else if (next === "list") {
+      setTabState("list");
+    }
+  }, [searchParams]);
+
+  function switchTab(next: "list" | "clone") {
+    setTabState(next);
+    const newParams = new URLSearchParams(searchParams);
+    if (next === "clone") {
+      newParams.set("tab", "clone");
+    } else {
+      newParams.delete("tab");
+      newParams.delete("url");
+    }
+    setSearchParams(newParams, { replace: true });
+    if (next === "list") {
+      void load();
+    }
+  }
 
   async function load() {
     try {
@@ -47,7 +77,7 @@ export function Repos() {
       const selected = await open({
         directory: true,
         multiple: false,
-        title: "选择要扫描的根目录",
+        title: t("repos.pickRoot"),
         defaultPath: root.trim() || undefined,
       });
       if (typeof selected !== "string" || !selected) return;
@@ -60,13 +90,17 @@ export function Repos() {
   async function scanImport() {
     setErr("");
     setMsg("");
-    if (!root.trim()) return setErr("请选择或填写扫描根目录");
+    if (!root.trim()) return setErr(t("repos.needRoot"));
     setBusy(true);
     try {
       const result = await api.scanAndImportRepos(root, 4);
       setRepos(result.repos);
       setMsg(
-        `扫描完成：新增 ${result.imported} 个，更新 ${result.updated} 个；跳过无 remote ${result.skippedNoRemote} 个。`,
+        t("repos.scanDone", {
+          imported: result.imported,
+          updated: result.updated,
+          skipped: result.skippedNoRemote,
+        }),
       );
     } catch (e) {
       setErr(errMessage(e));
@@ -104,89 +138,145 @@ export function Repos() {
   return (
     <div className="stack-lg">
       <PageHead
-        title="仓库管理"
-        desc="只显示本机登记的仓库。换机后请在本机重新扫描，云同步不会把其他机器的路径拉过来。"
+        title={t("repos.title")}
+        desc={t("repos.desc")}
         actions={
-          <button type="button" className="btn primary" disabled={writesLocked} onClick={() => nav("/clone")}>
-            <Plus size={13} />
-            <span>去克隆</span>
-          </button>
+          <div className="row" style={{ gap: 6, alignItems: "center" }}>
+            <div
+              style={{
+                display: "inline-flex",
+                gap: 3,
+                background: "rgba(255, 255, 255, 0.05)",
+                padding: "3px 4px",
+                borderRadius: 8,
+                border: "1px solid var(--border)",
+              }}
+            >
+              <button
+                type="button"
+                className={`btn sm ${tab === "list" ? "primary" : "ghost"}`}
+                style={{ padding: "4px 10px", fontSize: 12 }}
+                onClick={() => switchTab("list")}
+              >
+                <FolderGit2 size={13} />
+                <span>{t("repos.tabList")}</span>
+                {repos.length > 0 && (
+                  <span
+                    className="nav-badge"
+                    style={{
+                      marginLeft: 4,
+                      background: tab === "list" ? "rgba(255, 255, 255, 0.25)" : "var(--sidebar-badge-bg)",
+                      color: tab === "list" ? "#fff" : "var(--text-soft)",
+                    }}
+                  >
+                    {repos.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                className={`btn sm ${tab === "clone" ? "primary" : "ghost"}`}
+                style={{ padding: "4px 10px", fontSize: 12 }}
+                onClick={() => switchTab("clone")}
+              >
+                <Download size={13} />
+                <span>{t("repos.tabClone")}</span>
+              </button>
+            </div>
+          </div>
         }
       />
       {err && <div className="err-text">{err}</div>}
       {msg && <div className="callout good">{msg}</div>}
 
-      <Card title="扫描并入库">
-        <div className="stack">
-          <div className="path-pick">
-            <input
-              className="input mono"
-              placeholder="扫描根目录，例如 D:/work"
-              value={root}
-              onChange={(e) => setRoot(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && scanImport()}
-            />
-            <button type="button" className="btn" onClick={pickRoot}>
-              浏览…
-            </button>
-            <button type="button" className="btn primary" disabled={busy || writesLocked} onClick={scanImport}>
-              {busy ? "扫描中…" : "扫描入库"}
-            </button>
-          </div>
-          <div className="muted sm">只把已配置 origin / remote 的仓库加入管理列表；无 remote 的本地目录会被跳过。</div>
-        </div>
-      </Card>
-
-      <Card title={`已登记仓库（${repos.length}）`}>
-        {repos.length === 0 ? (
-          <Empty icon="📦" text="还没有登记仓库。扫描带 remote 的目录，或先到「克隆」页落地一个仓库。" />
-        ) : (
-          <div className="list">
-            {repos.map((r) => (
-              <div className="list-row" key={r.id} style={{ alignItems: "flex-start" }}>
-                <div className="grow">
-                  <div className="row" style={{ gap: 6 }}>
-                    <strong>{r.name}</strong>
-                    <Badge>{SOURCE_LABEL[r.source] ?? r.source}</Badge>
-                    {!r.exists && <Badge kind="danger">目录不存在</Badge>}
-                    {r.needsAliasFix && <Badge kind="warn">建议改别名</Badge>}
-                    {r.identityName && <Badge kind="info">{r.identityName}</Badge>}
-                  </div>
-                  <div className="mono muted sm">{r.path}</div>
-                  <div className="mono sm" style={{ marginTop: 2 }}>
-                    {r.remoteUrl ?? "无 remote"}
-                  </div>
-                </div>
-                <div className="row" style={{ gap: 4 }}>
-                  <button
-                    type="button"
-                    className="btn sm"
-                    disabled={!r.exists}
-                    title="在资源管理器中打开"
-                    onClick={() => openDir(r.path)}
-                  >
-                    <FolderOpen size={12} />
-                    <span>打开</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="btn sm"
-                    disabled={!r.exists || writesLocked}
-                    onClick={() => setEditing(r)}
-                    title={writesLocked ? "正在同步，暂不可修改" : "更换 remote URL 或绑定身份"}
-                  >
-                    <Pencil size={12} />
-                    <span>改地址</span>
-                  </button>
-                  <button type="button" className="btn ghost sm" disabled={writesLocked} onClick={() => setRemoving(r)} title="仅从列表移除">
-                    <Trash2 size={12} />
-                  </button>
-                </div>
+      {tab === "clone" ? (
+        <ClonePage embedded onGoRepos={() => switchTab("list")} />
+      ) : (
+        <>
+          <Card title={t("repos.scanTitle")}>
+            <div className="stack">
+              <div className="path-pick">
+                <input
+                  className="input mono"
+                  placeholder={t("repos.rootPh")}
+                  value={root}
+                  onChange={(e) => setRoot(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && scanImport()}
+                />
+                <button type="button" className="btn" onClick={pickRoot}>
+                  {t("common.browse")}
+                </button>
+                <button type="button" className="btn primary" disabled={busy || writesLocked} onClick={scanImport}>
+                  {busy ? t("repos.scanning") : t("repos.scanImport")}
+                </button>
               </div>
-            ))}
-          </div>
-        )}
-      </Card>
+              <div className="muted sm">{t("repos.scanHint")}</div>
+            </div>
+          </Card>
+
+          <Card title={t("repos.registered", { n: repos.length })}>
+            {repos.length === 0 ? (
+              <div className="stack" style={{ alignItems: "center", padding: "16px 0", gap: 10 }}>
+                <Empty icon="📦" text={t("repos.empty")} />
+                <button
+                  type="button"
+                  className="btn primary sm"
+                  disabled={writesLocked}
+                  onClick={() => switchTab("clone")}
+                >
+                  <Plus size={13} />
+                  <span>{t("repos.goClone")}</span>
+                </button>
+              </div>
+            ) : (
+              <div className="list">
+                {repos.map((r) => (
+                  <div className="list-row" key={r.id} style={{ alignItems: "flex-start" }}>
+                    <div className="grow">
+                      <div className="row" style={{ gap: 6 }}>
+                        <strong>{r.name}</strong>
+                        <Badge>{SOURCE_KEYS[r.source] ? t(SOURCE_KEYS[r.source]) : r.source}</Badge>
+                        {!r.exists && <Badge kind="danger">{t("repos.missingDir")}</Badge>}
+                        {r.needsAliasFix && <Badge kind="warn">{t("repos.aliasFix")}</Badge>}
+                        {r.identityName && <Badge kind="info">{r.identityName}</Badge>}
+                      </div>
+                      <div className="mono muted sm">{r.path}</div>
+                      <div className="mono sm" style={{ marginTop: 2 }}>
+                        {r.remoteUrl ?? t("repos.noRemote")}
+                      </div>
+                    </div>
+                    <div className="row" style={{ gap: 4 }}>
+                      <button
+                        type="button"
+                        className="btn sm"
+                        disabled={!r.exists}
+                        title={t("repos.openExplorer")}
+                        onClick={() => openDir(r.path)}
+                      >
+                        <FolderOpen size={12} />
+                        <span>{t("common.open")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn sm"
+                        disabled={!r.exists || writesLocked}
+                        onClick={() => setEditing(r)}
+                        title={writesLocked ? t("repos.syncLocked") : t("repos.changeUrlTip")}
+                      >
+                        <Pencil size={12} />
+                        <span>{t("repos.changeUrl")}</span>
+                      </button>
+                      <button type="button" className="btn ghost sm" disabled={writesLocked} onClick={() => setRemoving(r)} title={t("repos.removeOnly")}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </>
+      )}
 
       {editing && (
         <RemoteEditModal
@@ -195,7 +285,7 @@ export function Repos() {
           onClose={() => setEditing(null)}
           onSaved={async () => {
             setEditing(null);
-            setMsg("已更新 remote");
+            setMsg(t("repos.updatedRemote"));
             await load();
           }}
         />
@@ -205,16 +295,14 @@ export function Repos() {
         <div className="wizard-overlay" style={{ zIndex: 60 }}>
           <div className="card" style={{ width: 400, maxWidth: "95%" }}>
             <div className="card-head">
-              <div className="card-title">从列表移除</div>
+              <div className="card-title">{t("repos.removeTitle")}</div>
               <button type="button" className="btn ghost sm" onClick={() => setRemoving(null)}>
                 <X size={15} />
               </button>
             </div>
             <div className="card-body stack" style={{ gap: 8 }}>
-              <div>
-                确定把「<strong>{removing.name}</strong>」移出管理列表？
-              </div>
-              <div className="callout info sm">只取消登记，不会删除磁盘上的仓库目录。</div>
+              <div>{t("repos.removeMsg", { name: removing.name })}</div>
+              <div className="callout info sm">{t("repos.removeHint")}</div>
               <div className="mono muted sm">{removing.path}</div>
             </div>
             <div
@@ -222,10 +310,10 @@ export function Repos() {
               style={{ justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border)", borderBottom: "none" }}
             >
               <button type="button" className="btn ghost sm" onClick={() => setRemoving(null)}>
-                取消
+                {t("common.cancel")}
               </button>
               <button type="button" className="btn danger sm" disabled={removingBusy} onClick={confirmRemove}>
-                {removingBusy ? "移除中…" : "移除"}
+                {removingBusy ? t("repos.removing") : t("common.remove")}
               </button>
             </div>
           </div>
@@ -246,6 +334,7 @@ function RemoteEditModal({
   onClose: () => void;
   onSaved: () => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const { writesLocked } = useApp();
   const [remoteUrl, setRemoteUrl] = useState(repo.remoteUrl ?? "");
   const [identityId, setIdentityId] = useState(repo.identityId ?? "");
@@ -255,7 +344,7 @@ function RemoteEditModal({
 
   async function save() {
     setErr("");
-    if (!remoteUrl.trim()) return setErr("请填写 remote URL");
+    if (!remoteUrl.trim()) return setErr(t("repos.needUrl"));
     setBusy(true);
     try {
       await api.setRepoRemote({
@@ -275,7 +364,7 @@ function RemoteEditModal({
     <div className="wizard-overlay" style={{ zIndex: 60 }}>
       <div className="card" style={{ width: 480, maxWidth: "95%" }}>
         <div className="card-head">
-          <div className="card-title">更换 remote：{repo.name}</div>
+          <div className="card-title">{t("repos.changeTitle", { name: repo.name })}</div>
           <button type="button" className="btn ghost sm" onClick={onClose}>
             <X size={15} />
           </button>
@@ -292,20 +381,20 @@ function RemoteEditModal({
             />
           </div>
           <div className="field">
-            <label className="field-label">绑定身份（可选）</label>
+            <label className="field-label">{t("repos.bindIdentity")}</label>
             <select className="input" value={identityId} onChange={(e) => setIdentityId(e.target.value)}>
-              <option value="">不切换身份，按填写的 URL 写入</option>
+              <option value="">{t("repos.noSwitch")}</option>
               {identities.map((id) => (
                 <option key={id.id} value={id.id}>
-                  {id.name}（{id.hostAlias}）
+                  {t("repos.identityOption", { name: id.name, alias: id.hostAlias })}
                 </option>
               ))}
             </select>
           </div>
           <div className="between" style={{ padding: "4px 0" }}>
             <div>
-              <div style={{ fontWeight: 600, fontSize: 11.5 }}>同时改写为身份别名地址</div>
-              <div className="hint">开启后按所选身份把 URL 改写成 git@别名:owner/repo.git，并写入提交身份。</div>
+              <div style={{ fontWeight: 600, fontSize: 11.5 }}>{t("repos.rewriteAlias")}</div>
+              <div className="hint">{t("repos.rewriteHint")}</div>
             </div>
             <div
               className={`switch ${rewrite && identityId ? "" : "off"}`}
@@ -318,10 +407,10 @@ function RemoteEditModal({
           style={{ justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border)", borderBottom: "none" }}
         >
           <button type="button" className="btn ghost sm" onClick={onClose}>
-            取消
+            {t("common.cancel")}
           </button>
           <button type="button" className="btn primary sm" disabled={busy || writesLocked} onClick={save}>
-            {busy ? "保存中…" : "保存"}
+            {busy ? t("repos.saving") : t("common.save")}
           </button>
         </div>
       </div>

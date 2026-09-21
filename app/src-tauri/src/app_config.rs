@@ -1,5 +1,8 @@
-//! 非机密的本机状态（工作空间路径、自动锁定时长等），存于 %APPDATA%。
+//! 本机状态（工作空间路径、自动锁定时长等），存于 %APPDATA%。
 //! 判断标准：换台电脑还需要的东西放工作空间；只对本机有意义的放这里。
+//!
+//! 云同步 Secret Key 和代理密码曾经明文写在这里。锁定/退出清不掉，
+//! 拷走配置目录就能拿到桶钥匙。现在只进保险库信封；`save()` 写盘前会剥掉。
 
 use crate::error::Result;
 use crate::vault::atomic_write;
@@ -32,6 +35,13 @@ fn default_account_history_limit() -> u32 {
     10
 }
 
+pub const DEFAULT_ATTACHMENT_PER_FILE_LIMIT_MB: u32 = 100;
+pub const MAX_ATTACHMENT_PER_FILE_LIMIT_MB: u32 = 100;
+
+fn default_attachment_per_file_limit_mb() -> u32 {
+    DEFAULT_ATTACHMENT_PER_FILE_LIMIT_MB
+}
+
 fn default_biometric_method() -> String {
     "auto".into()
 }
@@ -47,6 +57,15 @@ pub fn clamp_reveal_grace_minutes(minutes: u32) -> u32 {
     minutes.min(30)
 }
 
+/// 空闲自动锁定时长。0 表示关闭；其余夹到 1–1440 分钟。
+pub fn clamp_auto_lock_minutes(minutes: u32) -> u32 {
+    if minutes == 0 {
+        0
+    } else {
+        minutes.clamp(1, 24 * 60)
+    }
+}
+
 pub fn clamp_clipboard_clear_seconds(seconds: u32) -> u32 {
     if seconds == 0 {
         0
@@ -57,6 +76,15 @@ pub fn clamp_clipboard_clear_seconds(seconds: u32) -> u32 {
 
 pub fn clamp_account_history_limit(n: u32) -> u32 {
     n.clamp(1, 50)
+}
+
+/// 单文件上限，默认且封顶 100 MB。
+pub fn clamp_attachment_per_file_limit_mb(n: u32) -> u32 {
+    n.clamp(1, MAX_ATTACHMENT_PER_FILE_LIMIT_MB)
+}
+
+pub fn attachment_per_file_limit_bytes(limit_mb: u32) -> u64 {
+    u64::from(clamp_attachment_per_file_limit_mb(limit_mb)) * 1024 * 1024
 }
 
 /// 0 表示关闭；其余夹到 5–1440 分钟。
@@ -134,6 +162,9 @@ pub struct AppConfig {
     /// 复制机密后清空剪贴板的秒数。0 = 不清空。
     #[serde(default = "default_clipboard_clear_seconds")]
     pub clipboard_clear_seconds: u32,
+    /// 剪贴板感知克隆。默认关：关时前端零轮询。
+    #[serde(default)]
+    pub clipboard_watch: bool,
     /// 每个账号保留的密码历史条数。
     #[serde(default = "default_account_history_limit")]
     pub account_history_limit: u32,
@@ -152,6 +183,43 @@ pub struct AppConfig {
     /// 运行时界面语言：`system` | `zh` | `en`。只影响 React 文案，不写卸载项。
     #[serde(default = "default_ui_locale")]
     pub ui_locale: String,
+    /// 文件保险库 / 备忘录附件单文件上限（MiB）。默认 100，总量不设限。
+    #[serde(default = "default_attachment_per_file_limit_mb")]
+    pub attachment_per_file_limit_mb: u32,
+    /// 仅在 Wi-Fi / 以太网下同步附件与备忘录图片。默认开。
+    #[serde(default = "default_true")]
+    pub sync_attachments_wifi_only: bool,
+    /// 附件不参与自动同步，仅手动推送/拉取。默认关。
+    #[serde(default)]
+    pub sync_attachments_manual_only: bool,
+    /// 移动端主界面再按返回：true 回到系统桌面且不杀进程；false 退出应用。
+    #[serde(default)]
+    pub mobile_background_run: bool,
+    /// 是否允许系统截屏 / 录屏捕获本应用画面。默认关（防护开）。
+    /// 旧配置缺字段时 serde 走 `bool` 默认值 false，与出厂行为一致。
+    #[serde(default)]
+    pub allow_screenshots: bool,
+    /// 从旧版 config.json 读出的明文密钥，等首次解锁写进保险库后再丢掉。
+    /// 不进序列化：未迁走之前 `save()` 会把它临时补回磁盘，避免改主题冲掉钥匙。
+    #[serde(skip)]
+    pub pending_legacy_secrets: Option<LegacyConfigSecrets>,
+}
+
+/// 旧版写在 config.json 里的两份密钥。进保险库之前只存在这份待迁区。
+#[derive(Debug, Clone, Default)]
+pub struct LegacyConfigSecrets {
+    pub s3_secret_access_key: Option<String>,
+    pub proxy_password: Option<String>,
+}
+
+impl LegacyConfigSecrets {
+    pub fn is_empty(&self) -> bool {
+        opt_blank(&self.s3_secret_access_key) && opt_blank(&self.proxy_password)
+    }
+}
+
+fn opt_blank(value: &Option<String>) -> bool {
+    value.as_deref().map(str::trim).unwrap_or("").is_empty()
 }
 
 /// 本机 HTTP/HTTPS/SOCKS5 代理。
@@ -166,6 +234,7 @@ pub struct NetworkProxy {
     pub port: u16,
     #[serde(default)]
     pub username: Option<String>,
+    /// 代理密码。只活在已解锁的内存里；写 config.json 前必须剥掉。
     #[serde(default)]
     pub password: Option<String>,
     /// 本应用拉起的 git HTTPS 是否带上代理环境变量。
@@ -268,12 +337,19 @@ impl Default for AppConfig {
             network_proxy: None,
             reveal_grace_minutes: default_reveal_grace_minutes(),
             clipboard_clear_seconds: default_clipboard_clear_seconds(),
+            clipboard_watch: false,
             account_history_limit: default_account_history_limit(),
             biometric_unlock_enabled: false,
             biometric_reveal_enabled: false,
             biometric_reveal_secret: false,
             biometric_method: default_biometric_method(),
             ui_locale: default_ui_locale(),
+            attachment_per_file_limit_mb: default_attachment_per_file_limit_mb(),
+            sync_attachments_wifi_only: true,
+            sync_attachments_manual_only: false,
+            mobile_background_run: false,
+            allow_screenshots: false,
+            pending_legacy_secrets: None,
         }
     }
 }
@@ -294,6 +370,10 @@ impl AppConfig {
             Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
             Err(_) => AppConfig::default(),
         };
+        // 旧版把桶钥匙和代理密码明文写在这份文件里。先挪到待迁区并清掉
+        // 结构体上的密钥字段，这样未解锁的 IPC 读不到；先不 save，免得
+        // 保险库还没打开就把磁盘明文抹掉。
+        cfg.capture_legacy_secrets();
         cfg.ensure_machine_id();
         cfg
     }
@@ -311,8 +391,118 @@ impl AppConfig {
     }
 
     pub fn save(&self) -> Result<()> {
-        let json = serde_json::to_string_pretty(self)?;
-        atomic_write(&config_file(), json.as_bytes())
+        atomic_write(&config_file(), self.to_disk_json()?.as_bytes())
+    }
+
+    /// 写盘用的 JSON：已迁走则剥掉密钥；尚未迁走则把待迁明文补回去。
+    pub fn to_disk_json(&self) -> Result<String> {
+        let mut disk = self.clone();
+        if let Some(pending) = disk.pending_legacy_secrets.take() {
+            if !pending.is_empty() {
+                disk.apply_legacy_secrets(&pending);
+            } else {
+                disk.clear_runtime_secrets();
+            }
+        } else {
+            disk.clear_runtime_secrets();
+        }
+        Ok(serde_json::to_string_pretty(&disk)?)
+    }
+
+    /// 把结构体上的明文密钥挪进待迁区，并清掉会走 IPC 的字段。
+    pub fn capture_legacy_secrets(&mut self) {
+        let mut pending = self.pending_legacy_secrets.take().unwrap_or_default();
+        if let Some(sk) = self.take_cloud_sync_secret() {
+            pending.s3_secret_access_key = Some(sk);
+        }
+        if let Some(pw) = self.take_proxy_password() {
+            pending.proxy_password = Some(pw);
+        }
+        if !pending.is_empty() {
+            self.pending_legacy_secrets = Some(pending);
+        }
+    }
+
+    pub fn take_pending_legacy_secrets(&mut self) -> Option<LegacyConfigSecrets> {
+        self.pending_legacy_secrets.take()
+    }
+
+    pub fn take_cloud_sync_secret(&mut self) -> Option<String> {
+        let s3 = self.cloud_sync.as_mut()?;
+        let sk = std::mem::take(&mut s3.secret_access_key);
+        if sk.trim().is_empty() {
+            None
+        } else {
+            Some(sk)
+        }
+    }
+
+    pub fn take_proxy_password(&mut self) -> Option<String> {
+        let proxy = self.network_proxy.as_mut()?;
+        let pw = proxy.password.take()?;
+        if pw.trim().is_empty() {
+            None
+        } else {
+            Some(pw)
+        }
+    }
+
+    fn apply_legacy_secrets(&mut self, pending: &LegacyConfigSecrets) {
+        if let Some(ref sk) = pending.s3_secret_access_key {
+            if let Some(ref mut s3) = self.cloud_sync {
+                s3.secret_access_key = sk.clone();
+            }
+        }
+        if let Some(ref pw) = pending.proxy_password {
+            if let Some(ref mut proxy) = self.network_proxy {
+                proxy.password = Some(pw.clone());
+            }
+        }
+    }
+
+    /// 锁定时清内存里的两份密钥。待迁区不动：还没写进保险库时清掉就丢了。
+    pub fn clear_runtime_secrets(&mut self) {
+        if let Some(ref mut s3) = self.cloud_sync {
+            s3.secret_access_key.clear();
+        }
+        if let Some(ref mut proxy) = self.network_proxy {
+            proxy.password = None;
+        }
+    }
+
+    pub fn apply_runtime_secrets(&mut self, s3_secret: Option<&str>, proxy_password: Option<&str>) {
+        if let Some(sk) = s3_secret {
+            if let Some(ref mut s3) = self.cloud_sync {
+                if !sk.trim().is_empty() {
+                    s3.secret_access_key = sk.to_string();
+                }
+            }
+        }
+        if let Some(pw) = proxy_password {
+            if let Some(ref mut proxy) = self.network_proxy {
+                if !pw.trim().is_empty() {
+                    proxy.password = Some(pw.to_string());
+                }
+            }
+        }
+    }
+
+    pub fn redact_cloud_sync(&self) -> Option<crate::sync::s3::S3Config> {
+        let mut cfg = self.cloud_sync.clone()?;
+        cfg.secret_access_key.clear();
+        Some(cfg)
+    }
+
+    pub fn redact_network_proxy(&self) -> Option<NetworkProxy> {
+        let mut proxy = self.network_proxy.clone()?;
+        proxy.password = None;
+        Some(proxy)
+    }
+
+    pub fn has_pending_legacy_secrets(&self) -> bool {
+        self.pending_legacy_secrets
+            .as_ref()
+            .is_some_and(|p| !p.is_empty())
     }
 }
 
@@ -335,6 +525,16 @@ mod tests {
         assert_eq!(cfg.network_proxy, None);
         assert_eq!(cfg.biometric_method, "auto");
         assert_eq!(cfg.ui_locale, "system");
+        assert_eq!(
+            cfg.attachment_per_file_limit_mb,
+            DEFAULT_ATTACHMENT_PER_FILE_LIMIT_MB
+        );
+        assert!(cfg.sync_attachments_wifi_only);
+        assert!(!cfg.sync_attachments_manual_only);
+        assert!(
+            !cfg.allow_screenshots,
+            "旧配置缺字段时应默认禁止截屏"
+        );
         assert_eq!(clamp_ui_locale("ZH"), "zh");
         assert_eq!(clamp_ui_locale("en"), "en");
         assert_eq!(clamp_ui_locale("nope"), "system");
@@ -378,5 +578,89 @@ mod tests {
         assert_eq!(clamp_auto_sync_minutes(1), MIN_AUTO_SYNC_MINUTES);
         assert_eq!(clamp_auto_sync_minutes(30), 30);
         assert_eq!(clamp_auto_sync_minutes(9999), MAX_AUTO_SYNC_MINUTES);
+    }
+
+    #[test]
+    fn clamp_attachment_per_file_limit_caps_at_100() {
+        assert_eq!(clamp_attachment_per_file_limit_mb(0), 1);
+        assert_eq!(clamp_attachment_per_file_limit_mb(50), 50);
+        assert_eq!(clamp_attachment_per_file_limit_mb(100), 100);
+        assert_eq!(clamp_attachment_per_file_limit_mb(999), 100);
+        assert_eq!(
+            attachment_per_file_limit_bytes(100),
+            100 * 1024 * 1024
+        );
+    }
+
+    fn sample_s3(secret: &str) -> crate::sync::s3::S3Config {
+        crate::sync::s3::S3Config {
+            endpoint: "https://example.r2.cloudflarestorage.com".into(),
+            bucket: "vault".into(),
+            region: "auto".into(),
+            access_key_id: "AKIAEXAMPLE".into(),
+            secret_access_key: secret.into(),
+            prefix: "gam-sync/".into(),
+        }
+    }
+
+    #[test]
+    fn migrated_config_json_omits_secrets() {
+        let mut cfg = AppConfig::default();
+        cfg.cloud_sync = Some(sample_s3("sk-should-not-hit-disk"));
+        cfg.network_proxy = Some(NetworkProxy {
+            enabled: true,
+            scheme: "http".into(),
+            host: "127.0.0.1".into(),
+            port: 7890,
+            username: Some("user".into()),
+            password: Some("proxy-secret".into()),
+            apply_to_git_https: true,
+            apply_to_ssh: true,
+            apply_to_cloud_sync: true,
+        });
+
+        let json = cfg.to_disk_json().unwrap();
+        assert!(!json.contains("sk-should-not-hit-disk"));
+        assert!(!json.contains("proxy-secret"));
+        assert!(json.contains("AKIAEXAMPLE"));
+        assert!(json.contains("127.0.0.1"));
+        assert_eq!(
+            cfg.cloud_sync.as_ref().unwrap().secret_access_key,
+            "sk-should-not-hit-disk",
+            "内存里的回填值不应被 to_disk_json 清掉"
+        );
+    }
+
+    #[test]
+    fn pending_legacy_secrets_survive_save_until_migrated() {
+        let mut cfg = AppConfig::default();
+        cfg.cloud_sync = Some(sample_s3("sk-legacy"));
+        cfg.network_proxy = Some(NetworkProxy {
+            password: Some("proxy-legacy".into()),
+            ..NetworkProxy::default()
+        });
+        cfg.capture_legacy_secrets();
+        assert!(cfg.cloud_sync.as_ref().unwrap().secret_access_key.is_empty());
+        assert!(cfg.network_proxy.as_ref().unwrap().password.is_none());
+        assert!(cfg.has_pending_legacy_secrets());
+
+        let json = cfg.to_disk_json().unwrap();
+        assert!(json.contains("sk-legacy"), "未迁走前改主题不能把磁盘明文冲掉");
+        assert!(json.contains("proxy-legacy"));
+    }
+
+    #[test]
+    fn locked_readers_redact_secrets() {
+        let mut cfg = AppConfig::default();
+        cfg.cloud_sync = Some(sample_s3("sk-mem"));
+        cfg.network_proxy = Some(NetworkProxy {
+            password: Some("pw-mem".into()),
+            ..NetworkProxy::default()
+        });
+        let s3 = cfg.redact_cloud_sync().unwrap();
+        let proxy = cfg.redact_network_proxy().unwrap();
+        assert!(s3.secret_access_key.is_empty());
+        assert!(proxy.password.is_none());
+        assert_eq!(s3.access_key_id, "AKIAEXAMPLE");
     }
 }

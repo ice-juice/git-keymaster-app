@@ -70,6 +70,20 @@ fn walk(dir: &Path, depth: usize, max_depth: usize, found: &mut Vec<PathBuf>) {
 
 /// 读取单个仓库信息并做身份体检。
 pub fn inspect(repo: &Path, identities: &[Identity], history: &HashMap<String, String>) -> RepoInfo {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (identities, history);
+        return RepoInfo {
+            path: repo.display().to_string(),
+            remote_url: None,
+            current_alias: None,
+            git_user_name: None,
+            git_user_email: None,
+            inferred_identity: None,
+            needs_alias_fix: false,
+            fix_command: None,
+        };
+    }
     let path = repo.display().to_string();
     let remote_url = sys::run("git", &["-C", &path, "remote", "get-url", "origin"])
         .ok()
@@ -111,6 +125,11 @@ pub fn inspect(repo: &Path, identities: &[Identity], history: &HashMap<String, S
 }
 
 fn git_config(path: &str, key: &str) -> Option<String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (path, key);
+        return None;
+    }
     sys::run("git", &["-C", path, "config", "--get", key])
         .ok()
         .and_then(|(o, _, c)| {
@@ -231,10 +250,20 @@ pub fn plan_clone_or_init(dest: &Path, repo_name: &str) -> ClonePlan {
 
     if dest.join(".git").exists() {
         let dest_s = dest_str.clone();
-        let has_origin = sys::run("git", &["-C", &dest_s, "remote", "get-url", "origin"])
-            .ok()
-            .map(|(o, _, c)| c == 0 && !o.trim().is_empty())
-            .unwrap_or(false);
+        let has_origin = {
+            #[cfg(any(target_os = "android", target_os = "ios"))]
+            {
+                let _ = dest_s;
+                false
+            }
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                sys::run("git", &["-C", &dest_s, "remote", "get-url", "origin"])
+                    .ok()
+                    .map(|(o, _, c)| c == 0 && !o.trim().is_empty())
+                    .unwrap_or(false)
+            }
+        };
         if has_origin {
             return ClonePlan {
                 kind: "alreadyGitHasRemote".into(),
@@ -379,6 +408,11 @@ pub fn switch_identity(
     user_name: Option<&str>,
     user_email: Option<&str>,
 ) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (repo, new_url, user_name, user_email);
+        return Err(crate::error::AppError::Unsupported("本机 Git"));
+    }
     sys::run("git", &["-C", repo, "remote", "set-url", "origin", new_url])?;
     if let Some(name) = user_name {
         sys::run("git", &["-C", repo, "config", "user.name", name])?;

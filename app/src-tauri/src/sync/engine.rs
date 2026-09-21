@@ -8,7 +8,11 @@
 //!    云端 / 快照 / 比对只存 `%GAM_WORKSPACE%/ssh-keys/...`。换机重写不得原样上传。
 
 use crate::error::{AppError, Result};
-use crate::model::{AccountData, Secrets, TotpData, VaultData};
+use crate::model::{
+    collect_blob_hashes, collect_note_body_hashes, AccountData, FileData, NoteData, Secrets,
+    TotpData, VaultData,
+};
+use crate::store::blob;
 use crate::store;
 use crate::sync::backup::deploy_key_to_workspace;
 use crate::sync::s3::S3Client;
@@ -33,6 +37,55 @@ const HISTORY_INDEX_KEY: &str = "history/index.enc";
 const MANIFEST_FILE_KEY: &str = "manifest.enc";
 /// 工作空间头部（仅信封，无明文机密）。固定路径，换机时尚无 MK，不能走 HMAC 对象名。
 pub const VAULT_HEADER_KEY: &str = "vault-header.json";
+
+/// 大 blob 上传/下载范围。即时发布只带正文，附件走周期或手动同步。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobSyncScope {
+    All,
+    NoteBodiesOnly,
+    None,
+}
+
+/// 大对象传输进度（复用更新下载的事件模式）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlobSyncProgress {
+    pub phase: String,
+    pub current: usize,
+    pub total: usize,
+}
+
+/// 按触发源与护栏决定本次是否带附件 blob。
+pub fn resolve_blob_scope(
+    trigger: &str,
+    wifi_only: bool,
+    manual_only: bool,
+    unmetered: bool,
+) -> BlobSyncScope {
+    match trigger {
+        "edit" => BlobSyncScope::NoteBodiesOnly,
+        "periodic" | "startup" => {
+            if manual_only || (wifi_only && !unmetered) {
+                BlobSyncScope::NoteBodiesOnly
+            } else {
+                BlobSyncScope::All
+            }
+        }
+        _ => BlobSyncScope::All,
+    }
+}
+
+pub(crate) fn blob_hashes_for_scope(
+    files: &FileData,
+    notes: &NoteData,
+    scope: BlobSyncScope,
+) -> HashSet<String> {
+    match scope {
+        BlobSyncScope::All => collect_blob_hashes(files, notes),
+        BlobSyncScope::NoteBodiesOnly => collect_note_body_hashes(notes),
+        BlobSyncScope::None => HashSet::new(),
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct CloudVaultHeader {
@@ -320,7 +373,16 @@ pub fn restore_from_cloud(
     }
 
     let vault = Vault::restore(root, header, mk, new_password)?;
-    let result = match pull_from_cloud_inner(&vault, s3, true, include_repos).map(|(r, _)| r) {
+    let result = match pull_from_cloud_inner(
+        &vault,
+        s3,
+        true,
+        include_repos,
+        BlobSyncScope::All,
+        None,
+    )
+    .map(|(r, _)| r)
+    {
         Ok(r) => r,
         Err(e) => SyncResult {
             synced_at: iso_now(),
@@ -570,8 +632,18 @@ fn is_remote_ahead(local: &VaultData, remote: &VaultData, machine_id: &str) -> b
     false
 }
 
-/// 推送到云端（Push）
+/// 推送到云端（Push）。手动推送带全部 blob。
 pub fn push_to_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
+    push_to_cloud_with(vault, s3, BlobSyncScope::All, None)
+}
+
+/// 按 blob 范围推送。即时发布用 `NoteBodiesOnly`，避免大附件阻塞。
+pub fn push_to_cloud_with(
+    vault: &Vault,
+    s3: &S3Client,
+    blob_scope: BlobSyncScope,
+    progress: Option<&dyn Fn(BlobSyncProgress)>,
+) -> Result<SyncResult> {
     if !vault.is_unlocked() {
         return Err(AppError::Locked);
     }
@@ -592,6 +664,8 @@ pub fn push_to_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
     let mut secrets = store::load_secrets(vault)?;
     let totp_data = store::load_totp(vault)?;
     let account_data = store::load_accounts(vault)?;
+    let file_data = store::load_files(vault).unwrap_or_default();
+    let note_data = store::load_notes(vault).unwrap_or_default();
     let remote_manifest = fetch_remote_manifest(vault, s3).ok().flatten();
     if crate::model::secrets_incomplete_for_entries(&secrets, &totp_data, &account_data) {
         if let Some(manifest) = &remote_manifest {
@@ -651,6 +725,8 @@ pub fn push_to_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
     logical_objects.insert("data/secrets.json".into(), serde_json::to_vec(&secrets)?);
     logical_objects.insert("data/totp.json".into(), serde_json::to_vec(&totp_data)?);
     logical_objects.insert("data/accounts.json".into(), serde_json::to_vec(&account_data)?);
+    logical_objects.insert("data/files.json".into(), serde_json::to_vec(&file_data)?);
+    logical_objects.insert("data/notes.json".into(), serde_json::to_vec(&note_data)?);
     for hash in store::list_icon_hashes(vault) {
         if let Ok(bytes) = store::load_icon(vault, &hash) {
             logical_objects.insert(format!("icons/{hash}.webp"), bytes);
@@ -697,6 +773,29 @@ pub fn push_to_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
             },
         );
     }
+
+    let needed_blobs = blob_hashes_for_scope(&file_data, &note_data, blob_scope);
+    let mut live_blobs = if blob_scope == BlobSyncScope::All {
+        collect_blob_hashes(&file_data, &note_data)
+    } else {
+        needed_blobs.clone()
+    };
+    if blob_scope == BlobSyncScope::All {
+        if let Ok(index) = load_snapshot_index(vault, s3) {
+            live_blobs.extend(snapshot_blob_refs(&index));
+        }
+    }
+    transferred_count += push_blob_objects(
+        vault,
+        s3,
+        &needed_blobs,
+        &live_blobs,
+        remote_manifest.as_ref(),
+        &now_str,
+        &mut manifest_objects,
+        blob_scope,
+        progress,
+    )?;
 
     if !manifest_objects.contains_key("ssh/config") {
         if let Some(prev) = remote_manifest
@@ -750,7 +849,16 @@ pub fn push_to_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
 
 /// 从云端拉取并还原到本地（Pull）
 pub fn pull_from_cloud(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
-    pull_from_cloud_inner(vault, s3, true, false).map(|(r, _)| r)
+    pull_from_cloud_inner(vault, s3, true, false, BlobSyncScope::All, None).map(|(r, _)| r)
+}
+
+pub fn pull_from_cloud_with(
+    vault: &Vault,
+    s3: &S3Client,
+    blob_scope: BlobSyncScope,
+    progress: Option<&dyn Fn(BlobSyncProgress)>,
+) -> Result<SyncResult> {
+    pull_from_cloud_inner(vault, s3, true, false, blob_scope, progress).map(|(r, _)| r)
 }
 
 fn pull_from_cloud_inner(
@@ -758,6 +866,8 @@ fn pull_from_cloud_inner(
     s3: &S3Client,
     apply_remote_ssh: bool,
     adopt_remote_repos: bool,
+    blob_scope: BlobSyncScope,
+    progress: Option<&dyn Fn(BlobSyncProgress)>,
 ) -> Result<(SyncResult, bool)> {
     if !vault.is_unlocked() {
         return Err(AppError::Locked);
@@ -773,10 +883,15 @@ fn pull_from_cloud_inner(
     let mut remote_secrets_snap: Option<Secrets> = None;
     let mut remote_totp_snap: Option<crate::model::TotpData> = None;
     let mut remote_account_snap: Option<crate::model::AccountData> = None;
+    let mut remote_file_snap: Option<FileData> = None;
+    let mut remote_note_snap: Option<NoteData> = None;
     let mut remote_ssh_snap: Option<String> = None;
     let mut pulled_key_ids: Vec<String> = Vec::new();
 
     for (logical_path, entry) in &manifest.objects {
+        if logical_path.starts_with("blobs/") {
+            continue;
+        }
         let cloud_key = format!("obj/{}", entry.object_name);
         let raw_enc = match s3.get_object(&cloud_key)? {
             Some(b) => b,
@@ -806,6 +921,16 @@ fn pull_from_cloud_inner(
             remote_account_snap = Some(
                 serde_json::from_slice(&plain)
                     .map_err(|e| AppError::Invalid(format!("解析云端账号数据失败: {e}")))?,
+            );
+        } else if logical_path == "data/files.json" {
+            remote_file_snap = Some(
+                serde_json::from_slice(&plain)
+                    .map_err(|e| AppError::Invalid(format!("解析云端文件保险库数据失败: {e}")))?,
+            );
+        } else if logical_path == "data/notes.json" {
+            remote_note_snap = Some(
+                serde_json::from_slice(&plain)
+                    .map_err(|e| AppError::Invalid(format!("解析云端备忘录数据失败: {e}")))?,
             );
         } else if let Some(hash) = logical_path
             .strip_prefix("icons/")
@@ -855,11 +980,34 @@ fn pull_from_cloud_inner(
     } else {
         local_acc.clone()
     };
+    let local_files = store::load_files(vault).unwrap_or_default();
+    let local_notes = store::load_notes(vault).unwrap_or_default();
+    let merged_files = if let Some(remote_files) = remote_file_snap.clone() {
+        crate::model::merge_file_data(local_files, remote_files)
+    } else {
+        local_files
+    };
+    let merged_notes = if let Some(remote_notes) = remote_note_snap.clone() {
+        crate::model::merge_note_data(local_notes, remote_notes)
+    } else {
+        local_notes
+    };
     // 先落机密与身份，再写 SSH。~/.ssh 被拒绝写入时不能把已拉下来的身份一起丢掉。
     store::save_secrets(vault, &current_secrets)?;
     store::save_totp(vault, &merged_totp)?;
     store::save_accounts(vault, &merged_acc)?;
+    store::save_files(vault, &merged_files)?;
+    store::save_notes(vault, &merged_notes)?;
     store::save_data(vault, &current_data)?;
+    transferred_count += pull_missing_blobs(
+        vault,
+        s3,
+        &manifest,
+        &merged_files,
+        &merged_notes,
+        blob_scope,
+        progress,
+    )?;
     for key_id in &pulled_key_ids {
         if let (Some(key_rec), Ok(raw)) = (
             current_data.keys.iter().find(|k| k.id == *key_id),
@@ -890,11 +1038,23 @@ fn pull_from_cloud_inner(
             remote_ssh_snap.as_deref().unwrap_or(""),
             remote_totp_snap.as_ref().unwrap_or(&crate::model::TotpData::default()),
             remote_account_snap.as_ref().unwrap_or(&crate::model::AccountData::default()),
+            remote_file_snap.as_ref().unwrap_or(&FileData::default()),
+            remote_note_snap.as_ref().unwrap_or(&NoteData::default()),
         )),
         None => None,
     };
     let need_push = match remote_hash {
-        Some(h) => h != stable_state_hash(&current_data, &current_secrets, &ssh_now, &merged_totp, &merged_acc),
+        Some(h) => {
+            h != stable_state_hash(
+                &current_data,
+                &current_secrets,
+                &ssh_now,
+                &merged_totp,
+                &merged_acc,
+                &merged_files,
+                &merged_notes,
+            )
+        }
         None => local_has_syncable_assets(vault)?,
     };
 
@@ -950,6 +1110,9 @@ pub struct SnapshotMeta {
     /// 近 14 天内该日第一份（列出时计算，不入库）。
     #[serde(default)]
     pub is_daily_first: bool,
+    /// 该快照仍引用的内容寻址 blob，供云端 GC 保活。
+    #[serde(default)]
+    pub blob_hashes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -965,6 +1128,14 @@ struct SnapshotPayload {
     pub account_data: crate::model::AccountData,
     #[serde(default)]
     pub icons: HashMap<String, String>,
+    #[serde(default)]
+    pub file_data: FileData,
+    #[serde(default)]
+    pub note_data: NoteData,
+    #[serde(default)]
+    pub note_bodies: HashMap<String, String>,
+    #[serde(default)]
+    pub blob_hashes: Vec<String>,
 }
 
 fn load_snapshot_index(vault: &Vault, s3: &S3Client) -> Result<SnapshotIndex> {
@@ -1147,7 +1318,7 @@ fn retain_push_snapshot(
     if id.is_empty() {
         return Ok(());
     }
-    let meta = SnapshotMeta {
+    let mut meta = SnapshotMeta {
         id: id.clone(),
         created_at: now_str.to_string(),
         client_name: whoami_string(),
@@ -1156,9 +1327,22 @@ fn retain_push_snapshot(
         repo_count: data.repos.len(),
         is_recent: false,
         is_daily_first: false,
+        blob_hashes: Vec::new(),
     };
     let mut snap_data = data.clone();
     crate::sys::portableize_vault_data(&mut snap_data);
+    let file_data = store::load_files(vault).unwrap_or_default();
+    let note_data = store::load_notes(vault).unwrap_or_default();
+    let blob_hashes: Vec<String> = collect_blob_hashes(&file_data, &note_data).into_iter().collect();
+    let mut note_bodies = HashMap::new();
+    for e in &note_data.entries {
+        if let Ok(bytes) = blob::read_blob_bytes(vault, &e.body_sha256) {
+            if let Ok(text) = String::from_utf8(bytes) {
+                note_bodies.insert(e.id.clone(), text);
+            }
+        }
+    }
+    meta.blob_hashes = blob_hashes.clone();
     let payload = SnapshotPayload {
         meta: meta.clone(),
         data: snap_data,
@@ -1168,6 +1352,10 @@ fn retain_push_snapshot(
         totp_data: store::load_totp(vault).unwrap_or_default(),
         account_data: store::load_accounts(vault).unwrap_or_default(),
         icons: collect_icons(vault),
+        file_data,
+        note_data,
+        note_bodies,
+        blob_hashes,
     };
     let enc_key = vault.subkey(LABEL_SYNC_OBJECT)?;
     let encrypted = encrypt_payload(&enc_key, &serde_json::to_vec(&payload)?)?;
@@ -1235,6 +1423,22 @@ pub fn restore_snapshot(vault: &Vault, s3: &S3Client, snapshot_id: &str) -> Resu
     store::save_secrets(vault, &payload.secrets)?;
     store::save_totp(vault, &payload.totp_data)?;
     store::save_accounts(vault, &payload.account_data)?;
+    store::save_files(vault, &payload.file_data)?;
+    store::save_notes(vault, &payload.note_data)?;
+    for body in payload.note_bodies.values() {
+        let _ = blob::write_blob(vault, std::io::Cursor::new(body.as_bytes()));
+    }
+    if let Ok(Some(manifest)) = fetch_remote_manifest(vault, s3) {
+        let _ = pull_missing_blobs(
+            vault,
+            s3,
+            &manifest,
+            &payload.file_data,
+            &payload.note_data,
+            BlobSyncScope::All,
+            None,
+        );
+    }
     for (hash, b64) in &payload.icons {
         if let Ok(bytes) = B64.decode(b64) {
             let _ = store::save_icon(vault, hash, &bytes);
@@ -1268,11 +1472,167 @@ pub fn restore_snapshot(vault: &Vault, s3: &S3Client, snapshot_id: &str) -> Resu
     })
 }
 
+fn blob_logical_path(sha: &str) -> String {
+    format!("blobs/{sha}")
+}
+
+pub(crate) fn should_skip_blob_upload(remote: Option<&SyncManifest>, sha: &str) -> bool {
+    remote
+        .and_then(|m| m.objects.get(&blob_logical_path(sha)))
+        .is_some_and(|e| e.sha256 == sha)
+}
+
+fn snapshot_blob_refs(index: &SnapshotIndex) -> HashSet<String> {
+    let mut set = HashSet::new();
+    for item in &index.items {
+        for h in &item.blob_hashes {
+            if !h.is_empty() {
+                set.insert(h.clone());
+            }
+        }
+    }
+    set
+}
+
+fn push_blob_objects(
+    vault: &Vault,
+    s3: &S3Client,
+    needed: &HashSet<String>,
+    live: &HashSet<String>,
+    remote: Option<&SyncManifest>,
+    now_str: &str,
+    manifest_objects: &mut HashMap<String, SyncObjectEntry>,
+    scope: BlobSyncScope,
+    progress: Option<&dyn Fn(BlobSyncProgress)>,
+) -> Result<usize> {
+    if scope != BlobSyncScope::All {
+        if let Some(remote) = remote {
+            for (logical, entry) in &remote.objects {
+                if logical.starts_with("blobs/") {
+                    manifest_objects
+                        .entry(logical.clone())
+                        .or_insert_with(|| entry.clone());
+                }
+            }
+        }
+        if scope == BlobSyncScope::None {
+            return Ok(0);
+        }
+    }
+
+    let upload_set: HashSet<String> = match scope {
+        BlobSyncScope::All => live.iter().cloned().collect(),
+        BlobSyncScope::NoteBodiesOnly => needed.iter().cloned().collect(),
+        BlobSyncScope::None => HashSet::new(),
+    };
+    let pending: Vec<String> = upload_set
+        .iter()
+        .filter(|sha| !should_skip_blob_upload(remote, sha) && blob::blob_exists(vault, sha))
+        .cloned()
+        .collect();
+    let total = pending.len();
+    let mut transferred = 0usize;
+
+    for sha in &upload_set {
+        let logical = blob_logical_path(sha);
+        if should_skip_blob_upload(remote, sha) {
+            if let Some(prev) = remote.and_then(|m| m.objects.get(&logical)).cloned() {
+                manifest_objects.insert(logical, prev);
+            }
+            continue;
+        }
+        if blob::blob_exists(vault, sha) {
+            if let Some(cb) = progress {
+                cb(BlobSyncProgress {
+                    phase: "upload".into(),
+                    current: transferred + 1,
+                    total,
+                });
+            }
+            let path = blob::blob_path(vault, sha);
+            let obj_name = vault.object_name(&logical)?;
+            s3.put_object_file(&format!("obj/{obj_name}"), &path)?;
+            transferred += 1;
+            manifest_objects.insert(
+                logical,
+                SyncObjectEntry {
+                    object_name: obj_name,
+                    sha256: sha.clone(),
+                    size: blob::blob_ciphertext_len(vault, sha).unwrap_or(0) as usize,
+                    updated_at: now_str.to_string(),
+                },
+            );
+        } else if let Some(prev) = remote.and_then(|m| m.objects.get(&logical)).cloned() {
+            manifest_objects.insert(logical, prev);
+        } else if needed.contains(sha) {
+            log::warn!("本地缺少 blob {sha}，跳过上传");
+        }
+    }
+    if scope == BlobSyncScope::All {
+        if let Some(remote) = remote {
+            for (logical, entry) in &remote.objects {
+                if let Some(sha) = logical.strip_prefix("blobs/") {
+                    if !live.contains(sha) {
+                        let _ = s3.delete_object(&format!("obj/{}", entry.object_name));
+                    }
+                }
+            }
+        }
+    }
+    Ok(transferred)
+}
+
+fn pull_missing_blobs(
+    vault: &Vault,
+    s3: &S3Client,
+    manifest: &SyncManifest,
+    files: &FileData,
+    notes: &NoteData,
+    scope: BlobSyncScope,
+    progress: Option<&dyn Fn(BlobSyncProgress)>,
+) -> Result<usize> {
+    let wanted = blob_hashes_for_scope(files, notes, scope);
+    let pending: Vec<String> = wanted
+        .into_iter()
+        .filter(|sha| !blob::blob_exists(vault, sha) && manifest.objects.contains_key(&blob_logical_path(sha)))
+        .collect();
+    let total = pending.len();
+    let mut transferred = 0usize;
+    for sha in pending {
+        // 这个 sha 会被拼成 `blobs/{sha}.blob` 的落盘路径，而它来自云端清单。
+        // `blob_exists` 已经过滤过一轮，这里再确认一次：下面用的是 `blob_path`
+        // 本身（不带校验），漏掉就等于把写入位置交给对端决定。
+        if !blob::is_sha256_hex(&sha) {
+            log::warn!("跳过云端非法附件哈希：{sha}");
+            continue;
+        }
+        let Some(entry) = manifest.objects.get(&blob_logical_path(&sha)) else {
+            continue;
+        };
+        if let Some(cb) = progress {
+            cb(BlobSyncProgress {
+                phase: "download".into(),
+                current: transferred + 1,
+                total,
+            });
+        }
+        let dest = blob::blob_path(vault, &sha);
+        if s3.get_object_to_file(&format!("obj/{}", entry.object_name), &dest)? {
+            transferred += 1;
+        }
+    }
+    Ok(transferred)
+}
+
 fn extra_objects_diverged(vault: &Vault, manifest: &SyncManifest) -> bool {
     let totp = store::load_totp(vault).unwrap_or_default();
     let accounts = store::load_accounts(vault).unwrap_or_default();
+    let files = store::load_files(vault).unwrap_or_default();
+    let notes = store::load_notes(vault).unwrap_or_default();
     let totp_hash = sha256_hex(&serde_json::to_vec(&totp).unwrap_or_default());
     let acc_hash = sha256_hex(&serde_json::to_vec(&accounts).unwrap_or_default());
+    let files_hash = sha256_hex(&serde_json::to_vec(&files).unwrap_or_default());
+    let notes_hash = sha256_hex(&serde_json::to_vec(&notes).unwrap_or_default());
     let remote_totp = manifest
         .objects
         .get("data/totp.json")
@@ -1283,10 +1643,33 @@ fn extra_objects_diverged(vault: &Vault, manifest: &SyncManifest) -> bool {
         .get("data/accounts.json")
         .map(|e| e.sha256.as_str())
         .unwrap_or("");
+    let remote_files = manifest
+        .objects
+        .get("data/files.json")
+        .map(|e| e.sha256.as_str())
+        .unwrap_or("");
+    let remote_notes = manifest
+        .objects
+        .get("data/notes.json")
+        .map(|e| e.sha256.as_str())
+        .unwrap_or("");
+    let needed = collect_blob_hashes(&files, &notes);
+    let blobs_missing_or_changed = needed.iter().any(|sha| {
+        manifest
+            .objects
+            .get(&blob_logical_path(sha))
+            .map(|e| e.sha256 != *sha)
+            .unwrap_or(true)
+    });
     (!totp.entries.is_empty() && totp_hash != remote_totp)
         || (!accounts.entries.is_empty() && acc_hash != remote_acc)
+        || (!files.entries.is_empty() && files_hash != remote_files)
+        || (!notes.entries.is_empty() && notes_hash != remote_notes)
         || (manifest.objects.contains_key("data/totp.json") && totp_hash != remote_totp)
         || (manifest.objects.contains_key("data/accounts.json") && acc_hash != remote_acc)
+        || (manifest.objects.contains_key("data/files.json") && files_hash != remote_files)
+        || (manifest.objects.contains_key("data/notes.json") && notes_hash != remote_notes)
+        || blobs_missing_or_changed
 }
 
 fn collect_icons(vault: &Vault) -> HashMap<String, String> {
@@ -1305,6 +1688,8 @@ fn stable_state_hash(
     ssh: &str,
     totp: &crate::model::TotpData,
     accounts: &crate::model::AccountData,
+    files: &FileData,
+    notes: &NoteData,
 ) -> String {
     let mut identities: Vec<&_> = data.identities.iter().collect();
     identities.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1327,16 +1712,27 @@ fn stable_state_hash(
     totp_entries.sort_by(|a, b| a.id.cmp(&b.id));
     let mut account_entries = accounts.entries.clone();
     account_entries.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut file_entries = files.entries.clone();
+    file_entries.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut note_entries = notes.entries.clone();
+    note_entries.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut blob_hashes: Vec<String> = collect_blob_hashes(files, notes).into_iter().collect();
+    blob_hashes.sort();
     let payload = serde_json::json!({
         "identities": identities,
         "keys": keys,
         "cloneHistory": history,
         "passphrases": passes,
         "githubPat": secrets.github_pat,
+        "gitlabPat": secrets.gitlab_pat,
+        "giteePat": secrets.gitee_pat,
         "totpSeeds": seeds,
         "accountSecrets": account_secrets,
         "totpEntries": totp_entries,
         "accountEntries": account_entries,
+        "fileEntries": file_entries,
+        "noteEntries": note_entries,
+        "blobHashes": blob_hashes,
         "ssh": crate::sys::canonical_ssh_for_sync(ssh),
     });
     sha256_hex(payload.to_string().as_bytes())
@@ -1346,14 +1742,27 @@ fn local_has_syncable_assets(vault: &Vault) -> Result<bool> {
     let data = store::load_data(vault)?;
     let totp = store::load_totp(vault).unwrap_or_default();
     let accounts = store::load_accounts(vault).unwrap_or_default();
+    let files = store::load_files(vault).unwrap_or_default();
+    let notes = store::load_notes(vault).unwrap_or_default();
     Ok(!data.identities.is_empty()
         || !data.keys.is_empty()
         || !totp.entries.is_empty()
-        || !accounts.entries.is_empty())
+        || !accounts.entries.is_empty()
+        || !files.entries.is_empty()
+        || !notes.entries.is_empty())
 }
 
 /// 先拉取再按需推送。空本地不会覆盖已有云端。
 pub fn pull_then_maybe_push(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
+    pull_then_maybe_push_with(vault, s3, BlobSyncScope::All, None)
+}
+
+pub fn pull_then_maybe_push_with(
+    vault: &Vault,
+    s3: &S3Client,
+    blob_scope: BlobSyncScope,
+    progress: Option<&dyn Fn(BlobSyncProgress)>,
+) -> Result<SyncResult> {
     if !vault.is_unlocked() {
         return Err(AppError::Locked);
     }
@@ -1368,9 +1777,10 @@ pub fn pull_then_maybe_push(vault: &Vault, s3: &S3Client) -> Result<SyncResult> 
     }
 
     if remote_before.is_some() {
-        let (pulled, need_push) = pull_from_cloud_inner(vault, s3, false, false)?;
+        let (pulled, need_push) =
+            pull_from_cloud_inner(vault, s3, false, false, blob_scope, progress)?;
         if need_push && local_has_syncable_assets(vault)? {
-            let pushed = push_to_cloud(vault, s3)?;
+            let pushed = push_to_cloud_with(vault, s3, blob_scope, progress)?;
             return Ok(SyncResult {
                 message: format!("已拉取并推送：{}", pushed.message),
                 ..pushed
@@ -1386,7 +1796,7 @@ pub fn pull_then_maybe_push(vault: &Vault, s3: &S3Client) -> Result<SyncResult> 
     }
 
     if local_has_syncable_assets(vault)? {
-        let pushed = push_to_cloud(vault, s3)?;
+        let pushed = push_to_cloud_with(vault, s3, blob_scope, progress)?;
         return Ok(SyncResult {
             message: format!("云端尚无备份，已推送：{}", pushed.message),
             ..pushed
@@ -1405,7 +1815,17 @@ pub fn pull_then_maybe_push(vault: &Vault, s3: &S3Client) -> Result<SyncResult> 
 }
 
 /// 本地编辑后：先合并云端新增（不覆盖刚写的 SSH config），再立刻推送。
+/// 大 blob 默认不跟这次走，避免每加一个附件就阻塞。
 pub fn publish_after_edit(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
+    publish_after_edit_with(vault, s3, BlobSyncScope::NoteBodiesOnly, None)
+}
+
+pub fn publish_after_edit_with(
+    vault: &Vault,
+    s3: &S3Client,
+    blob_scope: BlobSyncScope,
+    progress: Option<&dyn Fn(BlobSyncProgress)>,
+) -> Result<SyncResult> {
     if !vault.is_unlocked() {
         return Err(AppError::Locked);
     }
@@ -1429,9 +1849,9 @@ pub fn publish_after_edit(vault: &Vault, s3: &S3Client) -> Result<SyncResult> {
         ));
     }
     if remote.is_some() {
-        let _ = pull_from_cloud_inner(vault, s3, false, false)?;
+        let _ = pull_from_cloud_inner(vault, s3, false, false, blob_scope, progress)?;
     }
-    let pushed = push_to_cloud(vault, s3)?;
+    let pushed = push_to_cloud_with(vault, s3, blob_scope, progress)?;
     Ok(SyncResult {
         message: format!("已保存并推送到云端：{}", pushed.message),
         ..pushed
@@ -1473,6 +1893,7 @@ mod tests {
             repo_count: 0,
             is_recent: false,
             is_daily_first: false,
+            blob_hashes: Vec::new(),
         }
     }
 
@@ -1526,6 +1947,105 @@ mod tests {
         assert!(crate::sys::text_has_host_blocks(
             "Host github-a\n    HostName github.com\n    User git\n"
         ));
+    }
+
+    #[test]
+    fn skip_blob_when_manifest_sha_matches() {
+        let sha = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let mut objects = HashMap::new();
+        objects.insert(
+            blob_logical_path(sha),
+            SyncObjectEntry {
+                object_name: "obj".into(),
+                sha256: sha.into(),
+                size: 12,
+                updated_at: "t".into(),
+            },
+        );
+        let remote = SyncManifest {
+            version: 1,
+            workspace_id: "w".into(),
+            updated_at: "t".into(),
+            client_name: "c".into(),
+            objects,
+        };
+        assert!(should_skip_blob_upload(Some(&remote), sha));
+        assert!(!should_skip_blob_upload(Some(&remote), &"ab".repeat(32)));
+        assert!(!should_skip_blob_upload(None, sha));
+    }
+
+    #[test]
+    fn collect_blob_logical_paths_from_metadata() {
+        let mut files = FileData::default();
+        files.entries.push(crate::model::FileEntry {
+            id: "f1".into(),
+            name: "a".into(),
+            original_name: "a.bin".into(),
+            mime: None,
+            size: 3,
+            sha256: "aa".repeat(32),
+            attachments: vec![],
+            group: None,
+            note: None,
+            icon: None,
+            sort_order: 0,
+            created_at: "t".into(),
+            updated_at: "t".into(),
+        });
+        let mut notes = NoteData::default();
+        notes.entries.push(crate::model::NoteEntry {
+            id: "n1".into(),
+            title: "t".into(),
+            format: "markdown".into(),
+            group: None,
+            tags: vec![],
+            icon: None,
+            pinned: false,
+            sort_order: 0,
+            excerpt: None,
+            body_sha256: "bb".repeat(32),
+            asset_hashes: vec!["cc".repeat(32)],
+            created_at: "t".into(),
+            updated_at: "t".into(),
+        });
+        let hashes = collect_blob_hashes(&files, &notes);
+        assert_eq!(hashes.len(), 3);
+        assert!(hashes.contains(&"aa".repeat(32)));
+        assert!(hashes.contains(&"bb".repeat(32)));
+        assert!(hashes.contains(&"cc".repeat(32)));
+        let bodies = blob_hashes_for_scope(&files, &notes, BlobSyncScope::NoteBodiesOnly);
+        assert_eq!(bodies.len(), 1);
+        assert!(bodies.contains(&"bb".repeat(32)));
+        assert!(!bodies.contains(&"aa".repeat(32)));
+        assert!(!bodies.contains(&"cc".repeat(32)));
+    }
+
+    #[test]
+    fn resolve_blob_scope_defers_attachments() {
+        assert_eq!(
+            resolve_blob_scope("edit", true, false, true),
+            BlobSyncScope::NoteBodiesOnly
+        );
+        assert_eq!(
+            resolve_blob_scope("periodic", true, false, false),
+            BlobSyncScope::NoteBodiesOnly
+        );
+        assert_eq!(
+            resolve_blob_scope("periodic", false, true, true),
+            BlobSyncScope::NoteBodiesOnly
+        );
+        assert_eq!(
+            resolve_blob_scope("periodic", true, false, true),
+            BlobSyncScope::All
+        );
+        assert_eq!(
+            resolve_blob_scope("manual", true, true, false),
+            BlobSyncScope::All
+        );
+        assert_eq!(
+            resolve_blob_scope("startup", true, false, false),
+            BlobSyncScope::NoteBodiesOnly
+        );
     }
 
     #[test]

@@ -111,6 +111,11 @@ pub fn read_ssh_config(state: State<'_, AppState>, repair: Option<bool>) -> Resu
 /// 用记事本打开工作空间内的 SSH config 正本。
 #[tauri::command]
 pub fn open_ssh_config(state: State<AppState>) -> Result<String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = state;
+        return Err(AppError::Unsupported("打开本机 SSH config"));
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let ws = state
         .config
@@ -121,7 +126,12 @@ pub fn open_ssh_config(state: State<AppState>) -> Result<String> {
         .ok_or_else(|| AppError::Invalid("尚未设置工作空间".into()))?;
     let dest = sys::adopt_ssh_config(std::path::Path::new(&ws))?;
     let path = dest.display().to_string();
-    std::process::Command::new("notepad")
+    // 必须用绝对路径：裸 `notepad` 会先在程序目录和当前工作目录里找，
+    // 从下载目录之类可写位置启动时，能被同名 exe 顶替。
+    let notepad = std::path::Path::new(&std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into()))
+        .join("System32")
+        .join("notepad.exe");
+    std::process::Command::new(notepad)
         .arg(&path)
         .spawn()
         .map_err(|e| AppError::Io(format!("无法启动记事本：{e}")))?;
@@ -216,6 +226,10 @@ pub fn scan_keys(state: State<'_, AppState>) -> Result<Vec<ScannedKey>> {
 /// 探测 ssh 工具链（运行 `ssh -V` 解析版本）。
 #[tauri::command(async)]
 pub fn detect_toolchain() -> Toolchain {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        return Toolchain::default();
+    }
     let mut tc = Toolchain::default();
     for (source, path) in toolchain::candidate_paths() {
         if !path.exists() {
@@ -381,6 +395,11 @@ pub fn import_key_from_path(app: AppHandle, state: State<AppState>, path: String
 /// 连接体检：对某个 Host 别名跑 `ssh -T`，解析账号名/错误。
 #[tauri::command(async)]
 pub fn test_connection(state: State<'_, AppState>, host_alias: String) -> Result<AuthResult> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (state, host_alias);
+        return Err(AppError::Unsupported("SSH 连接体检"));
+    }
     let env = {
         let current = recover_lock(&state.agent_env).clone();
         if crate::agent::is_ready(&current) {
@@ -441,14 +460,51 @@ pub fn open_url(url: String) -> Result<()> {
     if !(t.starts_with("https://") || t.starts_with("http://")) {
         return Err(AppError::Invalid("仅允许打开 http(s) 链接".into()));
     }
+    // 结构必须真的是个 URL：光看前缀挡不住 `https://x/?a=1&whoami` 这类带 shell
+    // 元字符的串，也挡不住把凭据塞进 userinfo 的写法。
+    let parsed = url::Url::parse(t).map_err(|_| AppError::Invalid("链接格式无效".into()))?;
+    if !parsed.has_host() {
+        return Err(AppError::Invalid("链接缺少主机名".into()));
+    }
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd")
-            .args(["/c", "start", "", t])
-            .spawn()
-            .map_err(|e| AppError::Io(format!("打开链接失败：{e}")))?;
+        // **不要走 `cmd /c start`**：Rust 只在参数含空格时才加引号，像
+        // `https://a/?x=1&calc` 这种不含空格的 URL 会原样交给 cmd，`&` 被当成
+        // 命令分隔符执行。URL 来自更新清单的 downloadUrl 和云同步来的网址字段，
+        // 都不是完全可信输入。ShellExecuteW 不经过命令行解析。
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+
+        let wide = |s: &str| -> Vec<u16> {
+            std::ffi::OsStr::new(s)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect()
+        };
+        let op = wide("open");
+        let target = wide(parsed.as_str());
+        // SAFETY: 两个入参都是以 NUL 结尾的宽字符串，其余指针传空。
+        let rc = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                op.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL as i32,
+            )
+        };
+        // ShellExecuteW 约定：返回值 <= 32 视为失败。
+        if (rc as isize) <= 32 {
+            return Err(AppError::Io("打开链接失败".into()));
+        }
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "ios")]
+    {
+        open_http_url_ios(parsed.as_str())?;
+    }
+    #[cfg(all(not(windows), not(target_os = "ios")))]
     {
         let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
         std::process::Command::new(opener)
@@ -457,4 +513,38 @@ pub fn open_url(url: String) -> Result<()> {
             .map_err(|e| AppError::Io(format!("打开链接失败：{e}")))?;
     }
     Ok(())
+}
+
+#[cfg(target_os = "ios")]
+fn open_http_url_ios(url: &str) -> Result<()> {
+    use objc2::MainThreadMarker;
+    use objc2_foundation::{NSString, NSURL};
+    use objc2_ui_kit::UIApplication;
+
+    fn open_now(url: &str, mtm: MainThreadMarker) -> Result<()> {
+        let ns = NSString::from_str(url);
+        let nsurl = unsafe { NSURL::URLWithString(&ns) }
+            .ok_or_else(|| AppError::Invalid("链接格式无效".into()))?;
+        #[allow(deprecated)]
+        let ok = unsafe { UIApplication::sharedApplication(mtm).openURL(&nsurl) };
+        if !ok {
+            return Err(AppError::Io("打开链接失败".into()));
+        }
+        Ok(())
+    }
+
+    if let Some(mtm) = MainThreadMarker::new() {
+        return open_now(url, mtm);
+    }
+
+    // Tauri 命令线程通常不是 UIKit 主线程；sharedApplication 必须带着 MainThreadMarker。
+    let url = url.to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    dispatch2::DispatchQueue::main().exec_sync(move || {
+        let outcome = MainThreadMarker::new()
+            .ok_or_else(|| AppError::Io("打开链接失败".into()))
+            .and_then(|mtm| open_now(&url, mtm));
+        let _ = tx.send(outcome);
+    });
+    rx.recv().map_err(|_| AppError::Io("打开链接失败".into()))?
 }

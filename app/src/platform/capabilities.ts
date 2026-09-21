@@ -1,4 +1,4 @@
-import { resolvePlatform, type Platform } from "./resolve";
+import { isIOS, resolvePlatform, type Platform } from "./resolve";
 
 /**
  * 能力矩阵：某个终端「有没有」某项能力。
@@ -16,7 +16,7 @@ export interface Capabilities {
   windowControls: boolean;
   /** 屏幕截图取二维码（桌面才有意义，手机用相机）。 */
   screenQrScan: boolean;
-  /** 相机扫码（移动端专属）。 */
+  /** 相机 / 电脑摄像头扫码。 */
   cameraQrScan: boolean;
 }
 
@@ -25,7 +25,7 @@ const MATRIX: Record<Platform, Capabilities> = {
     localGitTools: true,
     windowControls: true,
     screenQrScan: true,
-    cameraQrScan: false,
+    cameraQrScan: true,
   },
   mobile: {
     localGitTools: false,
@@ -36,9 +36,17 @@ const MATRIX: Record<Platform, Capabilities> = {
 };
 
 export function capabilities(): Capabilities {
-  return MATRIX[resolvePlatform()];
+  const base = MATRIX[resolvePlatform()];
+  if (isIOS()) {
+    return {
+      ...base,
+      // iOS 未接实时相机；相册选图 + rqrr 仍可用。
+      cameraQrScan: false,
+    };
+  }
+  return base;
 }
 
 export function can<K extends keyof Capabilities>(feature: K): boolean {
-  return MATRIX[resolvePlatform()][feature];
+  return capabilities()[feature];
 }

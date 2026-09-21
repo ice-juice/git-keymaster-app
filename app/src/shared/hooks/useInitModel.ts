@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { i18n } from "../../lib/i18n";
 import { open } from "@tauri-apps/plugin-dialog";
 import { api, errCode, errMessage, type CloudRestorePreview, type S3Config } from "../../lib/ipc";
+import { readClipboard } from "../../lib/clipboard";
 import { importS3ConfigFromPicker } from "../../lib/s3ConfigPick";
 import { firstS3ConfigJson, scanQrWithCamera } from "../../lib/qrCapture";
 import { useApp } from "../../store";
 import type { S3GuideProvider } from "../../ui/S3SetupGuide";
 
-type Translate = (key: string) => string;
+type Translate = (key: string, options?: Record<string, unknown>) => string;
 
 export function createSteps(t: Translate) {
   return [
@@ -39,11 +41,6 @@ export function restoreStepsMobile(t: Translate) {
   return [t("init.steps.cloud"), t("init.steps.recovery"), t("init.steps.newPassword"), t("init.steps.done")];
 }
 
-export const CREATE_STEPS = ["选择工作空间", "设置访问密码", "保存恢复密钥", "回填校验", "完成"];
-export const RESTORE_STEPS = ["选择工作空间", "云存储", "恢复密钥", "新访问密码", "完成"];
-export const CREATE_STEPS_MOBILE = ["设置访问密码", "保存恢复密钥", "回填校验", "完成"];
-export const RESTORE_STEPS_MOBILE = ["云存储", "恢复密钥", "新访问密码", "完成"];
-
 export type Mode = "create" | "restore";
 
 export function samePath(a: string, b: string): boolean {
@@ -73,8 +70,7 @@ export function pwStrengthKey(pw: string): "weak" | "medium" | "strong" {
 }
 
 export function pwStrength(pw: string): string {
-  const key = pwStrengthKey(pw);
-  return key === "strong" ? "强" : key === "medium" ? "中" : "弱";
+  return i18n.t(`init.${pwStrengthKey(pw)}`);
 }
 
 export function useInitModel(variant: "desktop" | "mobile") {
@@ -194,8 +190,8 @@ export function useInitModel(variant: "desktop" | "mobile") {
 
   async function doInit() {
     resetErr();
-    if (pw.length < 8) return setErr("访问密码至少 8 位");
-    if (pw !== pw2) return setErr("两次输入的密码不一致");
+    if (pw.length < 8) return setErr(t("init.pwMin"));
+    if (pw !== pw2) return setErr(t("init.pwMismatch"));
     setBusy(true);
     try {
       if (createdPath && samePath(path, createdPath)) {
@@ -229,7 +225,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
   function verifyConfirm() {
     resetErr();
     const norm = (s: string) => s.replace(/[\s-]/g, "").toUpperCase();
-    if (norm(confirm) !== norm(recovery)) return setErr("恢复密钥不一致，请仔细核对（大小写与连字符可忽略）");
+    if (norm(confirm) !== norm(recovery)) return setErr(t("init.recoveryMismatch"));
     setStep(4);
   }
 
@@ -250,12 +246,12 @@ export function useInitModel(variant: "desktop" | "mobile") {
 
   async function testS3() {
     resetErr();
-    if (!s3Ready()) return setErr("请先填写 Endpoint、Bucket、Access Key 与 Secret Key");
+    if (!s3Ready()) return setErr(t("init.testNeed"));
     setBusy(true);
     setTestResult(null);
     try {
       const ms = await api.testCloudSyncConfig(s3);
-      setTestResult({ ok: true, msg: `连接成功，探测耗时 ${ms} ms` });
+      setTestResult({ ok: true, msg: t("init.testOk", { ms }) });
     } catch (e) {
       setTestResult({ ok: false, msg: errMessage(e) });
     } finally {
@@ -269,7 +265,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
       const cfg = await importS3ConfigFromPicker();
       if (!cfg) return;
       setS3(cfg);
-      setTestResult({ ok: true, msg: "已导入配置文件，可先测试连通性再继续" });
+      setTestResult({ ok: true, msg: t("init.importOk") });
     } catch (e) {
       setErr(errMessage(e));
     }
@@ -282,17 +278,17 @@ export function useInitModel(variant: "desktop" | "mobile") {
     try {
       const texts = await scanQrWithCamera({
         title: t("init.scanQrTitle"),
-        hint: "对准电脑端【设置 → 云同步 → 分享配置】生成的二维码",
+        hint: t("init.scanHintComputer"),
       });
       if (!texts) return;
       const raw = firstS3ConfigJson(texts);
       if (!raw) {
-        setErr("未识别到云存储配置二维码。电脑须先在同步页「分享配置」生成二维码。");
+        setErr(t("init.scanNone"));
         return;
       }
       const cfg = await api.importS3ConfigText(raw);
       setS3(cfg);
-      setTestResult({ ok: true, msg: "已自动写入云配置。下一步请输入旧设备恢复密钥以解开保险库。" });
+      setTestResult({ ok: true, msg: t("init.scanOk") });
       setStep(2);
     } catch (e) {
       setErr(errMessage(e));
@@ -303,20 +299,20 @@ export function useInitModel(variant: "desktop" | "mobile") {
 
   function goRestoreCloud() {
     resetErr();
-    if (!s3Ready()) return setErr("请先填写完整的云存储连接信息，或扫描电脑上的二维码");
+    if (!s3Ready()) return setErr(t("init.needCloud"));
     setStep(2);
   }
 
   async function doPreview() {
     resetErr();
-    if (!restoreKey.trim()) return setErr("请输入旧设备的恢复密钥");
+    if (!restoreKey.trim()) return setErr(t("init.needRestoreKey"));
     setBusy(true);
     setPreview(null);
     try {
       const r = await api.previewCloudRestore(s3, restoreKey);
       setPreview(r);
       if (!r.hasManifest) {
-        setErr("已解开云端头部，但还没有加密清单。请先在旧设备上打开本应用并执行一次「推送到云端」。");
+        setErr(t("init.noManifest"));
       }
     } catch (e) {
       setErr(errMessage(e));
@@ -327,9 +323,9 @@ export function useInitModel(variant: "desktop" | "mobile") {
 
   async function doRestore() {
     resetErr();
-    if (pw.length < 8) return setErr("访问密码至少 8 位");
-    if (pw !== pw2) return setErr("两次输入的密码不一致");
-    if (!preview?.hasManifest) return setErr("请先验证恢复密钥并确认云端有可还原的数据");
+    if (pw.length < 8) return setErr(t("init.pwMin"));
+    if (pw !== pw2) return setErr(t("init.pwMismatch"));
+    if (!preview?.hasManifest) return setErr(t("init.needPreview"));
     setBusy(true);
     try {
       const ws = await ensureWorkspacePath();
@@ -369,25 +365,22 @@ export function useInitModel(variant: "desktop" | "mobile") {
   }
 
   async function pasteRestoreKey() {
+    resetErr();
     try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.trim()) {
-        setRestoreKey(text.trim());
-        setPreview(null);
-      }
-    } catch {
-      // 剪贴板不可用或权限限制
+      const text = await readClipboard();
+      setRestoreKey(text);
+      setPreview(null);
+    } catch (e) {
+      setErr(errMessage(e));
     }
   }
 
   async function pasteConfirm() {
+    resetErr();
     try {
-      const text = await navigator.clipboard.readText();
-      if (text && text.trim()) {
-        setConfirm(text.trim());
-      }
-    } catch {
-      // 剪贴板不可用或权限限制
+      setConfirm(await readClipboard());
+    } catch (e) {
+      setErr(errMessage(e));
     }
   }
 

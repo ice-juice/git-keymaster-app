@@ -40,7 +40,7 @@ pub fn parse_ssh_version(text: &str) -> Option<String> {
     }
 }
 
-/// 当前运行的操作系统键：`windows` / `macos` / `linux`。
+/// 当前运行的操作系统键：`windows` / `macos` / `linux` / `android` / `ios`。
 pub fn host_os() -> &'static str {
     #[cfg(target_os = "windows")]
     {
@@ -50,7 +50,20 @@ pub fn host_os() -> &'static str {
     {
         "macos"
     }
-    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    #[cfg(target_os = "ios")]
+    {
+        "ios"
+    }
+    #[cfg(target_os = "android")]
+    {
+        "android"
+    }
+    #[cfg(all(
+        not(target_os = "windows"),
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     {
         "linux"
     }
@@ -296,11 +309,15 @@ mod tests {
     #[test]
     fn host_os_matches_target() {
         let os = host_os();
-        assert!(os == "windows" || os == "macos" || os == "linux");
+        assert!(os == "windows" || os == "macos" || os == "linux" || os == "ios" || os == "android");
         #[cfg(target_os = "windows")]
         assert_eq!(os, "windows");
         #[cfg(target_os = "macos")]
         assert_eq!(os, "macos");
+        #[cfg(target_os = "ios")]
+        assert_eq!(os, "ios");
+        #[cfg(target_os = "android")]
+        assert_eq!(os, "android");
     }
 
     #[test]

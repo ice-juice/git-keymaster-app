@@ -1,2 +1,4 @@
 CFBundleName = "御钥师";
 CFBundleDisplayName = "御钥师";
+NSCameraUsageDescription = "用于扫描 2FA 密钥或云存储配置二维码。";
+NSFaceIDUsageDescription = "用于解锁工作空间并确认查看验证码或账户密码。";

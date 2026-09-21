@@ -3,10 +3,12 @@ import { useTranslation } from "react-i18next";
 import { PageHead, Empty, Badge } from "../ui/common";
 import { getAvatarBg, useOverviewModel } from "../shared/hooks/useOverviewModel";
 import { OverviewIdentityDialogs } from "./Overview.modals";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 export function OverviewDesktop() {
   const { t } = useTranslation();
   const m = useOverviewModel();
+  useItemFocus(m.identities.length > 0);
 
   return (
     <div className="stack-lg">
@@ -20,7 +22,7 @@ export function OverviewDesktop() {
               className="btn"
               disabled={m.loadingAll || m.identities.length === 0}
               onClick={m.handleTestAll}
-              title="重新检测配置、Agent与所有身份的SSH连通性"
+              title={t("overview.healthTitle")}
             >
               <RefreshCw size={13} className={m.loadingAll ? "animate-spin" : ""} />
               <span>{m.loadingAll ? t("pages.healthChecking") : t("pages.healthCheck")}</span>
@@ -29,7 +31,7 @@ export function OverviewDesktop() {
               type="button"
               className="btn primary"
               disabled={m.writesLocked}
-              title={m.writesLocked ? "正在同步，暂不可新建" : undefined}
+              title={m.writesLocked ? t("overview.syncLockedNew") : undefined}
               onClick={m.goNewIdentity}
             >
               <Plus size={14} />
@@ -50,23 +52,23 @@ export function OverviewDesktop() {
         <div className="stat-card">
           <div className="stat-card-title">
             <span style={{ color: "var(--accent)" }}>◆</span>
-            <span>身份总数</span>
+            <span>{t("pages.idCount")}</span>
           </div>
           <div className="stat-card-body">
             <div className="stat-card-val">{m.stats.totalIdentities}</div>
-            <div className="stat-card-sub">已登记身份</div>
+            <div className="stat-card-sub">{t("pages.idRegistered")}</div>
           </div>
         </div>
 
         <div className="stat-card">
           <div className="stat-card-title">
             <span style={{ color: "var(--amber)" }}>🔒</span>
-            <span>已入库密钥</span>
+            <span>{t("pages.keyCount")}</span>
           </div>
           <div className="stat-card-body">
             <div className="stat-card-val">{m.stats.totalKeys}</div>
             <div className="stat-card-sub" style={{ color: "var(--green)" }}>
-              全部加密
+              {t("pages.allEncrypted")}
             </div>
           </div>
         </div>
@@ -74,7 +76,7 @@ export function OverviewDesktop() {
         <div className="stat-card">
           <div className="stat-card-title">
             <span style={{ color: "var(--green)" }}>🟢</span>
-            <span>连通正常</span>
+            <span>{t("overview.connectedOk")}</span>
           </div>
           <div className="stat-card-body">
             <div className="stat-card-val">
@@ -86,8 +88,8 @@ export function OverviewDesktop() {
             </div>
             <div className="stat-card-sub">
               {m.stats.okCount === m.stats.totalIdentities && m.stats.totalIdentities > 0
-                ? "全部畅通"
-                : "已体检"}
+                ? t("overview.allClear")
+                : t("overview.checked")}
             </div>
           </div>
         </div>
@@ -95,7 +97,7 @@ export function OverviewDesktop() {
         <div className="stat-card">
           <div className="stat-card-title">
             <span style={{ color: "var(--amber)" }}>▲</span>
-            <span>待处理问题</span>
+            <span>{t("overview.issues")}</span>
           </div>
           <div className="stat-card-body">
             <div
@@ -105,7 +107,7 @@ export function OverviewDesktop() {
               {m.stats.issuesCount}
             </div>
             <div className="stat-card-sub">
-              {m.stats.issuesCount > 0 ? "需关注修复" : "状态良好"}
+              {m.stats.issuesCount > 0 ? t("overview.needFix") : t("overview.healthy")}
             </div>
           </div>
         </div>
@@ -113,7 +115,7 @@ export function OverviewDesktop() {
 
       {m.identities.length === 0 ? (
         <div className="card" style={{ padding: "30px 10px" }}>
-          <Empty icon="🧑‍💻" text="还没有配置 Git 身份。点击右上角「新建身份」开始添加。" />
+          <Empty icon="🧑‍💻" text={t("overview.empty")} />
         </div>
       ) : (
         <div className="grid c3">
@@ -156,27 +158,29 @@ export function OverviewDesktop() {
             if (!hasIdentitiesOnly && block) {
               calloutContent = {
                 type: "warn",
-                text: "▲ 配置缺少 IdentitiesOnly yes，可能串号",
-                actionText: "一键修复",
+                text: t("overview.fixIdentitiesOnly"),
+                actionText: t("overview.fixNow"),
                 onAction: () => m.handleFixConfig(id),
               };
             } else if (!inAgent) {
               calloutContent = {
                 type: "danger",
-                text: "✕ 密钥未加载进 Agent",
-                actionText: "一键加载",
+                text: t("overview.keyNotInAgent"),
+                actionText: t("overview.loadNow"),
                 onAction: () => m.handleLoadToAgent(id.id),
               };
             } else if (test?.result) {
               if (test.result.ok) {
                 calloutContent = {
                   type: "info",
-                  text: `● 上次体检: ${test.result.account ? `Hi ${test.result.account} ✓ 账号匹配` : "连通成功"}`,
+                  text: test.result.account
+                    ? t("overview.lastOkNamed", { account: test.result.account })
+                    : t("overview.lastOk"),
                 };
               } else {
                 calloutContent = {
                   type: "danger",
-                  text: `✕ 连通失败: ${test.result.message || "请检查网络或公钥部署"}`,
+                  text: t("overview.lastFail", { msg: test.result.message || t("overview.failFallback") }),
                 };
               }
             }
@@ -185,7 +189,7 @@ export function OverviewDesktop() {
             const isDefault = index === 0;
 
             return (
-              <div className="identity-card" key={id.id}>
+              <div className="identity-card" key={id.id} data-focus-id={id.id}>
                 <div className="id-card-head">
                   <div className="id-avatar" style={{ background: getAvatarBg(id.name) }}>
                     {initialLetter}
@@ -195,8 +199,8 @@ export function OverviewDesktop() {
                       <span className="id-name" title={id.name}>
                         {id.name}
                       </span>
-                      {isDefault && <Badge kind="info">默认</Badge>}
-                      {id.strictMode && <Badge kind="warn">严格</Badge>}
+                      {isDefault && <Badge kind="info">{t("pages.default")}</Badge>}
+                      {id.strictMode && <Badge kind="warn">{t("overview.strict")}</Badge>}
                     </div>
                     <div className="id-sub" title={`${id.hostAlias} → ${id.realHost}`}>
                       {id.hostAlias === id.realHost
@@ -209,11 +213,11 @@ export function OverviewDesktop() {
                 <div className="status-bar-4">
                   <div className="status-col">
                     <span className={`status-dot ${keyDot}`} />
-                    <span className="status-dot-label">密钥</span>
+                    <span className="status-dot-label">{t("overview.dotKey")}</span>
                   </div>
                   <div className="status-col">
                     <span className={`status-dot ${configDot}`} />
-                    <span className="status-dot-label">配置</span>
+                    <span className="status-dot-label">{t("overview.dotConfig")}</span>
                   </div>
                   <div className="status-col">
                     <span className={`status-dot ${agentDot}`} />
@@ -221,7 +225,7 @@ export function OverviewDesktop() {
                   </div>
                   <div className="status-col">
                     <span className={`status-dot ${testDot}`} />
-                    <span className="status-dot-label">连通</span>
+                    <span className="status-dot-label">{t("overview.dotConn")}</span>
                   </div>
                 </div>
 
@@ -280,10 +284,10 @@ export function OverviewDesktop() {
                     className="btn ghost sm"
                     disabled={m.writesLocked}
                     onClick={() => m.setEditingIdentity(id)}
-                    title={m.writesLocked ? "正在同步，暂不可修改" : "修改备注、别名、邮箱、提交姓名等"}
+                    title={m.writesLocked ? t("overview.syncLockedEdit") : t("overview.editTip")}
                   >
                     <Edit3 size={12} />
-                    <span>详情</span>
+                    <span>{t("overview.detail")}</span>
                   </button>
 
                   <div className="row" style={{ gap: 4 }}>
@@ -292,17 +296,17 @@ export function OverviewDesktop() {
                       className="btn sm"
                       disabled={!id.keyId}
                       onClick={() => m.handleCopyPublic(id.keyId)}
-                      title="复制此身份绑定的 OpenSSH 公钥"
+                      title={t("overview.copyPubTip")}
                     >
                       {m.copiedKeyId === id.keyId ? (
                         <>
                           <Check size={12} style={{ color: "var(--green)" }} />
-                          <span style={{ color: "var(--green)" }}>已复制</span>
+                          <span style={{ color: "var(--green)" }}>{t("overview.copied")}</span>
                         </>
                       ) : (
                         <>
                           <Copy size={12} />
-                          <span>复制公钥</span>
+                          <span>{t("overview.copyPub")}</span>
                         </>
                       )}
                     </button>
@@ -311,10 +315,10 @@ export function OverviewDesktop() {
                       className="btn sm"
                       disabled={test?.loading}
                       onClick={() => m.handleTestConnection(id.hostAlias)}
-                      title="测试与此身份的 SSH 连通性"
+                      title={t("overview.testTip")}
                     >
                       <Activity size={12} />
-                      <span>{test?.loading ? "测试中…" : "体检"}</span>
+                      <span>{test?.loading ? t("overview.testing") : t("overview.health")}</span>
                     </button>
                   </div>
                 </div>

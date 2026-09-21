@@ -106,6 +106,14 @@ async fn install_inner(app: &AppHandle, state: &AppState) -> Result<()> {
         )
     };
     let endpoints = update::checker::resolve_check_endpoints(&src, proxy.as_ref()).await?;
+    let doc = update::manifest::fetch_manifest(&src, proxy.as_ref())
+        .await?
+        .ok_or_else(|| AppError::Invalid("远端尚未发布更新清单".into()))?;
+    let wm = update::watermark::load();
+    let trust = update::manifest::accept_manifest(&src, &doc, &wm)?;
+    if !update::checker::is_newer(&app.package_info().version.to_string(), &doc.version) {
+        return Err(AppError::Invalid("不允许安装更低或相同版本".into()));
+    }
     let updater = update::checker::build_updater(app, endpoints, proxy.as_ref())?;
 
     let Some(update) = updater
@@ -115,9 +123,15 @@ async fn install_inner(app: &AppHandle, state: &AppState) -> Result<()> {
     else {
         return Err(AppError::Invalid("当前已是最新版本".into()));
     };
+    if !update::manifest::versions_equal(&update.version, &doc.version) {
+        return Err(AppError::Invalid(
+            "更新插件读到的版本与已验证清单不一致，已拒绝".into(),
+        ));
+    }
     if !update::checker::is_newer(&update.current_version, &update.version) {
         return Err(AppError::Invalid("不允许安装更低或相同版本".into()));
     }
+    update::watermark::reject_if_below_floor(&update.version, &wm)?;
 
     let _ = app.emit(
         "update-progress",
@@ -143,6 +157,8 @@ async fn install_inner(app: &AppHandle, state: &AppState) -> Result<()> {
         )
         .await
         .map_err(update::checker::map_updater_err)?;
+    // 插件已对安装包字节做 minisign。带签清单此时抬地板；官方无签只在包验签成功后才抬。
+    let _ = update::manifest::record_verified_manifest(trust, &update.version, true);
     app.restart();
 }
 

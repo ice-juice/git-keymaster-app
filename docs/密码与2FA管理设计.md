@@ -55,7 +55,7 @@
 - 不做浏览器自动填充 / 扩展集成。
 - 不做密码强度分析 / 泄露检测 / 密码生成器（可后置为增强项）。
 - 不做 HOTP（计数型）；仅做 TOTP（时间型），覆盖绝大多数平台。
-- 不做 Google Authenticator 的 `otpauth-migration://` 批量迁移解析（后置增强项，见 §8）。
+- 支持 Google Authenticator 的 `otpauth-migration://` 批量导出（protobuf 解析，只导入 TOTP，跳过 HOTP）。
 - 不做实时摄像头扫码（用截屏方案替代，规避权限与兼容性）。
 
 ---
@@ -473,7 +473,7 @@ get_reveal_grace_minutes / set_reveal_grace_minutes
 
 ## 附录 · 待确认/可选增强
 
-- Google Authenticator `otpauth-migration://` 批量导入（protobuf 解析）。
+- Google Authenticator `otpauth-migration://` 批量导入（已实现：扫码 / 图片 / 粘贴导出链接）。
 - 密码生成器 / 强度提示。
 - 账号自定义字段（安全问题、备用邮箱）UI（模型已预留 `extra_fields`）。
 - TOTP 图标自动抓取平台 favicon。

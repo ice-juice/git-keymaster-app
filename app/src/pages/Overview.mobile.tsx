@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Badge, Empty } from "../ui/common";
 import { useOverviewModel } from "../shared/hooks/useOverviewModel";
 import { OverviewIdentityDialogs } from "./Overview.modals";
+import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 function getAvatarBg(name: string): string {
   const colors = [
@@ -23,6 +24,7 @@ function getAvatarBg(name: string): string {
 export function OverviewMobile() {
   const { t } = useTranslation();
   const m = useOverviewModel();
+  useItemFocus(m.identities.length > 0);
 
   return (
     <div className="stack-lg">
@@ -67,7 +69,7 @@ export function OverviewMobile() {
             const isDefault = index === 0;
 
             return (
-              <div className="m-id-card" key={id.id}>
+              <div className="m-id-card" key={id.id} data-focus-id={id.id}>
                 {/* 1. 卡片头 */}
                 <div className="m-id-card-head">
                   <div className="m-id-avatar" style={{ background: getAvatarBg(id.name) }}>
@@ -76,8 +78,8 @@ export function OverviewMobile() {
                   <div className="m-id-head-meta">
                     <div className="m-id-name-line">
                       <span className="m-id-name">{id.name}</span>
-                      {isDefault && <Badge kind="info">默认</Badge>}
-                      {id.strictMode && <Badge kind="warn">严格</Badge>}
+                      {isDefault && <Badge kind="info">{t("pages.default")}</Badge>}
+                      {id.strictMode && <Badge kind="warn">{t("overview.strict")}</Badge>}
                     </div>
                     <div className="m-id-route" title={`${id.hostAlias} → ${id.realHost}`}>
                       {id.hostAlias === id.realHost ? id.realHost : `${id.hostAlias} → ${id.realHost}`}
@@ -89,7 +91,7 @@ export function OverviewMobile() {
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <div className="m-id-key-pill">
                     <span className={`status-dot ${keyDot}`} />
-                    <span>{hasKey ? "密钥已入库" : "未绑定密钥"}</span>
+                    <span>{hasKey ? t("overview.keyBound") : t("overview.keyUnbound")}</span>
                   </div>
 
                   {id.owners.map((owner) => (
@@ -107,10 +109,10 @@ export function OverviewMobile() {
                     style={{ flex: "0 0 80px" }}
                     disabled={m.writesLocked}
                     onClick={() => m.setEditingIdentity(id)}
-                    title="修改备注、别名、邮箱等"
+                    title={t("overview.editTipShort")}
                   >
                     <Edit3 size={13} />
-                    <span>详情</span>
+                    <span>{t("overview.detail")}</span>
                   </button>
 
                   <button
@@ -123,12 +125,12 @@ export function OverviewMobile() {
                     {m.copiedKeyId === id.keyId ? (
                       <>
                         <Check size={13} />
-                        <span>已复制公钥</span>
+                        <span>{t("overview.copiedPub")}</span>
                       </>
                     ) : (
                       <>
                         <Copy size={13} />
-                        <span>复制公钥</span>
+                        <span>{t("overview.copyPub")}</span>
                       </>
                     )}
                   </button>

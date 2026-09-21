@@ -28,10 +28,24 @@ function upsertPlistString(xml, key, value) {
 }
 
 function writeInfoPlistStrings(dir, displayName) {
+  const camera =
+    displayName === ZH_DISPLAY_NAME
+      ? "用于扫描 2FA 密钥或云存储配置二维码。"
+      : "Used to scan 2FA secrets or cloud-storage QR codes.";
+  const face =
+    displayName === ZH_DISPLAY_NAME
+      ? "用于解锁工作空间并确认查看验证码或账户密码。"
+      : "Used to unlock the workspace and confirm viewing codes or passwords.";
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "InfoPlist.strings"),
-    `CFBundleName = "${displayName}";\nCFBundleDisplayName = "${displayName}";\n`,
+    [
+      `CFBundleName = "${displayName}";`,
+      `CFBundleDisplayName = "${displayName}";`,
+      `NSCameraUsageDescription = "${camera}";`,
+      `NSFaceIDUsageDescription = "${face}";`,
+      "",
+    ].join("\n"),
     "utf-8",
   );
 }
@@ -126,6 +140,33 @@ const androidValues = path.join(
 if (fs.existsSync(path.dirname(androidValues))) {
   writeAndroidStrings("app/src-tauri/gen/android/app/src/main/res/values", ZH_DISPLAY_NAME);
   writeAndroidStrings("app/src-tauri/gen/android/app/src/main/res/values-en", EN_DISPLAY_NAME);
+}
+
+function walkInfoPlists(dir, out = []) {
+  if (!fs.existsSync(dir)) return out;
+  for (const name of fs.readdirSync(dir)) {
+    const full = path.join(dir, name);
+    const stat = fs.statSync(full);
+    if (stat.isDirectory()) {
+      if (name === "Pods" || name === "build") continue;
+      walkInfoPlists(full, out);
+    } else if (name === "Info.plist" || name.endsWith("-Info.plist")) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+const appleDir = path.join(rootDir, "app/src-tauri/gen/apple");
+if (fs.existsSync(appleDir)) {
+  const face = "用于解锁工作空间并确认查看验证码或账户密码。";
+  for (const plistPath of walkInfoPlists(appleDir)) {
+    let plist = fs.readFileSync(plistPath, "utf-8");
+    plist = upsertPlistString(plist, "CFBundleDisplayName", ZH_DISPLAY_NAME);
+    plist = upsertPlistString(plist, "CFBundleName", ZH_DISPLAY_NAME);
+    plist = upsertPlistString(plist, "NSFaceIDUsageDescription", face);
+    fs.writeFileSync(plistPath, plist, "utf-8");
+  }
 }
 
 if (tauriConf.plugins?.updater) {

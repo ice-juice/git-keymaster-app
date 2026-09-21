@@ -62,7 +62,7 @@
 
 | # | 事项 | 现状 | 影响 |
 |---|---|---|---|
-| P0 | **Android SDK / NDK / JDK** | ❌ **未安装**（本机无 `JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME`，`%LOCALAPPDATA%\Android\Sdk` 不存在） | 阻断 `tauri android init` 与 Android 编译。实测 `cargo check --target aarch64-linux-android` 停在 `ring` 的构建脚本找不到 `aarch64-linux-android-clang` |
+| P0 | **Android SDK / NDK / JDK** | ✅ 本机已用命令行工具链装齐（JDK 17 + SDK Platform 36 + Build-Tools 36 + NDK 29.0.14206865；`JAVA_HOME` / `ANDROID_HOME` / `NDK_HOME` 写入用户环境）。未装完整 Android Studio，真机/模拟器调试用 `adb` | 已不再阻断交叉编译。真机验收仍要有设备或 AVD |
 | P1 | **iOS 必须有 macOS + 完整 Xcode** | ✅ 有 Mac | `tauri ios init` 生成的 `gen/apple` 必须在 Mac 上跑一次；真机调试、签名、上传全在 Mac |
 | P2 | **Apple Developer Program（$99/年）** | ❌ 无 | iOS 没有免商店分发路径：不上 App Store 也得走 TestFlight，一样要付费账号（自签只有 7 天有效期，不可用）。**M13 的实际阻断项** |
 | P3 | **Google Play Console（$25 一次性）** | 未定 | Android 可以不上商店，直接在 GitHub Release 发 APK（和现在桌面版一致），所以 P3 是可选项 |
@@ -343,14 +343,20 @@ iOS 还需在 Info.plist 补 `NSFaceIDUsageDescription`，否则调用即崩。
 
 **M7a 验收结果**：桌面 `cargo test` **238 passed / 0 failed**、`cargo check` 零警告；`cargo tree --target aarch64-linux-android` 中 `arboard` / `xcap` / `rfd` / `tauri-plugin-updater` / `tray-icon` **全部不再出现**，而 Windows 依赖图中它们仍在（无桌面回归）。
 
-#### M7b · 需要 Android SDK 之后（待办）
+#### M7b · 需要 Android SDK 之后（✅ 交叉编译已通，2026-09-12；真机验收待设备）
 
-1. 环境：Android Studio + SDK Platform / Platform-Tools / Build-Tools / Command-line Tools / NDK(Side by side)；设 `JAVA_HOME`、`ANDROID_HOME`、`NDK_HOME`。
-   > **坑：`NDK_HOME` 必须指向具体版本目录**（如 `...\ndk\29.0.13113456`）。官方文档里的 `$(ls -1 $ANDROID_HOME/ndk)` 在装了多个 NDK 时会拼出非法路径，这是 tauri#11841 的已知问题。
-2. `tauri android init`，提交 `gen/android/`。
-3. **模块级 cfg 级联**：`cargo check --target aarch64-linux-android` 会逐个报出编不过的模块（`tray`、`agent`、`ssh/managed|config|connect|toolchain`、`update`、`clipboard`、`qrscan`、`autostart`、`single_instance`、`git/repo`、`sys` 等）。按编译器提示逐个加 `#[cfg(desktop)]`，并把对应的 `commands/*` 函数体在移动端改为返回 `AppError::Unsupported`（保持单一 `generate_handler!` 注册表，见 3.3）。
-   > 这一步**刻意留到有编译器反馈时再做**：盲改会遗漏，也容易误伤桌面。
-4. `tauri android dev` 真机启动。
+| 任务 | 状态 | 落地位置 |
+|---|---|---|
+| 环境：JDK 17 + SDK Platform / Platform-Tools / Build-Tools / Command-line Tools / NDK(Side by side) | ✅ | 用户目录便携安装；`NDK_HOME` 指向 `...\ndk\29.0.14206865`（具体版本目录，避开 tauri#11841） |
+| `tauri android init`，纳入 `gen/android/` | ✅ | `app/src-tauri/gen/android/` |
+| 中文包显示名 / 关备份 | ✅ | `strings.xml` 为「御钥师」；`allowBackup=false` + `data_extraction_rules.xml`；`prepare-lang.mjs` 会改 Android 显示名 |
+| **模块级 cfg 级联** | ✅ | 编译器第一波：`tray` / `single_instance` / `update` 插件 / `clipboard` 的 arboard / `qrscan` 的 xcap / `window.unminimize`。桌面专属命令保持单一 `generate_handler!`，移动端返回 `Unsupported` |
+| `cargo check --target aarch64-linux-android` | ✅ | 零错误零警告 |
+| 桌面回归 | ✅ | `cargo test` **248 passed / 0 failed** |
+| `tauri android build --debug` | ✅ | arm64 debug APK 已打出。Windows 未开开发人员模式时 `tauri` 无法建符号链接，需把 `libapp_lib.so` 复制进 `jniLibs` 再 `gradlew :app:assembleArm64Debug` |
+| `tauri android dev` 真机启动 | ⏳ | 本机 `adb devices` 为空，接真机或开 AVD 后再验解锁页与沙箱路径 |
+
+> cfg 只按编译器报错加，没有盲改 `agent` / `ssh/*` / `git/repo` / `sys`：它们在 Android 上能编过（运行时仍走 `Unsupported` 或空操作）。后面真机若崩，再按栈补。
 
 原 M7 任务 2 的依赖条件化明细（已完成，留档备查）：
 

@@ -1,2 +1,4 @@
 CFBundleName = "Git Keymaster";
 CFBundleDisplayName = "Git Keymaster";
+NSCameraUsageDescription = "Used to scan 2FA secrets or cloud-storage QR codes.";
+NSFaceIDUsageDescription = "Used to unlock the workspace and confirm viewing codes or passwords.";

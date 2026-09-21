@@ -64,6 +64,16 @@ pub struct ParsedTotpPreview {
     pub secret: String,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TotpImportResult {
+    pub source: String,
+    pub entries: Vec<ParsedTotpPreview>,
+    pub skipped_hotp: u32,
+    pub batch_index: u32,
+    pub batch_size: u32,
+}
+
 fn now() -> String {
     util::now_rfc3339()
 }
@@ -273,10 +283,15 @@ pub fn totp_parse_uri(uri: String) -> Result<ParsedTotpPreview> {
 }
 
 #[tauri::command]
-pub fn totp_import_from_image(path: String) -> Result<ParsedTotpPreview> {
+pub fn totp_parse_import(text: String) -> Result<TotpImportResult> {
+    Ok(import_result_from_text(&text)?)
+}
+
+#[tauri::command]
+pub fn totp_import_from_image(path: String) -> Result<TotpImportResult> {
     let bytes = std::fs::read(&path)?;
-    let p = qrscan::import_from_image(&bytes)?;
-    Ok(preview_from_parsed(&p))
+    let texts = qrscan::decode_image_bytes(&bytes)?;
+    import_result_from_texts(&texts)
 }
 
 #[tauri::command]
@@ -333,6 +348,57 @@ pub fn totp_reveal_secret(app: AppHandle, state: State<'_, AppState>, id: String
 #[tauri::command(async)]
 pub fn totp_export_qr(app: AppHandle, state: State<'_, AppState>, id: String, password: String) -> Result<String> {
     Ok(totp_reveal_secret(app, state, id, password)?.qr_png_base64)
+}
+
+fn import_result_from_text(text: &str) -> Result<TotpImportResult> {
+    import_result_from_texts(&[text.to_string()])
+}
+
+fn import_result_from_texts(texts: &[String]) -> Result<TotpImportResult> {
+    let mut entries = Vec::new();
+    let mut skipped_hotp = 0u32;
+    let mut source = "otpauth".to_string();
+    let mut batch_index = 0u32;
+    let mut batch_size = 1u32;
+    let mut saw = false;
+    for text in texts {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if totp::looks_like_migration(trimmed) {
+            saw = true;
+            let batch = totp::parse_otpauth_migration(trimmed)?;
+            source = "google-migration".into();
+            skipped_hotp = skipped_hotp.saturating_add(batch.skipped_hotp);
+            batch_index = batch.batch_index.max(0) as u32;
+            batch_size = batch.batch_size.max(1) as u32;
+            entries.extend(batch.entries.iter().map(preview_from_parsed));
+        } else if trimmed.to_ascii_lowercase().starts_with("otpauth://") {
+            saw = true;
+            entries.push(preview_from_parsed(&totp::parse_otpauth(trimmed)?));
+        }
+    }
+    if !saw {
+        return Err(AppError::Invalid(
+            "未识别到 otpauth 链接或 Google 身份验证器导出".into(),
+        ));
+    }
+    if entries.is_empty() {
+        if skipped_hotp > 0 {
+            return Err(AppError::Invalid(
+                "导出里只有计数型 HOTP，本应用仅支持时间型 TOTP".into(),
+            ));
+        }
+        return Err(AppError::Invalid("未识别到可导入的 TOTP 条目".into()));
+    }
+    Ok(TotpImportResult {
+        source,
+        entries,
+        skipped_hotp,
+        batch_index,
+        batch_size,
+    })
 }
 
 fn preview_from_parsed(p: &totp::ParsedOtpauth) -> ParsedTotpPreview {

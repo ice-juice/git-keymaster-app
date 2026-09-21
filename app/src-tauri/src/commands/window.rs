@@ -89,6 +89,24 @@ pub fn apply_close_choice(
     }
 }
 
+/// 移动端主界面再按返回：保活则回系统桌面，否则退出进程。
+#[tauri::command]
+pub fn mobile_leave_app(app: AppHandle, state: State<AppState>, keep_alive: bool) -> Result<()> {
+    if keep_alive {
+        #[cfg(target_os = "android")]
+        crate::mobile::nav::leave_to_home(&app).map_err(AppError::Other)?;
+        let _ = app;
+        return Ok(());
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        quit_app(&app, &state);
+        return Ok(());
+    }
+    let _ = (app, state);
+    Ok(())
+}
+
 #[tauri::command]
 pub fn get_close_preference(state: State<AppState>) -> Option<String> {
     recover_lock(&state.config).close_action.clone()

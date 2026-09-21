@@ -77,7 +77,14 @@ fn iso_now() -> String {
 /// 简单脱敏：屏蔽疑似私钥/口令/token 片段。
 pub fn redact(s: &str) -> String {
     let mut out = s.to_string();
-    for marker in ["ghp_", "github_pat_", "BEGIN OPENSSH PRIVATE KEY"] {
+    for marker in [
+        "ghp_",
+        "github_pat_",
+        "glpat-",
+        "ghu_",
+        "gho_",
+        "BEGIN OPENSSH PRIVATE KEY",
+    ] {
         if let Some(idx) = out.find(marker) {
             out.replace_range(idx.., "***redacted***");
             break;
@@ -118,5 +125,7 @@ mod tests {
     fn redact_hides_tokens() {
         assert!(redact("uploaded ghp_abcdef123").contains("***redacted***"));
         assert!(!redact("uploaded ghp_abcdef123").contains("abcdef123"));
+        assert!(redact("saved glpat-secret999").contains("***redacted***"));
+        assert!(!redact("saved glpat-secret999").contains("secret999"));
     }
 }

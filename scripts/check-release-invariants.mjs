@@ -6,6 +6,7 @@
  *   node scripts/check-release-invariants.mjs --prepared unified
  *   node scripts/check-release-invariants.mjs --test
  */
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +70,21 @@ function assertChineseDefaults() {
       ZH_DISPLAY_NAME,
       "Android strings.xml main_activity_title",
     );
+  }
+
+  const iosConfPath = "app/src-tauri/tauri.ios.conf.json";
+  if (!exists(iosConfPath)) {
+    fail("必须提交 tauri.ios.conf.json");
+  }
+  const iosConf = JSON.parse(read(iosConfPath));
+  if (iosConf.bundle?.createUpdaterArtifacts !== false) {
+    fail("tauri.ios.conf.json 必须 createUpdaterArtifacts: false");
+  }
+  if (iosConf.productName && iosConf.productName !== ZH_DISPLAY_NAME) {
+    fail("tauri.ios.conf.json 若写 productName 必须是「御钥师」");
+  }
+  if (iosConf.identifier && iosConf.identifier !== "com.jeck.gitkeymaster") {
+    fail("tauri.ios.conf.json 标识符必须是 com.jeck.gitkeymaster");
   }
 }
 
@@ -200,6 +216,40 @@ function checkCommittedDefaults() {
   }
   if (!sync.includes("injectAndroidAarch64") || !sync.includes("android-aarch64")) {
     fail("sync-release-assets.mjs 必须把 android-aarch64 写进唯一 latest.json");
+  }
+  if (!sync.includes("--merge-android") || !sync.includes("mergeAndroidManifest")) {
+    fail("sync-release-assets.mjs 必须提供 --merge-android，只注入 android-aarch64，不得整份替换");
+  }
+  if (!sync.includes("evaluateManifestUpload") || !sync.includes("evaluatePinCanonical")) {
+    fail("sync-release-assets.mjs 必须拒绝安卓-only 覆盖桌面清单，pin 不得接受无桌面 platforms");
+  }
+  if (!sync.includes("collectBundleUploads")) {
+    fail("sync-release-assets.mjs 在 rename 映射为空时仍须上传安装包和 .sig");
+  }
+  if (!sync.includes("missingUpdaterSignatures") || !sync.includes("ensureSignedAsset")) {
+    fail("pin 在 Release 缺安装包 .sig 时必须下载安装包并用同一把 minisign 补签");
+  }
+  if (!sync.includes("signLatestJsonFile") || !sync.includes("readAndroidApkSignature")) {
+    fail("sync-release-assets.mjs 必须用同一把 minisign 私钥签 latest.json，并写入 APK signature");
+  }
+
+  const signManifest = read("scripts/sign-update-manifest.mjs");
+  if (!signManifest.includes("canonicalManifestPayload") || !signManifest.includes("manifestSignature")) {
+    fail("必须用确定性文本签清单，字段名跟现有 camelCase 走");
+  }
+  if (!signManifest.includes("tauri") || !signManifest.includes("signer")) {
+    fail("清单/APK 必须走现有 tauri signer / minisign，不要另造哈希协议");
+  }
+
+  const manifestRs = read("app/src-tauri/src/update/manifest.rs");
+  if (!manifestRs.includes("https_only(true)")) {
+    fail("自研拉清单的 reqwest 必须 https_only，不要跟随到 http");
+  }
+  if (!manifestRs.includes("manifestSignature") || !manifestRs.includes("canonical_manifest_payload")) {
+    fail("新客户端必须验 latest.json 的 manifestSignature");
+  }
+  if (!manifestRs.includes("require_signed_manifest") && !read("app/src-tauri/src/update/watermark.rs").includes("require_signed_manifest")) {
+    fail("本机成功验过带签清单后必须要求后续清单带签");
   }
 
   const androidManifest = "app/src-tauri/gen/android/app/src/main/AndroidManifest.xml";
@@ -347,6 +397,9 @@ function checkRenameStem() {
   if (!src.includes("android-aarch64") || !src.includes("injectAndroidAarch64")) {
     fail("rename-release-assets.mjs 必须把正式 APK 写进 latest.json 的 android-aarch64");
   }
+  if (!src.includes("signFileWithTauri")) {
+    fail("rename-release-assets.mjs 必须用同一把 minisign 私钥签 APK");
+  }
 
   const yml = read(".github/workflows/release.yml");
   if (!yml.includes("tauri android build --apk --target aarch64 --split-per-abi")) {
@@ -364,11 +417,32 @@ function checkRenameStem() {
   if (!yml.includes("--pin-legacy")) {
     fail("release.yml 必须在全部桌面任务结束后把 latest.json 复制成旧名别名");
   }
+  if (!/pin-updater-json[\s\S]*npm ci/.test(yml)) {
+    fail("pin latest.json 必须 npm ci，否则签不了清单、也补不了缺失的安装包 .sig");
+  }
   if (!yml.includes("needs: [build, build-android]")) {
     fail("pin-updater-json 必须等安卓 job 写入 android-aarch64 后再复制别名");
   }
   if (!yml.includes("Merge Android APK into latest.json")) {
     fail("release.yml 安卓 job 必须把 APK 合并进 latest.json 的 android-aarch64");
+  }
+  if (!yml.includes("--merge-android")) {
+    fail("release.yml 安卓 job 必须用 --merge-android 只注入 android-aarch64，不得整份替换 latest.json");
+  }
+  if (!yml.includes("TAURI_SIGNING_PRIVATE_KEY") || !yml.includes("${apks[0]}.sig")) {
+    fail("release.yml 必须把同一把 minisign 私钥交给安卓/pin，并上传 APK .sig");
+  }
+  if (!yml.includes("name: ios") || !yml.includes("pack-ios-ipa.mjs") || !yml.includes("aarch64-apple-ios")) {
+    fail("release.yml 必须有 ios job：macos-latest + aarch64-apple-ios + pack-ios-ipa.mjs");
+  }
+  if (!yml.includes("disable-ios-signing.mjs") || !yml.includes("--wrap") || !yml.includes("tauri ios build --no-sign")) {
+    fail("iOS CI 必须改 pbxproj、包装 xcodebuild，再 tauri ios build --no-sign；`-- KEY=VAL` 进不了 xcodebuild");
+  }
+  if (/tauri ios build -- --/.test(yml) || /tauri ios build -- .*CODE_SIGNING/.test(yml)) {
+    fail("不要再用 tauri ios build -- 透传 CODE_SIGNING_*，那些参数会进 cargo runner");
+  }
+  if (yml.includes("gh release upload") && /gh release upload[\s\S]{0,200}\.ipa/.test(yml)) {
+    fail("联调阶段未签名 ipa 只 upload-artifact，不要挂到 GitHub Release");
   }
 }
 
@@ -410,6 +484,18 @@ function runSelfTest() {
     fail("没能识别把 CFBundleName 写死成英文的旧写法");
   }
   checkSourceInvariants();
+  const signTest = spawnSync(process.execPath, [path.join(rootDir, "scripts", "sign-update-manifest.mjs"), "--test"], {
+    encoding: "utf8",
+  });
+  if (signTest.status !== 0) {
+    fail(signTest.stderr || signTest.stdout || "sign-update-manifest self-test failed");
+  }
+  const iosSignTest = spawnSync(process.execPath, [path.join(rootDir, "scripts", "disable-ios-signing.mjs"), "--test"], {
+    encoding: "utf8",
+  });
+  if (iosSignTest.status !== 0) {
+    fail(iosSignTest.stderr || iosSignTest.stdout || "disable-ios-signing self-test failed");
+  }
   console.log("[invariants] self-test ok");
 }
 

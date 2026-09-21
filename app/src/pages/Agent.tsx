@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api, errMessage, type AgentStatus, type AgentUnifyReport } from "../lib/ipc";
 import { loadAgentStatus, peekAgentStatus } from "../lib/agentCache";
 import { PageHead, Card, Empty, Badge } from "../ui/common";
@@ -12,6 +13,7 @@ function guessHostOs(): string {
 }
 
 export function AgentPage() {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<AgentStatus | null>(() => peekAgentStatus());
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -62,32 +64,33 @@ export function AgentPage() {
   return (
     <div className="stack-lg">
       <PageHead
-        title="Agent托管"
-        desc={
-          isWindows
-            ? "检测本机是否已用同一套 Git 自带 ssh-agent；密钥加载情况与终端、git 是否对齐都会列在下面。"
-            : "检测本机 OpenSSH / ssh-agent 是否可用；密钥加载情况与终端、git 是否对齐都会列在下面。"
-        }
+        title={t("agent.title")}
+        desc={isWindows ? t("agent.descWin") : t("agent.descUnix")}
         actions={
           <>
             <button className="btn" disabled={busy || scanning} onClick={() => detect(true)}>
-              {scanning ? "检测中…" : "重新检测"}
+              {scanning ? t("agent.scanning") : t("agent.rescan")}
             </button>
-            <button className="btn" disabled={busy} onClick={() => run(() => api.agentEnsure(), "已确保 Git ssh-agent 运行")}>
-              确保运行
+            <button className="btn" disabled={busy} onClick={() => run(() => api.agentEnsure(), t("agent.ensured"))}>
+              {t("agent.ensure")}
             </button>
             <button className="btn" disabled={busy} onClick={() => setConfirmOpen(true)}>
-              应用到本机环境
+              {t("agent.applyEnv")}
             </button>
             <button
               className="btn"
               disabled={busy}
-              onClick={() => run(async () => setMsg(`已加载 ${await api.agentLoadAll()} 个密钥`), "")}
+              onClick={() =>
+                run(async () => {
+                  const n = await api.agentLoadAll();
+                  setMsg(t("agent.loadedN", { n }));
+                }, "")
+              }
             >
-              加载全部
+              {t("agent.loadAll")}
             </button>
-            <button className="btn danger" disabled={busy} onClick={() => run(() => api.agentClear(), "已清空 agent")}>
-              清空
+            <button className="btn danger" disabled={busy} onClick={() => run(() => api.agentClear(), t("agent.cleared"))}>
+              {t("agent.clear")}
             </button>
           </>
         }
@@ -96,27 +99,29 @@ export function AgentPage() {
       {msg && <div className="callout info">{msg}</div>}
 
       <Card
-        title="本机环境检测"
+        title={t("agent.envTitle")}
         actions={
           unify ? (
             <Badge kind={unify.aligned ? "good" : "warn"}>
-              {scanning ? "检测中" : unify.aligned ? (isWindows ? "已使用 Git 内置 agent" : "本机 ssh-agent 已就绪") : `${failCount} 项未就绪`}
+              {scanning
+                ? t("agent.scanningShort")
+                : unify.aligned
+                  ? isWindows
+                    ? t("agent.usingGitAgent")
+                    : t("agent.localReady")
+                  : t("agent.nNotReady", { n: failCount })}
             </Badge>
           ) : null
         }
       >
         {scanning && !status ? (
-          <div className="muted sm">
-            {isWindows
-              ? "正在检测 Git ssh、ssh-agent、用户环境变量与终端启动脚本…"
-              : "正在检测本机 OpenSSH、ssh-agent 与终端启动脚本…"}
-          </div>
+          <div className="muted sm">{isWindows ? t("agent.scanningWin") : t("agent.scanningUnix")}</div>
         ) : (
           <>
             <div className="row" style={{ marginBottom: 12, gap: 8 }}>
-              <Badge kind={status?.running ? "good" : "danger"}>{status?.running ? "Agent 运行中" : "Agent 未运行"}</Badge>
+              <Badge kind={status?.running ? "good" : "danger"}>{status?.running ? t("agent.running") : t("agent.stopped")}</Badge>
               {status?.usingFallback && (
-                <Badge kind="good">{isWindows ? "当前进程：Git 内置 agent" : "当前进程：本机 ssh-agent"}</Badge>
+                <Badge kind="good">{isWindows ? t("agent.procGit") : t("agent.procLocal")}</Badge>
               )}
             </div>
 
@@ -125,51 +130,46 @@ export function AgentPage() {
                 <div>
                   {isWindows ? (
                     <>
-                      本机终端和 <span className="mono">git</span> 还没有完整接到 Git 自带 ssh-agent。Cursor / PowerShell
-                      里的 <span className="mono">ssh</span> 可能仍走系统 OpenSSH，严格模式密钥会加载失败。
-                      是否把当前 Git agent 应用到本机环境，由你决定；不会自动改系统。
+                      {t("agent.misalignWin1")} {t("agent.misalignWin2")}
                     </>
                   ) : (
                     <>
-                      本机终端和 <span className="mono">git</span> 还没有完整接到本程序启动的 ssh-agent。
-                      新开终端需要挂钩启动脚本后才会带上同一套环境。是否应用到本机由你决定；不会自动改系统。
+                      {t("agent.misalignUnix1")} {t("agent.misalignUnix2")}
                     </>
                   )}
                 </div>
                 <button type="button" className="btn sm" disabled={busy} onClick={() => setConfirmOpen(true)}>
-                  应用到本机环境
+                  {t("agent.applyEnv")}
                 </button>
               </div>
             )}
 
             {unify?.aligned && (
               <div className="callout good" style={{ marginBottom: 12 }}>
-                {isWindows
-                  ? "检测通过：git 全局配置、用户环境变量和终端启动脚本已指向同一套 Git ssh-agent。"
-                  : "检测通过：本机 OpenSSH 与终端启动脚本已指向同一套 ssh-agent。"}
+                {isWindows ? t("agent.passWin") : t("agent.passUnix")}
               </div>
             )}
 
             {checks.length > 0 ? (
               <div className="list env-check-list">
                 <div className="env-check-head">
-                  <span>检测项</span>
-                  <span>结果</span>
-                  <span>当前值</span>
+                  <span>{t("agent.colCheck")}</span>
+                  <span>{t("agent.colResult")}</span>
+                  <span>{t("agent.colValue")}</span>
                 </div>
                 {checks.map((c) => (
                   <div key={c.key}>
                     <div className="list-row env-check-row">
                       <div className="env-check-label">{c.label}</div>
-                      <Badge kind={c.ok ? "good" : "warn"}>{c.ok ? "通过" : "未配置"}</Badge>
-                      <div className="mono muted sm env-check-value">{c.current || "（空）"}</div>
+                      <Badge kind={c.ok ? "good" : "warn"}>{c.ok ? t("agent.pass") : t("agent.notSet")}</Badge>
+                      <div className="mono muted sm env-check-value">{c.current || t("agent.emptyValue")}</div>
                     </div>
                     {!c.ok && c.hint && <div className="env-check-hint">{c.hint}</div>}
                   </div>
                 ))}
               </div>
             ) : (
-              <Empty icon="🔍" text="尚未取得检测结果，请点「重新检测」。" />
+              <Empty icon="🔍" text={t("agent.noResult")} />
             )}
 
             {report && report.steps.length > 0 && (
@@ -185,18 +185,18 @@ export function AgentPage() {
         )}
       </Card>
 
-      <Card title="已加载密钥">
+      <Card title={t("agent.loadedKeys")}>
         {!status || status.keys.length === 0 ? (
-          <Empty icon="🧩" text="agent 中没有已加载的密钥。" />
+          <Empty icon="🧩" text={t("agent.noLoaded")} />
         ) : (
           <div className="list">
             {status.keys.map((k, i) => (
               <div className="list-row" key={i}>
                 <div className="grow">
                   <div className="row" style={{ gap: 8 }}>
-                    <strong>{k.identityName ?? k.keyName ?? "未知密钥"}</strong>
+                    <strong>{k.identityName ?? k.keyName ?? t("agent.unknownKey")}</strong>
                     <Badge kind="info">{k.agent.algo}</Badge>
-                    {!k.identityName && !k.keyName && <Badge kind="warn">库外</Badge>}
+                    {!k.identityName && !k.keyName && <Badge kind="warn">{t("agent.outside")}</Badge>}
                   </div>
                   <div className="mono muted sm">
                     {k.agent.fingerprint} {k.agent.comment && `· ${k.agent.comment}`}

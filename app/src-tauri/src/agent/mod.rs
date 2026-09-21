@@ -297,7 +297,23 @@ fn write_secret_file(path: &Path, pem: &[u8]) -> Result<()> {
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, pem).map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
+        use std::io::Write;
+        // `create_new` 而不是 `write`：文件名虽然带 UUID，但 `%TEMP%` 是可预测目录，
+        // 用 create_new 才能保证不会往别人预先摆好的文件或链接里写私钥。
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
+        f.write_all(pem)
+            .map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
+        drop(f);
+        // Unix 分支有 0600，Windows 分支原先什么都不做，明文私钥就这么带着
+        // 继承来的 ACL 躺在 TEMP 里等 ssh-add 读完。这里补上同等的收权。
+        use crate::platform::PlatformOps;
+        if let Err(e) = crate::platform::current().secure_key_file(path) {
+            log::warn!("收紧临时私钥权限失败 {}：{e}", path.display());
+        }
     }
     Ok(())
 }
@@ -393,6 +409,10 @@ fn is_agent_unreachable(hint: &str) -> bool {
 
 /// 统一使用 Git 自带 ssh-agent：先复用固定套接字，没有再启动。
 pub fn ensure() -> Result<AgentEnv> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        return Err(AppError::Unsupported("ssh-agent"));
+    }
     if let Some(env) = probe_existing_git_agent() {
         persist_git_agent_meta(&env, None);
         cleanup_stale_agent_sockets(env.auth_sock.as_deref());
@@ -697,6 +717,10 @@ fn run_ssh_add(
 /// 会把套接字落到该文件，并在 `-s` 输出里回显同一路径。不再回退到无 `-a` 的
 /// `ssh-agent -s`——那会在目录里留下 `s.*.agent.*` 随机套接字，复用从未生效。
 pub fn start_git_agent() -> Result<AgentEnv> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        return Err(AppError::Unsupported("ssh-agent"));
+    }
     let ssh = git_ssh().ok_or_else(|| AppError::Other(crate::ssh::toolchain::missing_ssh_tool("ssh")))?;
     let exe = git_ssh_agent().ok_or_else(|| AppError::Other(crate::ssh::toolchain::missing_ssh_tool("ssh-agent")))?;
     let add = git_ssh_add().ok_or_else(|| AppError::Other(crate::ssh::toolchain::missing_ssh_tool("ssh-add")))?;

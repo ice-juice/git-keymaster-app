@@ -2,11 +2,14 @@
 
 pub mod agent;
 pub mod app_config;
+pub mod autolock;
 pub mod identity;
 pub mod autostart;
 pub mod biometric;
 mod clipboard;
 pub mod camera_perm;
+#[cfg(windows)]
+mod desktop_media;
 pub mod commands;
 pub mod session;
 pub mod security;
@@ -16,6 +19,7 @@ pub mod icons;
 pub mod importer;
 pub mod model;
 pub mod qrscan;
+pub mod screen_protect;
 pub mod net;
 pub mod platform;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -75,8 +79,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(camera_perm::init())
         .plugin(clipboard::init())
+        .plugin(screen_protect::init())
         .plugin(biometric::init())
-        .plugin(mobile::update::init());
+        .plugin(mobile::update::init())
+        .plugin(mobile::nav::init());
 
     // 官方 updater 只编进桌面三 OS。安卓侧载走 mobile::update，禁止把插件加进 APK。
     // 必须用 target_os，不能用 Tauri 的 `desktop`：交叉编译到 Android 时
@@ -97,12 +103,18 @@ pub fn run() {
             commands::vault::vault_unlock_biometric,
             commands::vault::vault_lock,
             commands::vault::change_password,
+            commands::vault::verify_access_password,
             commands::vault::get_kdf_info,
             commands::vault::relax_kdf_for_mobile,
             commands::vault::rotate_recovery_key,
             commands::vault::vault_try_grace_unlock,
             commands::vault::set_launch_at_login,
             commands::vault::set_grace_days,
+            commands::vault::report_activity,
+            commands::vault::get_auto_lock_settings,
+            commands::vault::set_auto_lock_minutes,
+            commands::vault::set_lock_on_sleep,
+            commands::vault::set_mobile_background_run,
             commands::vault::factory_reset,
             commands::biometric::biometric_status,
             commands::biometric::biometric_enable,
@@ -142,6 +154,7 @@ pub fn run() {
             commands::agent::agent_unload,
             commands::agent::agent_clear,
             commands::repo::resolve_url,
+            commands::repo::probe_url_identity,
             commands::repo::scan_repos,
             commands::repo::scan_and_import_repos,
             commands::repo::list_managed_repos,
@@ -158,6 +171,16 @@ pub fn run() {
             commands::repo::test_github_pat,
             commands::repo::list_github_orgs,
             commands::repo::upload_public_key,
+            commands::repo::git_pat_status,
+            commands::repo::reveal_git_pat,
+            commands::repo::set_git_pat,
+            commands::repo::clear_git_pat,
+            commands::repo::test_git_pat,
+            commands::repo::list_git_orgs,
+            commands::repo::upload_git_public_key,
+            commands::gh_cli::gh_cli_status,
+            commands::gh_cli::gh_cli_login,
+            commands::gh_cli::gh_cli_cancel,
             commands::sync::export_vault_backup,
             commands::sync::inspect_vault_backup,
             commands::sync::import_vault_backup,
@@ -173,6 +196,8 @@ pub fn run() {
             commands::sync::cloud_sync_pull,
             commands::sync::get_auto_sync_settings,
             commands::sync::set_auto_sync_minutes,
+            commands::sync::set_attachment_sync_guards,
+            commands::sync::report_network_unmetered,
             commands::sync::list_cloud_snapshots,
             commands::sync::restore_cloud_snapshot,
             commands::sync::run_auto_sync_now,
@@ -180,6 +205,7 @@ pub fn run() {
             commands::sync::restore_from_cloud,
             commands::locale::get_ui_locale,
             commands::locale::set_ui_locale,
+            commands::window::mobile_leave_app,
             commands::window::apply_close_choice,
             commands::window::get_close_preference,
             commands::window::clear_close_preference,
@@ -201,6 +227,7 @@ pub fn run() {
             commands::totp::totp_save_groups,
             commands::totp::totp_generate_code,
             commands::totp::totp_parse_uri,
+            commands::totp::totp_parse_import,
             commands::totp::totp_import_from_image,
             commands::totp::totp_scan_screen,
             commands::qr::render_qr_png,
@@ -220,12 +247,36 @@ pub fn run() {
             commands::accounts::account_reveal_history,
             commands::accounts::account_rollback_history,
             commands::accounts::account_clear_history,
+            commands::files::file_list,
+            commands::files::file_add_from_path,
+            commands::files::file_add_from_paths,
+            commands::files::file_add_bytes,
+            commands::files::file_add_bytes_many,
+            commands::files::file_update,
+            commands::files::file_delete,
+            commands::files::file_export,
+            commands::files::file_save_groups,
+            commands::notes::note_list,
+            commands::notes::note_get_body,
+            commands::notes::note_upsert,
+            commands::notes::note_delete,
+            commands::notes::note_asset_add,
+            commands::notes::note_asset_get,
+            commands::notes::note_save_groups,
+            commands::notes::note_export,
+            commands::notes::note_export_content,
+            commands::notes::note_write_export_file,
             commands::secrets_ui::clipboard_write,
+            commands::secrets_ui::clipboard_read,
             commands::secrets_ui::clipboard_clear,
             commands::secrets_ui::get_reveal_settings,
             commands::secrets_ui::set_reveal_grace_minutes,
             commands::secrets_ui::set_clipboard_clear_seconds,
+            commands::secrets_ui::get_clipboard_watch,
+            commands::secrets_ui::set_clipboard_watch,
             commands::secrets_ui::set_account_history_limit,
+            commands::screen::get_screen_capture_settings,
+            commands::screen::set_allow_screenshots,
             commands::secrets_ui::icon_list_builtin,
             commands::secrets_ui::icon_upload_custom,
             commands::secrets_ui::icon_get_custom,
@@ -248,6 +299,10 @@ pub fn run() {
 
             // 桌面端在 `run()` 开头已经迁移过，这里只负责注册状态。
             app.manage(AppState::new());
+            // 窗口已在，立刻按配置套防护，避免先能截再变黑。
+            crate::screen_protect::apply_from_app(app.handle());
+            #[cfg(windows)]
+            crate::desktop_media::grant_camera(app.handle());
 
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
@@ -261,6 +316,7 @@ pub fn run() {
             }
             crate::update::scheduler::start(app.handle().clone());
             crate::sync::scheduler::start(app.handle().clone());
+            crate::autolock::start(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -298,11 +354,18 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|_app, event| {
-            // 应用退出时释放单实例锁（各退出路径最终都会触发 Exit）
-            if let tauri::RunEvent::Exit = event {
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                crate::single_instance::release_lock();
+        .run(|app, event| {
+            match event {
+                tauri::RunEvent::Ready => {
+                    // WebView / 子 HWND 就绪后再套一次，补上冷启动漏网的合成层。
+                    crate::screen_protect::apply_from_app(app);
+                }
+                tauri::RunEvent::Exit => {
+                    crate::clipboard::clear_on_teardown();
+                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+                    crate::single_instance::release_lock();
+                }
+                _ => {}
             }
         });
 }

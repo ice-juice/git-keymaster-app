@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { api, errMessage, type ConfigView } from "../lib/ipc";
 import { PageHead, Card, Empty, Badge } from "../ui/common";
 import { useApp } from "../store";
 
 export function ConfigPage() {
+  const { t } = useTranslation();
   const [view, setView] = useState<ConfigView | null>(null);
   const [err, setErr] = useState("");
   const { writesLocked } = useApp();
@@ -30,8 +32,8 @@ export function ConfigPage() {
   return (
     <div className="stack-lg">
       <PageHead
-        title="SSH 配置"
-        desc="真实配置在工作空间 ssh/config。本机 ~/.ssh/config 只保留 Include，供系统 ssh/git 自动加载。"
+        title={t("config.title")}
+        desc={t("config.desc")}
         actions={
           <div className="row" style={{ gap: 6 }}>
             <button
@@ -46,25 +48,25 @@ export function ConfigPage() {
                 }
               }}
             >
-              用记事本打开并编辑
+              {t("config.openEdit")}
             </button>
-            <button className="btn ghost" onClick={() => load(true)}>刷新</button>
+            <button className="btn ghost" onClick={() => load(true)}>{t("common.refresh")}</button>
           </div>
         }
       />
       {err && <div className="err-text">{err}</div>}
       {view && (
         <div className="muted sm">
-          工作空间正本（下面 Host / 原文都来自这里）：<span className="mono">{view.path}</span>
+          {t("config.wsCanon")} <span className="mono">{view.path}</span>
           <br />
-          系统入口 ~/.ssh/config：<span className="mono">{view.systemPath}</span>
-          {view.registered ? "（只含 Include，供 ssh/git 加载正本）" : "（尚未注册 Include，解锁后会自动写入）"}
+          {t("config.sysEntry")} <span className="mono">{view.systemPath}</span>
+          {view.registered ? t("config.registered") : t("config.unregistered")}
         </div>
       )}
 
-      <Card title="健康检查">
+      <Card title={t("config.health")}>
         {!view || view.diagnostics.length === 0 ? (
-          <div className="callout good">✅ 未发现明显问题</div>
+          <div className="callout good">{t("config.healthOk")}</div>
         ) : (
           <div className="list">
             {view.diagnostics.map((d, i) => (
@@ -82,9 +84,9 @@ export function ConfigPage() {
         )}
       </Card>
 
-      <Card title={`Host 块（${view?.blocks.length ?? 0}）`}>
+      <Card title={t("config.hostBlocks", { n: view?.blocks.length ?? 0 })}>
         {!view || view.blocks.length === 0 ? (
-          <Empty icon="📄" text="config 中还没有 Host 块。" />
+          <Empty icon="📄" text={t("config.noHosts")} />
         ) : (
           <div className="list">
             {view.blocks.map((b, i) => (
@@ -101,8 +103,8 @@ export function ConfigPage() {
         )}
       </Card>
 
-      <Card title="工作空间正本内容">
-        <pre className="code-block">{view?.raw || "（空）"}</pre>
+      <Card title={t("config.rawTitle")}>
+        <pre className="code-block">{view?.raw || t("config.empty")}</pre>
       </Card>
     </div>
   );

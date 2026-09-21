@@ -5,7 +5,8 @@
 //! 适合换机离线迁移、冷备份以及故障恢复。
 
 use crate::error::{AppError, Result};
-use crate::model::{AccountData, KeyRecord, Secrets, TotpData, VaultData};
+use crate::model::{collect_blob_hashes, AccountData, FileData, KeyRecord, NoteData, Secrets, TotpData, VaultData};
+use crate::store::blob;
 use crate::platform::PlatformOps;
 use crate::store;
 use crate::vault::crypto::{self, SALT_LEN, XNONCE_LEN};
@@ -37,6 +38,13 @@ pub struct BackupPayload {
     /// iconHash -> base64(webp)
     #[serde(default)]
     pub icons: HashMap<String, String>,
+    #[serde(default)]
+    pub file_data: FileData,
+    #[serde(default)]
+    pub note_data: NoteData,
+    /// sha256 -> base64(明文 blob)
+    #[serde(default)]
+    pub blobs: HashMap<String, String>,
 }
 
 /// 前端展示的备份摘要
@@ -58,12 +66,18 @@ fn iso_now() -> String {
 }
 
 /// 导出加密备份包
+/// 备份口令下限。这个文件是最容易被带走的一份完整机密，口令不能形同虚设。
+pub const MIN_BACKUP_PASSWORD_LEN: usize = 8;
+
 pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<BackupSummary> {
     if !vault.is_unlocked() {
         return Err(AppError::Locked);
     }
-    if password.trim().is_empty() {
-        return Err(AppError::Invalid("备份加密密码不能为空".into()));
+    // 前端也校验长度，但后端必须自己兜住：IPC 不是只有界面会调。
+    if password.chars().count() < MIN_BACKUP_PASSWORD_LEN {
+        return Err(AppError::Invalid(format!(
+            "备份加密密码不能少于 {MIN_BACKUP_PASSWORD_LEN} 位"
+        )));
     }
 
     let mut data = store::load_data(vault)?;
@@ -96,10 +110,21 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
 
     let totp_data = store::load_totp(vault).unwrap_or_default();
     let account_data = store::load_accounts(vault).unwrap_or_default();
+    let file_data = store::load_files(vault).unwrap_or_default();
+    let note_data = store::load_notes(vault).unwrap_or_default();
     let mut icons = HashMap::new();
     for hash in store::list_icon_hashes(vault) {
         if let Ok(raw) = store::load_icon(vault, &hash) {
             icons.insert(hash, B64.encode(raw));
+        }
+    }
+    let mut blobs = HashMap::new();
+    for hash in collect_blob_hashes(&file_data, &note_data) {
+        match blob::read_blob_bytes(vault, &hash) {
+            Ok(raw) => {
+                blobs.insert(hash, B64.encode(raw));
+            }
+            Err(e) => log::warn!("导出备份时读取 blob {hash} 失败: {e}"),
         }
     }
 
@@ -113,6 +138,9 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
         totp_data,
         account_data,
         icons,
+        file_data,
+        note_data,
+        blobs,
     };
 
     let payload_bytes = serde_json::to_vec(&payload)?;
@@ -120,8 +148,10 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
     // KDF 派生
     let salt = crypto::new_salt();
     let nonce = crypto::new_nonce();
-    // 使用标称安全的快速 Argon2 参数：32MiB, 3 次迭代
-    let kdf_params = KdfParams::new(32 * 1024, 3, 1);
+    // 对齐保险库自身的跨设备档位（128MiB / 4 轮）。原先是 32MiB/3 轮：
+    // 最容易被拷走的一份完整机密，却用了全项目最弱的 KDF。
+    // 参数随文件头走，手机端恢复仍能解（与 vault.json 同一上限）。
+    let kdf_params = KdfParams::new(kdf::MEM_CEIL_MOBILE_SAFE_KIB, 4, 4);
     let kek = kdf::derive_kek(password.as_bytes(), &salt, &kdf_params)?;
 
     let ciphertext = crypto::aead_encrypt(&kek, &nonce, &payload_bytes)?;
@@ -164,7 +194,12 @@ pub fn inspect_backup(src_path: &Path, password: &str) -> Result<BackupPayload> 
     let parallelism = u32::from_le_bytes(raw[cursor..cursor + 4].try_into().unwrap());
     cursor += 4;
 
-    let kdf_params = KdfParams::new(mem_kib, iters, parallelism);
+    // 参数来自**文件**，也就是来自不可信输入。不 clamp 的话，一个把 memKiB
+    // 写成 0xFFFFFFFF 的 .gambackup 会让 Argon2 去申请 4TiB，进程直接被系统杀掉
+    // （移动端表现为闪退）。clamp 到与保险库头部同一套安全边界，再过一次本机承受力护栏。
+    let mut kdf_params = KdfParams::new(mem_kib, iters, parallelism);
+    kdf_params.clamp_to_safe_bounds();
+    kdf::ensure_affordable(&kdf_params)?;
 
     let mut salt = [0u8; SALT_LEN];
     salt.copy_from_slice(&raw[cursor..cursor + SALT_LEN]);
@@ -222,6 +257,12 @@ pub fn import_backup(
     if payload.secrets.github_pat.is_some() && (!merge || current_secrets.github_pat.is_none()) {
         current_secrets.github_pat = payload.secrets.github_pat.clone();
     }
+    if payload.secrets.gitlab_pat.is_some() && (!merge || current_secrets.gitlab_pat.is_none()) {
+        current_secrets.gitlab_pat = payload.secrets.gitlab_pat.clone();
+    }
+    if payload.secrets.gitee_pat.is_some() && (!merge || current_secrets.gitee_pat.is_none()) {
+        current_secrets.gitee_pat = payload.secrets.gitee_pat.clone();
+    }
     let current_totp = if merge {
         store::load_totp(vault).unwrap_or_default()
     } else {
@@ -246,6 +287,31 @@ pub fn import_backup(
         vault,
         &crate::model::merge_account_data(current_acc, payload.account_data.clone()),
     )?;
+    let current_files = if merge {
+        store::load_files(vault).unwrap_or_default()
+    } else {
+        FileData::default()
+    };
+    let current_notes = if merge {
+        store::load_notes(vault).unwrap_or_default()
+    } else {
+        NoteData::default()
+    };
+    store::save_files(
+        vault,
+        &crate::model::merge_file_data(current_files, payload.file_data.clone()),
+    )?;
+    store::save_notes(
+        vault,
+        &crate::model::merge_note_data(current_notes, payload.note_data.clone()),
+    )?;
+    for (hash, b64) in &payload.blobs {
+        if let Ok(bytes) = B64.decode(b64) {
+            if let Err(e) = blob::write_blob(vault, std::io::Cursor::new(bytes)) {
+                log::warn!("导入备份时写入 blob {hash} 失败: {e}");
+            }
+        }
+    }
 
     for (hash, b64) in &payload.icons {
         if let Ok(bytes) = B64.decode(b64) {

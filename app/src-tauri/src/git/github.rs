@@ -9,9 +9,22 @@ use serde::Serialize;
 const API: &str = "https://api.github.com";
 const UA: &str = crate::identity::USER_AGENT;
 
+pub fn user_url() -> String {
+    format!("{API}/user")
+}
+
+pub fn orgs_url() -> String {
+    format!("{API}/user/orgs?per_page=100")
+}
+
+pub fn keys_url() -> String {
+    format!("{API}/user/keys")
+}
+
 fn client(proxy: Option<&NetworkProxy>) -> Result<reqwest::blocking::Client> {
     let mut builder = reqwest::blocking::Client::builder()
         .user_agent(UA)
+        .connect_timeout(std::time::Duration::from_secs(8))
         .timeout(std::time::Duration::from_secs(20));
     if let Some(p) = proxy {
         builder = net::apply_reqwest_blocking(builder, p)?;
@@ -24,7 +37,7 @@ fn client(proxy: Option<&NetworkProxy>) -> Result<reqwest::blocking::Client> {
 /// 校验 PAT 并返回账号名（`GET /user`）。
 pub fn whoami(token: &str, proxy: Option<&NetworkProxy>) -> Result<String> {
     let resp = client(proxy)?
-        .get(format!("{API}/user"))
+        .get(user_url())
         .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -42,7 +55,7 @@ pub fn whoami(token: &str, proxy: Option<&NetworkProxy>) -> Result<String> {
 /// 拉取账号所属组织（`GET /user/orgs`）。
 pub fn list_orgs(token: &str, proxy: Option<&NetworkProxy>) -> Result<Vec<String>> {
     let resp = client(proxy)?
-        .get(format!("{API}/user/orgs?per_page=100"))
+        .get(orgs_url())
         .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
         .send()
@@ -79,7 +92,7 @@ pub fn upload_public_key(
         key: public_openssh.trim(),
     };
     let resp = client(proxy)?
-        .post(format!("{API}/user/keys"))
+        .post(keys_url())
         .bearer_auth(token)
         .header("Accept", "application/vnd.github+json")
         .json(&body)
@@ -94,5 +107,17 @@ pub fn upload_public_key(
             return Err(AppError::Invalid("该公钥已在此账号中".into()));
         }
         Err(AppError::Invalid(format!("上传公钥失败：HTTP {code}")))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_api_urls() {
+        assert_eq!(user_url(), "https://api.github.com/user");
+        assert_eq!(orgs_url(), "https://api.github.com/user/orgs?per_page=100");
+        assert_eq!(keys_url(), "https://api.github.com/user/keys");
     }
 }

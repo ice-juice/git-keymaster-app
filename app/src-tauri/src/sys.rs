@@ -179,6 +179,12 @@ pub fn common_bin_dirs() -> Vec<PathBuf> {
             dirs.push(PathBuf::from(root).join(r"usr\bin"));
             dirs.push(PathBuf::from(root).join(r"mingw64\bin"));
         }
+        dirs.push(PathBuf::from(r"C:\Program Files\GitHub CLI"));
+        if let Ok(local) = std::env::var("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(&local).join("GitHub CLI"));
+            dirs.push(PathBuf::from(&local).join(r"Programs\GitHub CLI"));
+        }
+        dirs.push(home_dir().join(r"scoop\shims"));
     }
     #[cfg(not(windows))]
     {

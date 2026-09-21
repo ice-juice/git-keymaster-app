@@ -26,20 +26,26 @@ import {
   type SyncResult,
   type BackupSummary,
   type AutoSyncSettings,
+  type BlobSyncProgress,
   type CloudSnapshot,
 } from "../lib/ipc";
 import { PageHead, Card, Badge, FieldLabel, ConfirmDialog, ErrorDialog } from "../ui/common";
+import { ReauthDialog } from "../ui/ReauthDialog";
 import { S3SetupGuide, S3GuideButton, type S3GuideProvider } from "../ui/S3SetupGuide";
 import { encodeS3ConfigPayload, importS3ConfigFromPicker } from "../lib/s3ConfigPick";
 import { firstS3ConfigJson, scanQrWithCamera } from "../lib/qrCapture";
 import { useApp } from "../store";
+import { useOverlayBack } from "../shared/mobileBack";
+import { can } from "../platform/capabilities";
 
-const AUTO_PRESETS: { label: string; minutes: number }[] = [
-  { label: "关闭", minutes: 0 },
-  { label: "15 分钟", minutes: 15 },
-  { label: "30 分钟 (推荐)", minutes: 30 },
-  { label: "1 小时", minutes: 60 },
-  { label: "2 小时", minutes: 120 },
+type S3AuthIntent = "export" | "share" | "reveal";
+
+const AUTO_PRESETS: { labelKey: string; minutes: number }[] = [
+  { labelKey: "syncPage.intervalOff", minutes: 0 },
+  { labelKey: "syncPage.interval15", minutes: 15 },
+  { labelKey: "syncPage.interval30", minutes: 30 },
+  { labelKey: "syncPage.interval60", minutes: 60 },
+  { labelKey: "syncPage.interval120", minutes: 120 },
 ];
 
 export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
@@ -57,7 +63,8 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     secretAccessKey: "",
     prefix: "gam-sync/",
   });
-  const [showSecret, setShowSecret] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
+  const [s3Auth, setS3Auth] = useState<S3AuthIntent | null>(null);
   const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -67,6 +74,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   const [configSaved, setConfigSaved] = useState(false);
   const [autoSync, setAutoSync] = useState<AutoSyncSettings | null>(null);
   const [savingAuto, setSavingAuto] = useState(false);
+  const [blobProgress, setBlobProgress] = useState<BlobSyncProgress | null>(null);
   const [snapshots, setSnapshots] = useState<CloudSnapshot[]>([]);
   const [loadingSnaps, setLoadingSnaps] = useState(false);
   const [restoringId, setRestoringId] = useState<string | null>(null);
@@ -81,10 +89,15 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     | { kind: "restore"; id: string; at: string }
     | null
   >(null);
+  useOverlayBack(!!pendingConfirm, () => setPendingConfirm(null));
+  useOverlayBack(!!s3Auth, () => setS3Auth(null));
+  useOverlayBack(!!shareQr, () => setShareQr(null));
+  useOverlayBack(guideOpen, () => setGuideOpen(false));
 
   // 本地离线备份导出
   const [exportPw, setExportPw] = useState("");
   const [exportPw2, setExportPw2] = useState("");
+  const [exportAccessPw, setExportAccessPw] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportResult, setExportResult] = useState<BackupSummary | null>(null);
   const [exportErr, setExportErr] = useState<string | null>(null);
@@ -148,9 +161,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenBlob: (() => void) | undefined;
     listen<{ ok: boolean; message: string; syncedAt?: string }>("cloud-auto-sync", (ev) => {
       const p = ev.payload;
-      setSyncNotice(`${p.ok ? "✅" : "❌"} ${p.message}`);
+      setSyncNotice(p.ok ? t("syncPage.okMsg", { message: p.message }) : t("syncPage.failErr", { error: p.message }));
+      setBlobProgress(null);
       void loadInitial();
     })
       .then((fn) => {
@@ -159,10 +174,20 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
       .catch(() => {
         /* 非 Tauri */
       });
+    listen<BlobSyncProgress>("blob-sync-progress", (ev) => {
+      setBlobProgress(ev.payload.total > 0 ? ev.payload : null);
+    })
+      .then((fn) => {
+        unlistenBlob = fn;
+      })
+      .catch(() => {
+        /* 非 Tauri */
+      });
     return () => {
       unlisten?.();
+      unlistenBlob?.();
     };
-  }, []);
+  }, [t]);
 
   // 快捷预设
   function applyPreset(type: "r2" | "s3" | "minio") {
@@ -199,21 +224,63 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
       setTimeout(() => setConfigSaved(false), 3000);
       refreshStatus();
     } catch (e) {
-      setErr("保存失败: " + errMessage(e));
+      setErr(t("syncPage.saveFail", { error: errMessage(e) }));
     }
   }
 
-  async function exportS3File() {
+  async function exportS3File(accessPassword: string) {
     try {
       const selected = await save({
         defaultPath: `gam-s3-${s3Config.bucket || "config"}.json`,
-        filters: [{ name: "GAM S3/R2 配置", extensions: ["json"] }],
+        filters: [{ name: t("syncPage.cfgFilter"), extensions: ["json"] }],
       });
       if (!selected) return;
-      await api.exportS3Config(selected, s3Config);
-      setSyncNotice("✅ 已导出 S3/R2 配置文件");
+      await api.exportS3Config(selected, s3Config, accessPassword);
+      setSyncNotice(t("syncPage.exportCfgOk"));
     } catch (e) {
-      setSyncNotice(`❌ 导出配置失败: ${errMessage(e)}`);
+      setSyncNotice(t("syncPage.exportCfgFail", { error: errMessage(e) }));
+    }
+  }
+
+  function requestRevealKeys() {
+    if (showKeys) {
+      setShowKeys(false);
+      return;
+    }
+    setS3Auth("reveal");
+  }
+
+  function requestExportS3() {
+    setS3Auth("export");
+  }
+
+  function requestShareQr() {
+    if (!s3Filled()) {
+      setShareQr(null);
+      setSyncNotice(t("syncPage.shareNeedCfg"));
+      return;
+    }
+    setS3Auth("share");
+  }
+
+  async function confirmS3Auth(pw: string) {
+    try {
+      await api.verifyAccessPassword(pw);
+    } catch (e) {
+      throw new Error(errMessage(e));
+    }
+    const intent = s3Auth;
+    setS3Auth(null);
+    if (intent === "reveal") {
+      setShowKeys(true);
+      return;
+    }
+    if (intent === "export") {
+      await exportS3File(pw);
+      return;
+    }
+    if (intent === "share") {
+      await shareConfigQr();
     }
   }
 
@@ -221,10 +288,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     try {
       const cfg = await importS3ConfigFromPicker();
       if (!cfg) return;
+      setShowKeys(false);
       setS3Config(cfg);
-      setSyncNotice("✅ 已导入 S3/R2 配置，请确认后保存");
+      setSyncNotice(t("syncPage.importCfgOk"));
     } catch (e) {
-      setSyncNotice(`❌ 导入配置失败: ${errMessage(e)}`);
+      setSyncNotice(t("syncPage.importCfgFail", { error: errMessage(e) }));
     }
   }
 
@@ -235,7 +303,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   async function shareConfigQr() {
     if (!s3Filled()) {
       setShareQr(null);
-      setSyncNotice("❌ 请先填写云存储配置，再分享二维码");
+      setSyncNotice(t("syncPage.shareNeedCfg"));
       return;
     }
     setSharing(true);
@@ -244,10 +312,10 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     try {
       const png = await api.renderQrPng(encodeS3ConfigPayload(s3Config));
       setShareQr(png);
-      setSyncNotice("✅ 已生成配置二维码。只含云存储连接信息，不含恢复密钥；不会自动推送数据。");
+      setSyncNotice(t("syncPage.shareOk"));
     } catch (e) {
       setShareQr(null);
-      setSyncNotice(`❌ 生成二维码失败：${errMessage(e)}`);
+      setSyncNotice(t("syncPage.shareFail", { error: errMessage(e) }));
     } finally {
       setSharing(false);
     }
@@ -257,35 +325,36 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     setSyncNotice(null);
     try {
       const texts = await scanQrWithCamera({
-        title: "扫描云存储配置二维码",
-        hint: "对准其他设备【分享配置】生成的二维码",
+        title: t("syncPage.scanTitle"),
+        hint: t("syncPage.scanHint"),
       });
       if (!texts) return;
       const raw = firstS3ConfigJson(texts);
       if (!raw) {
-        setSyncNotice("❌ 未识别到云存储配置二维码");
+        setSyncNotice(t("syncPage.scanNone"));
         return;
       }
       const cfg = await api.importS3ConfigText(raw);
+      setShowKeys(false);
       setS3Config(cfg);
       await api.saveCloudSyncConfig(cfg);
-      setSyncNotice("✅ 已写入云存储配置。二维码不含恢复密钥；换机恢复仍需在初始化时输入恢复密钥。");
+      setSyncNotice(t("syncPage.scanOk"));
     } catch (e) {
-      setSyncNotice(`❌ 扫码写入失败: ${errMessage(e)}`);
+      setSyncNotice(t("syncPage.scanFail", { error: errMessage(e) }));
     }
   }
 
   // 测试云端连通性
   async function testConnection() {
     if (!s3Config.endpoint || !s3Config.bucket || !s3Config.accessKeyId || !s3Config.secretAccessKey) {
-      setTestResult({ ok: false, msg: "请先填写完整的 Endpoint、Bucket、AK 与 SK" });
+      setTestResult({ ok: false, msg: t("syncPage.testNeed") });
       return;
     }
     setTesting(true);
     setTestResult(null);
     try {
       const ms = await api.testCloudSyncConfig(s3Config);
-      setTestResult({ ok: true, msg: `连接正常，读写探测延迟 ${ms} ms` });
+      setTestResult({ ok: true, msg: t("syncPage.testOk", { ms }) });
     } catch (e) {
       setTestResult({ ok: false, msg: errMessage(e) });
     } finally {
@@ -300,7 +369,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
 
   function ensureConfigured(): boolean {
     if (!cloudStatus || cloudStatus.status === "unconfigured") {
-      setErr("请先填写并保存云存储配置");
+      setErr(t("syncPage.needSavedCfg"));
       return false;
     }
     return true;
@@ -322,11 +391,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     setPendingConfirm(null);
     try {
       const res: SyncResult = await api.cloudSyncPush();
-      setSyncNotice(`✅ ${res.message}`);
+      setSyncNotice(t("syncPage.okMsg", { message: res.message }));
       await refreshStatus();
       await loadSnapshots();
     } catch (e) {
-      setSyncNotice(`❌ 推送失败: ${errMessage(e)}`);
+      setSyncNotice(t("syncPage.pushFail", { error: errMessage(e) }));
     } finally {
       setSyncing(null);
     }
@@ -338,10 +407,10 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     setPendingConfirm(null);
     try {
       const res: SyncResult = await api.cloudSyncPull();
-      setSyncNotice(`✅ ${res.message}（${res.identityCount} 个身份，${res.keyCount} 把密钥）`);
+      setSyncNotice(t("syncPage.pullOk", { message: res.message, identities: res.identityCount, keys: res.keyCount }));
       await refreshStatus();
     } catch (e) {
-      setSyncNotice(`❌ 拉取失败: ${errMessage(e)}`);
+      setSyncNotice(t("syncPage.pullFail", { error: errMessage(e) }));
     } finally {
       setSyncing(null);
     }
@@ -360,10 +429,10 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     setPendingConfirm(null);
     try {
       const res = await api.restoreCloudSnapshot(id);
-      setSyncNotice(`✅ ${res.message}`);
+      setSyncNotice(t("syncPage.okMsg", { message: res.message }));
       await refreshStatus();
     } catch (e) {
-      setSyncNotice(`❌ 恢复失败: ${errMessage(e)}`);
+      setSyncNotice(t("syncPage.restoreFail", { error: errMessage(e) }));
     } finally {
       setRestoringId(null);
     }
@@ -373,29 +442,34 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   async function handleExportBackup() {
     setExportErr(null);
     setExportResult(null);
-    if (!exportPw || exportPw.length < 6) {
-      setExportErr("备份加密密码不能少于 6 位");
+    if (!exportPw || exportPw.length < 8) {
+      setExportErr(t("syncPage.backupPwShort"));
       return;
     }
     if (exportPw !== exportPw2) {
-      setExportErr("两次输入的备份密码不一致");
+      setExportErr(t("syncPage.backupPwMismatch"));
+      return;
+    }
+    if (!exportAccessPw) {
+      setExportErr(t("syncPage.exportAccessPwMissing"));
       return;
     }
 
     const defaultName = `gam-backup-${new Date().toISOString().slice(0, 10)}.gambackup`;
     const selected = await save({
       defaultPath: defaultName,
-      filters: [{ name: "GAM 加密备份包", extensions: ["gambackup"] }],
+      filters: [{ name: t("syncPage.backupFilter"), extensions: ["gambackup"] }],
     });
 
     if (!selected) return;
 
     setExporting(true);
     try {
-      const res = await api.exportVaultBackup(selected, exportPw);
+      const res = await api.exportVaultBackup(selected, exportPw, exportAccessPw);
       setExportResult(res);
       setExportPw("");
       setExportPw2("");
+      setExportAccessPw("");
     } catch (e) {
       setExportErr(errMessage(e));
     } finally {
@@ -408,7 +482,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     const selected = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: "GAM 加密备份包", extensions: ["gambackup"] }],
+      filters: [{ name: t("syncPage.backupFilter"), extensions: ["gambackup"] }],
     });
     if (selected && typeof selected === "string") {
       setImportPath(selected);
@@ -421,11 +495,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   // 查看备份包内容
   async function handleInspectBackup() {
     if (!importPath) {
-      setImportErr("请先选择备份文件");
+      setImportErr(t("syncPage.needBackupFile"));
       return;
     }
     if (!importPw) {
-      setImportErr("请输入备份加密密码");
+      setImportErr(t("syncPage.needBackupPw"));
       return;
     }
     setInspecting(true);
@@ -459,65 +533,81 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   }
 
   const statusLabel = (() => {
-    if (!cloudStatus) return { text: "检测中", cls: "muted" };
+    if (!cloudStatus) return { text: t("syncPage.stChecking"), cls: "muted" };
     switch (cloudStatus.status) {
       case "synced":
-        return { text: "已同步", cls: "ok" };
+        return { text: t("syncPage.stSynced"), cls: "ok" };
       case "local_ahead":
-        return { text: "本地有待推送变更", cls: "warn" };
+        return { text: t("syncPage.stLocalDirty"), cls: "warn" };
       case "remote_ahead":
-        return { text: "云端有待拉取更新", cls: "info" };
+        return { text: t("syncPage.stRemoteNewer"), cls: "info" };
       case "different_workspace":
-        return { text: "与当前空间不一致", cls: "danger" };
+        return { text: t("syncPage.stMismatch"), cls: "danger" };
       case "not_synced":
-        return { text: "云端暂无备份", cls: "warn" };
+        return { text: t("syncPage.stEmpty"), cls: "warn" };
       case "checking":
-        return { text: writesLocked ? "启动同步中" : "等待下次同步", cls: "muted" };
+        return { text: writesLocked ? t("syncPage.stStartup") : t("syncPage.stWait"), cls: "muted" };
       default:
-        return { text: "未配置云存储", cls: "muted" };
+        return { text: t("syncPage.stNone"), cls: "muted" };
     }
   })();
 
   return (
     <div className="stack-lg">
       <ErrorDialog message={err} onClose={() => setErr("")} />
+      {s3Auth && (
+        <ReauthDialog
+          title={
+            s3Auth === "export"
+              ? t("syncPage.exportCfg")
+              : s3Auth === "share"
+                ? t("syncPage.shareCfg")
+                : t("reauth.title")
+          }
+          hint={
+            s3Auth === "export"
+              ? t("syncPage.exportCfgAccessPwHint")
+              : s3Auth === "share"
+                ? t("syncPage.shareCfgReauthHint")
+                : t("syncPage.revealKeysHint")
+          }
+          onCancel={() => setS3Auth(null)}
+          onConfirm={confirmS3Auth}
+        />
+      )}
       {pendingConfirm?.kind === "push" && (
         <ConfirmDialog
-          title="确认推送到云端"
-          message="将把当前本机工作空间加密后上传到云存储。"
-          detail="云端已有内容会被这次快照覆盖为最新版本，其他设备下次拉取会收到本次数据。"
-          confirmLabel="确认推送"
+          title={t("syncPage.confirmPushTitle")}
+          message={t("syncPage.confirmPushMsg")}
+          detail={t("syncPage.confirmPushDetail")}
+          confirmLabel={t("syncPage.confirmPush")}
           busy={syncing === "push"}
-          busyLabel="正在推送…"
+          busyLabel={t("syncPage.pushing")}
           onCancel={() => setPendingConfirm(null)}
           onConfirm={() => void runPush()}
         />
       )}
       {pendingConfirm?.kind === "pull" && (
         <ConfirmDialog
-          title="确认从云端拉取"
-          message="将从云端读取最新加密数据，并合并到本机。"
-          detail="本机现有身份、密钥与配置可能被云端版本覆盖，请确认这是你要同步的设备。"
-          confirmLabel="确认拉取"
+          title={t("syncPage.confirmPullTitle")}
+          message={t("syncPage.confirmPullMsg")}
+          detail={t("syncPage.confirmPullDetail")}
+          confirmLabel={t("syncPage.confirmPull")}
           busy={syncing === "pull"}
-          busyLabel="正在拉取…"
+          busyLabel={t("syncPage.pulling")}
           onCancel={() => setPendingConfirm(null)}
           onConfirm={() => void runPull()}
         />
       )}
       {pendingConfirm?.kind === "restore" && (
         <ConfirmDialog
-          title="确认恢复历史快照"
-          message={
-            <>
-              确定恢复到 <strong>{pendingConfirm.at}</strong> 的快照吗？
-            </>
-          }
-          detail="将覆盖当前身份、密钥与配置，此操作不可撤销。"
-          confirmLabel="恢复此版本"
+          title={t("syncPage.confirmRestoreTitle")}
+          message={t("syncPage.confirmRestoreMsg", { at: pendingConfirm.at })}
+          detail={t("syncPage.confirmRestoreDetail")}
+          confirmLabel={t("syncPage.confirmRestore")}
           tone="danger"
           busy={restoringId !== null}
-          busyLabel="正在恢复…"
+          busyLabel={t("syncPage.restoring")}
           onCancel={() => setPendingConfirm(null)}
           onConfirm={() => void runRestore(pendingConfirm.id)}
         />
@@ -542,7 +632,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 onClick={() => setActiveTab("backup")}
               >
                 <FileArchive size={14} />
-                离线备份
+                {t("syncPage.offlineTab")}
               </button>
             </div>
           ) : (
@@ -553,7 +643,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 onClick={() => setActiveTab("cloud")}
               >
                 <Cloud size={13} style={{ marginRight: 4 }} />
-                云端同步 (E2EE)
+                {t("syncPage.cloudTab")}
               </button>
               <button
                 type="button"
@@ -561,7 +651,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 onClick={() => setActiveTab("backup")}
               >
                 <FileArchive size={13} style={{ marginRight: 4 }} />
-                离线备份包
+                {t("syncPage.offlinePack")}
               </button>
             </div>
           )
@@ -572,7 +662,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
         <>
           {/* 板块 1: 云同步状态与快速操作 */}
           <Card
-            title="云端同步状态"
+            title={t("syncPage.statusTitle")}
             actions={
               <div className="flex items-center gap-2">
                 <Badge kind={statusLabel.cls}>{statusLabel.text}</Badge>
@@ -584,25 +674,28 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
                 >
                   <RefreshCw size={12} className={loadingStatus ? "animate-spin" : ""} />
-                  刷新
+                  {t("common.refresh")}
                 </button>
               </div>
             }
           >
             <div className="stat-card-row mb-3">
               <div className="stat-card">
-                <div className="stat-card-title">本地资产</div>
+                <div className="stat-card-title">{t("syncPage.localAssets")}</div>
                 <div className="stat-card-body">
                   <div className="stat-card-val" style={{ fontSize: 18 }}>
                     {cloudStatus?.localIdentityCount ?? 0}
                   </div>
                   <div className="stat-card-sub">
-                    {cloudStatus?.localKeyCount ?? 0} 密钥 · {cloudStatus?.localRepoCount ?? 0} 仓库
+                    {t("syncPage.keysRepos", {
+                      keys: cloudStatus?.localKeyCount ?? 0,
+                      repos: cloudStatus?.localRepoCount ?? 0,
+                    })}
                   </div>
                 </div>
               </div>
               <div className="stat-card">
-                <div className="stat-card-title">云端状态</div>
+                <div className="stat-card-title">{t("syncPage.cloudStatus")}</div>
                 <div className="stat-card-body">
                   <div
                     className="stat-card-val"
@@ -612,33 +705,33 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                     }}
                   >
                     {cloudStatus?.status === "checking" || (loadingStatus && !cloudStatus?.remoteExists)
-                      ? "检测中…"
+                      ? t("syncPage.checkingEllipsis")
                       : cloudStatus?.remoteExists
-                        ? "已就绪"
-                        : "待初次推送"}
+                        ? t("syncPage.ready")
+                        : t("syncPage.needFirstPush")}
                   </div>
                   <div className="stat-card-sub">
                     {cloudStatus?.status === "checking"
-                      ? "正在读取云端清单"
+                      ? t("syncPage.readingManifest")
                       : cloudStatus?.headerReady
-                        ? "换机恢复头部正常"
-                        : "无云端快照"}
+                        ? t("syncPage.headerOk")
+                        : t("syncPage.noSnapshot")}
                   </div>
                 </div>
               </div>
               <div className="stat-card">
-                <div className="stat-card-title">最近同步</div>
+                <div className="stat-card-title">{t("syncPage.lastSync")}</div>
                 <div className="stat-card-body">
                   <div className="stat-card-val" style={{ fontSize: 13, lineHeight: 1.4 }}>
-                    {cloudStatus?.remoteUpdatedAt ? new Date(cloudStatus.remoteUpdatedAt).toLocaleTimeString() : "—"}
+                    {cloudStatus?.remoteUpdatedAt ? new Date(cloudStatus.remoteUpdatedAt).toLocaleTimeString() : t("common.emDash")}
                   </div>
                   <div className="stat-card-sub">
-                    {cloudStatus?.remoteUpdatedAt ? new Date(cloudStatus.remoteUpdatedAt).toLocaleDateString() : "尚未同步"}
+                    {cloudStatus?.remoteUpdatedAt ? new Date(cloudStatus.remoteUpdatedAt).toLocaleDateString() : t("syncPage.neverSync")}
                   </div>
                 </div>
               </div>
               <div className="stat-card">
-                <div className="stat-card-title">安全算法</div>
+                <div className="stat-card-title">{t("syncPage.algo")}</div>
                 <div className="stat-card-body">
                   <div className="stat-card-val" style={{ fontSize: 15, color: "var(--accent)" }}>
                     E2EE
@@ -669,7 +762,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
 
             <div className="sync-action-bar">
               <div className="muted" style={{ fontSize: 11.5, lineHeight: 1.5, flex: 1, minWidth: 180 }}>
-                以上为最近一次启动或自动同步的结果。需要立刻核对云端时再点「刷新」。数据出机前全量加密。
+                {t("syncPage.statusHint")}
               </div>
               <div className="sync-action-btns">
                 <button
@@ -679,7 +772,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   onClick={handlePush}
                 >
                   <CloudUpload size={14} />
-                  {syncing === "push" ? "正在加密推送…" : "推送到云端 (Push)"}
+                  {syncing === "push" ? t("syncPage.pushingEnc") : t("syncPage.pushBtn")}
                 </button>
                 <button
                   type="button"
@@ -688,7 +781,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   onClick={handlePull}
                 >
                   <CloudDownload size={14} />
-                  {syncing === "pull" ? "正在同步…" : "从云端拉取 (Pull)"}
+                  {syncing === "pull" ? t("syncPage.pullingSync") : t("syncPage.pullBtn")}
                 </button>
               </div>
             </div>
@@ -696,7 +789,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
 
           {/* 板块 2: 精简后的定时同步 */}
           <Card
-            title="定时自动同步"
+            title={t("syncPage.autoTitle")}
             actions={
               <button
                 type="button"
@@ -707,11 +800,15 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   setSyncNotice(null);
                   try {
                     const res = await api.runAutoSyncNow();
-                    setSyncNotice(res ? `✅ ${res.message}` : "当前已是最新状态");
+                    setSyncNotice(
+                      res
+                        ? t("syncPage.okMsg", { message: res.message })
+                        : t("syncPage.okMsg", { message: t("syncPage.alreadyLatest") }),
+                    );
                     await refreshStatus();
                     await loadSnapshots();
                   } catch (e) {
-                    setSyncNotice(`❌ ${errMessage(e)}`);
+                    setSyncNotice(t("syncPage.failErr", { error: errMessage(e) }));
                   } finally {
                     setSyncing(null);
                   }
@@ -719,16 +816,16 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
               >
                 <RefreshCw size={12} className={syncing === "pull" ? "animate-spin" : ""} />
-                立即同步一次
+                {t("syncPage.syncNow")}
               </button>
             }
           >
             <div className="stack">
               <div className="between" style={{ flexWrap: "wrap", gap: 8 }}>
                 <div>
-                  <div style={{ fontSize: 11.5, fontWeight: 600 }}>同步周期</div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600 }}>{t("syncPage.period")}</div>
                   <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>
-                    启动时自动拉取并检查一次。之后按周期先拉后推；编辑身份或密钥后会立即推送。
+                    {t("syncPage.periodHint")}
                   </div>
                 </div>
                 <div className="choice-row" style={{ margin: 0 }}>
@@ -746,16 +843,25 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                           try {
                             const minutes = await api.setAutoSyncMinutes(p.minutes);
                             setAutoSync((prev) =>
-                              prev ? { ...prev, minutes } : { minutes, defaultMinutes: 30, lastAutoSyncAt: null, lastAutoSyncMessage: null },
+                              prev
+                                ? { ...prev, minutes }
+                                : {
+                                    minutes,
+                                    defaultMinutes: 30,
+                                    lastAutoSyncAt: null,
+                                    lastAutoSyncMessage: null,
+                                    syncAttachmentsWifiOnly: true,
+                                    syncAttachmentsManualOnly: false,
+                                  },
                             );
                           } catch (e) {
-                            setSyncNotice(`❌ ${errMessage(e)}`);
+                            setSyncNotice(t("syncPage.failErr", { error: errMessage(e) }));
                           } finally {
                             setSavingAuto(false);
                           }
                         }}
                       >
-                        {p.label}
+                        {t(p.labelKey)}
                       </button>
                     );
                   })}
@@ -763,25 +869,78 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               </div>
               {autoSync?.lastAutoSyncAt && (
                 <div className="muted sm" style={{ borderTop: "1px dashed var(--border)", paddingTop: 5, marginTop: 2 }}>
-                  最近自动同步：{new Date(autoSync.lastAutoSyncAt).toLocaleString()}
+                  {t("syncPage.lastAuto", { at: new Date(autoSync.lastAutoSyncAt).toLocaleString() })}
                   {autoSync.lastAutoSyncMessage ? ` · ${autoSync.lastAutoSyncMessage}` : ""}
                 </div>
               )}
+              {blobProgress && (
+                <div className="muted sm">
+                  {t("syncPage.blobProgress", {
+                    current: blobProgress.current,
+                    total: blobProgress.total,
+                    phase: blobProgress.phase === "download" ? t("syncPage.blobDownload") : t("syncPage.blobUpload"),
+                  })}
+                </div>
+              )}
+              <div className="between" style={{ flexWrap: "wrap", gap: 8, borderTop: "1px dashed var(--border)", paddingTop: 8 }}>
+                <div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600 }}>{t("syncPage.wifiOnly")}</div>
+                  <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>{t("syncPage.wifiOnlyHint")}</div>
+                </div>
+                <button
+                  type="button"
+                  className={"switch" + (autoSync?.syncAttachmentsWifiOnly === false ? " off" : "")}
+                  disabled={savingAuto}
+                  onClick={async () => {
+                    setSavingAuto(true);
+                    try {
+                      const next = await api.setAttachmentSyncGuards(!(autoSync?.syncAttachmentsWifiOnly !== false), !!autoSync?.syncAttachmentsManualOnly);
+                      setAutoSync(next);
+                    } catch (e) {
+                      setSyncNotice(t("syncPage.failErr", { error: errMessage(e) }));
+                    } finally {
+                      setSavingAuto(false);
+                    }
+                  }}
+                />
+              </div>
+              <div className="between" style={{ flexWrap: "wrap", gap: 8 }}>
+                <div>
+                  <div style={{ fontSize: 11.5, fontWeight: 600 }}>{t("syncPage.attachmentsManual")}</div>
+                  <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>{t("syncPage.attachmentsManualHint")}</div>
+                </div>
+                <button
+                  type="button"
+                  className={"switch" + (autoSync?.syncAttachmentsManualOnly ? "" : " off")}
+                  disabled={savingAuto}
+                  onClick={async () => {
+                    setSavingAuto(true);
+                    try {
+                      const next = await api.setAttachmentSyncGuards(autoSync?.syncAttachmentsWifiOnly !== false, !autoSync?.syncAttachmentsManualOnly);
+                      setAutoSync(next);
+                    } catch (e) {
+                      setSyncNotice(t("syncPage.failErr", { error: errMessage(e) }));
+                    } finally {
+                      setSavingAuto(false);
+                    }
+                  }}
+                />
+              </div>
             </div>
           </Card>
 
           {/* 板块 3: S3 / Cloudflare R2 存储配置 (上移到历史快照之前) */}
           <Card
-            title="S3 / Cloudflare R2 存储配置"
+            title={t("syncPage.s3Title")}
             actions={
-              compact ? (
+              compact && can("cameraQrScan") ? (
                 <button type="button" className="m-s3-head-scan" onClick={scanS3Qr}>
                   <Camera size={14} />
-                  扫码导入
+                  {t("syncPage.scanImport")}
                 </button>
-              ) : (
+              ) : compact ? null : (
                 <div className="flex gap-1">
-                  <span className="muted" style={{ fontSize: 11, alignSelf: "center", marginRight: 4 }}>快速预设:</span>
+                  <span className="muted" style={{ fontSize: 11, alignSelf: "center", marginRight: 4 }}>{t("syncPage.presets")}</span>
                   <button type="button" className="btn ghost sm" onClick={() => applyPreset("r2")}>Cloudflare R2</button>
                   <button type="button" className="btn ghost sm" onClick={() => applyPreset("s3")}>AWS S3</button>
                   <button type="button" className="btn ghost sm" onClick={() => applyPreset("minio")}>MinIO</button>
@@ -790,7 +949,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
             }
           >
             <div className="callout info sm" style={{ marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
-              <span>还没有云存储账号？按「小白引导」一步步建桶、拿两把钥匙，再填回本页。新手推荐 Cloudflare R2。</span>
+              <span>{t("syncPage.guideHint")}</span>
               <S3GuideButton onClick={() => setGuideOpen(true)} />
             </div>
             {compact && (
@@ -803,8 +962,8 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
                 <FieldLabel
-                  name="存储端点 (Endpoint)"
-                  tip="云厂商给你的 S3 接口地址，必须带 https:// 或 http://。R2 形如 https://账户ID.r2.cloudflarestorage.com；AWS 形如 https://s3.ap-southeast-1.amazonaws.com。不要填控制台网页地址。"
+                  name={t("syncPage.endpoint")}
+                  tip={t("syncPage.endpointTip")}
                 />
                 <input
                   className="input mono"
@@ -815,8 +974,8 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               </div>
               <div>
                 <FieldLabel
-                  name="存储桶名称 (Bucket)"
-                  tip="就是你在云控制台创建的那个储物柜名字，必须完全一致。只能用小写字母、数字和连字符。不要把桶设成公开。"
+                  name={t("syncPage.bucket")}
+                  tip={t("syncPage.bucketTip")}
                 />
                 <input
                   className="input mono"
@@ -827,20 +986,20 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               </div>
               <div>
                 <FieldLabel
-                  name="区域 (Region)"
-                  tip="R2 填 auto。AWS 必须和创建桶时选的区域一致，例如 ap-southeast-1。MinIO 一般填 us-east-1。"
+                  name={t("syncPage.region")}
+                  tip={t("syncPage.regionTip")}
                 />
                 <input
                   className="input mono"
-                  placeholder="auto 或 us-east-1"
+                  placeholder={t("syncPage.regionPh")}
                   value={s3Config.region}
                   onChange={(e) => setS3Config({ ...s3Config, region: e.target.value })}
                 />
               </div>
               <div>
                 <FieldLabel
-                  name="路径前缀 (Prefix)"
-                  tip="桶里面的文件夹名，用来和其他文件分开。默认 gam-sync/ 即可。换电脑恢复时必须和旧设备填得一模一样。"
+                  name={t("syncPage.prefix")}
+                  tip={t("syncPage.prefixTip")}
                 />
                 <input
                   className="input mono"
@@ -852,25 +1011,42 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               <div>
                 <FieldLabel
                   name="Access Key ID"
-                  tip="云厂商发给你的访问钥匙，不是登录邮箱。R2 在「管理 API 令牌」创建后可见；AWS 在 IAM 用户的访问密钥里，多半以 AKIA 开头。"
+                  tip={t("syncPage.akTip")}
                 />
-                <input
-                  className="input mono"
-                  placeholder="AKIA..."
-                  value={s3Config.accessKeyId}
-                  onChange={(e) => setS3Config({ ...s3Config, accessKeyId: e.target.value })}
-                />
+                <div style={{ position: "relative" }}>
+                  <input
+                    type={showKeys ? "text" : "password"}
+                    className="input mono"
+                    placeholder="AKIA..."
+                    autoComplete="off"
+                    spellCheck={false}
+                    value={s3Config.accessKeyId}
+                    onChange={(e) => setS3Config({ ...s3Config, accessKeyId: e.target.value })}
+                    style={{ paddingRight: 32 }}
+                  />
+                  <button
+                    type="button"
+                    className="btn ghost sm"
+                    onClick={requestRevealKeys}
+                    aria-label={showKeys ? t("syncPage.hideKeys") : t("syncPage.revealKeys")}
+                    style={{ position: "absolute", right: 4, top: 4, padding: "2px 6px" }}
+                  >
+                    {showKeys ? <EyeOff size={13} /> : <Eye size={13} />}
+                  </button>
+                </div>
               </div>
               <div>
                 <FieldLabel
                   name="Secret Access Key"
-                  tip="和 Access Key 成对的密码。创建时只显示一次，关掉页面就再也看不到，请先复制保存。不要发到聊天或邮件。"
+                  tip={t("syncPage.skTip")}
                 />
                 <div style={{ position: "relative" }}>
                   <input
-                    type={showSecret ? "text" : "password"}
+                    type={showKeys ? "text" : "password"}
                     className="input mono"
                     placeholder="Secret Key"
+                    autoComplete="off"
+                    spellCheck={false}
                     value={s3Config.secretAccessKey}
                     onChange={(e) => setS3Config({ ...s3Config, secretAccessKey: e.target.value })}
                     style={{ paddingRight: 32 }}
@@ -878,10 +1054,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   <button
                     type="button"
                     className="btn ghost sm"
-                    onClick={() => setShowSecret(!showSecret)}
+                    onClick={requestRevealKeys}
+                    aria-label={showKeys ? t("syncPage.hideKeys") : t("syncPage.revealKeys")}
                     style={{ position: "absolute", right: 4, top: 4, padding: "2px 6px" }}
                   >
-                    {showSecret ? <EyeOff size={13} /> : <Eye size={13} />}
+                    {showKeys ? <EyeOff size={13} /> : <Eye size={13} />}
                   </button>
                 </div>
               </div>
@@ -900,7 +1077,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   borderColor: testResult.ok ? "rgba(16, 185, 129, 0.3)" : "rgba(239, 68, 68, 0.3)",
                 }}
               >
-                {testResult.ok ? `✅ ${testResult.msg}` : `❌ ${testResult.msg}`}
+                {testResult.ok ? t("syncPage.okMsg", { message: testResult.msg }) : t("syncPage.failErr", { error: testResult.msg })}
               </div>
             )}
 
@@ -908,7 +1085,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               <div className="m-s3-actions">
                 <div className="m-s3-actions-main">
                   <button type="button" className="btn primary" onClick={saveConfig}>
-                    {configSaved ? "已保存配置 ✓" : "保存配置"}
+                    {configSaved ? t("syncPage.savedCfg") : t("syncPage.saveCfg")}
                   </button>
                   <button
                     type="button"
@@ -917,24 +1094,24 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                     onClick={testConnection}
                   >
                     <Zap size={14} />
-                    {testing ? "正在测试…" : "测试连通性"}
+                    {testing ? t("syncPage.testing") : t("syncPage.testConn")}
                   </button>
                 </div>
                 <div className="m-s3-tools">
-                  <button type="button" className="m-s3-tool" onClick={exportS3File}>
+                  <button type="button" className="m-s3-tool" onClick={requestExportS3}>
                     <Download size={16} />
-                    <span>导出配置</span>
+                    <span>{t("syncPage.exportCfg")}</span>
                   </button>
                   <button type="button" className="m-s3-tool" onClick={importS3File}>
                     <Upload size={16} />
-                    <span>导入配置</span>
+                    <span>{t("syncPage.importCfg")}</span>
                   </button>
                 </div>
               </div>
             ) : (
               <div className="flex gap-2 items-center">
                 <button type="button" className="btn primary sm" onClick={saveConfig}>
-                  {configSaved ? "已保存配置 ✓" : "保存配置"}
+                  {configSaved ? t("syncPage.savedCfg") : t("syncPage.saveCfg")}
                 </button>
                 <button
                   type="button"
@@ -944,19 +1121,19 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
                 >
                   <Zap size={13} />
-                  {testing ? "正在测试…" : "测试连通性"}
+                  {testing ? t("syncPage.testing") : t("syncPage.testConn")}
                 </button>
-                <button type="button" className="btn ghost sm" onClick={exportS3File}>
+                <button type="button" className="btn ghost sm" onClick={requestExportS3}>
                   <Download size={13} />
-                  导出配置
+                  {t("syncPage.exportCfg")}
                 </button>
                 <button type="button" className="btn ghost sm" onClick={importS3File}>
                   <Upload size={13} />
-                  导入配置
+                  {t("syncPage.importCfg")}
                 </button>
-                <button type="button" className="btn ghost sm" disabled={sharing} onClick={shareConfigQr}>
+                <button type="button" className="btn ghost sm" disabled={sharing} onClick={requestShareQr}>
                   <QrCode size={13} />
-                  {sharing ? "正在生成…" : "分享配置"}
+                  {sharing ? t("syncPage.sharing") : t("syncPage.shareCfg")}
                 </button>
               </div>
             )}
@@ -964,7 +1141,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
 
           {/* 板块 4: 云端历史快照 (下移一个板块至存储配置下方) */}
           <Card
-            title="云端历史快照"
+            title={t("syncPage.snapsTitle")}
             actions={
               <button
                 type="button"
@@ -974,16 +1151,16 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
               >
                 <History size={12} />
-                {loadingSnaps ? "读取中…" : "刷新快照"}
+                {loadingSnaps ? t("syncPage.reading") : t("syncPage.refreshSnaps")}
               </button>
             }
           >
             <div className="muted" style={{ fontSize: 11.5, marginBottom: 8 }}>
-              自动保留最近 10 份快照与近 14 天每日版本，支持一键按需回滚。
+              {t("syncPage.snapsHint")}
             </div>
             {snapshots.length === 0 ? (
               <div className="muted sm">
-                {loadingSnaps ? "正在读取云端快照…" : "暂无历史快照，完成初次推送后将在此显示。"}
+                {loadingSnaps ? t("syncPage.readingSnaps") : t("syncPage.noSnaps")}
               </div>
             ) : compact ? (
               <div className="m-snapshot-list">
@@ -1000,11 +1177,15 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                         <div className="m-snapshot-main">
                           <div className="m-snapshot-time">
                             <span>{timeStr}</span>
-                            {s.isRecent && <Badge kind="ok">最近</Badge>}
-                            {s.isDailyFirst && !s.isRecent && <Badge kind="info">首份</Badge>}
+                            {s.isRecent && <Badge kind="ok">{t("syncPage.recent")}</Badge>}
+                            {s.isDailyFirst && !s.isRecent && <Badge kind="info">{t("syncPage.first")}</Badge>}
                           </div>
                           <div className="m-snapshot-meta">
-                            {s.identityCount}身份 · {s.keyCount}密钥 · {s.repoCount}仓库
+                            {t("syncPage.snapMeta", {
+                              identities: s.identityCount,
+                              keys: s.keyCount,
+                              repos: s.repoCount,
+                            })}
                             {host ? ` · ${host}` : ""}
                           </div>
                         </div>
@@ -1014,7 +1195,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                           disabled={writesLocked || restoringId !== null}
                           onClick={() => askRestore(s)}
                         >
-                          {restoringId === s.id ? "…" : "恢复"}
+                          {restoringId === s.id ? t("syncPage.restoringNow") : t("syncPage.restore")}
                         </button>
                       </div>
                     </div>
@@ -1036,11 +1217,15 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                         <div className="grow">
                           <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
                             <span>{new Date(s.createdAt).toLocaleString()}</span>
-                            {s.isDailyFirst && <Badge kind="info">当日首份</Badge>}
-                            {s.isRecent && <Badge kind="ok">最近</Badge>}
+                            {s.isDailyFirst && <Badge kind="info">{t("syncPage.dailyFirst")}</Badge>}
+                            {s.isRecent && <Badge kind="ok">{t("syncPage.recent")}</Badge>}
                           </div>
                           <div className="muted sm" style={{ marginTop: 2 }}>
-                            {s.identityCount} 个身份 · {s.keyCount} 把密钥 · {s.repoCount} 个仓库
+                            {t("syncPage.snapMetaLong", {
+                              identities: s.identityCount,
+                              keys: s.keyCount,
+                              repos: s.repoCount,
+                            })}
                             {s.clientName ? ` · ${s.clientName}` : ""}
                           </div>
                         </div>
@@ -1050,7 +1235,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                           disabled={writesLocked || restoringId !== null}
                           onClick={() => askRestore(s)}
                         >
-                          {restoringId === s.id ? "恢复中…" : "恢复此版本"}
+                          {restoringId === s.id ? t("syncPage.restoringNow") : t("syncPage.restoreThis")}
                         </button>
                       </div>
                     </div>
@@ -1076,9 +1261,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
             }}
           >
             <Shield size={15} style={{ color: "var(--accent)", flexShrink: 0 }} />
-            <div>
-              <strong>零知识端到端加密：</strong>所有资产均在本地通过 XChaCha20-Poly1305 加密后上传，云端文件名经 HMAC 散列混淆，服务商及任何第三方均无法解密。
-            </div>
+            <div>{t("syncPage.e2eeNote")}</div>
           </div>
           <S3SetupGuide
             open={guideOpen}
@@ -1092,36 +1275,50 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
       {activeTab === "backup" && (
         <div className="stack-lg">
           {/* M6 本地离线加密导出 */}
-          <Card title="导出离线加密备份 (.gambackup)">
+          <Card title={t("syncPage.exportTitle")}>
             <p className="muted" style={{ fontSize: 11.5, marginBottom: 10 }}>
-              将工作空间身份、密钥与仓库私钥打包为单一离线加密文件，适合本地冷备份或换机导入。
+              {t("syncPage.exportHint")}
             </p>
 
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
-                <label className="field-label">设置备份加密密码 (至少 6 位)</label>
+                <label className="field-label">{t("syncPage.exportPw")}</label>
                 <input
                   type="password"
                   className="input"
-                  placeholder="输入密码"
+                  placeholder={t("syncPage.pwPh")}
                   value={exportPw}
                   onChange={(e) => setExportPw(e.target.value)}
                 />
               </div>
               <div>
-                <label className="field-label">再次确认密码</label>
+                <label className="field-label">{t("syncPage.exportPw2")}</label>
                 <input
                   type="password"
                   className="input"
-                  placeholder="重复输入密码"
+                  placeholder={t("syncPage.pw2Ph")}
                   value={exportPw2}
                   onChange={(e) => setExportPw2(e.target.value)}
                 />
               </div>
             </div>
 
+            <div className="mb-3">
+              <label className="field-label">{t("syncPage.exportAccessPw")}</label>
+              <input
+                type="password"
+                className="input"
+                placeholder={t("syncPage.exportAccessPwPh")}
+                value={exportAccessPw}
+                onChange={(e) => setExportAccessPw(e.target.value)}
+              />
+              <p className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                {t("syncPage.exportAccessPwHint")}
+              </p>
+            </div>
+
             {exportErr && (
-              <div className="err-text mb-3">❌ {exportErr}</div>
+              <div className="err-text mb-3">{t("syncPage.failErr", { error: exportErr })}</div>
             )}
 
             {exportResult && (
@@ -1136,7 +1333,11 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   border: "1px solid rgba(16, 185, 129, 0.3)",
                 }}
               >
-                ✅ 备份导出成功：包含 {exportResult.identityCount} 个身份，{exportResult.keyCount} 把密钥，{exportResult.repoCount} 个仓库。
+                {t("syncPage.exportOk", {
+                  identities: exportResult.identityCount,
+                  keys: exportResult.keyCount,
+                  repos: exportResult.repoCount,
+                })}
               </div>
             )}
 
@@ -1148,37 +1349,37 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
               style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
             >
               <Download size={13} />
-              {exporting ? "正在打包并加密…" : "导出离线备份"}
+              {exporting ? t("syncPage.exporting") : t("syncPage.exportBtn")}
             </button>
           </Card>
 
           {/* M6 本地离线备份导入 */}
-          <Card title="导入与还原离线备份">
+          <Card title={t("syncPage.importTitle")}>
             <p className="muted" style={{ fontSize: 11.5, marginBottom: 10 }}>
-              从已导出的 <code>.gambackup</code> 文件中恢复数据，可先解密预览清单后再确认合并。
+              {t("syncPage.importHint")}
             </p>
 
             <div className="grid grid-cols-2 gap-3 mb-3">
               <div>
-                <label className="field-label">选择备份文件 (.gambackup)</label>
+                <label className="field-label">{t("syncPage.pickBackup")}</label>
                 <div className="flex gap-2">
                   <input
                     className="input grow"
                     readOnly
-                    placeholder="未选择备份文件"
+                    placeholder={t("syncPage.noFile")}
                     value={importPath}
                   />
                   <button type="button" className="btn ghost sm" onClick={pickImportFile}>
-                    浏览…
+                    {t("syncPage.browse")}
                   </button>
                 </div>
               </div>
               <div>
-                <label className="field-label">备份加密密码</label>
+                <label className="field-label">{t("syncPage.backupPw")}</label>
                 <input
                   type="password"
                   className="input"
-                  placeholder="输入导出时的密码"
+                  placeholder={t("syncPage.backupPwPh")}
                   value={importPw}
                   onChange={(e) => setImportPw(e.target.value)}
                 />
@@ -1186,7 +1387,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
             </div>
 
             {importErr && (
-              <div className="err-text mb-3">❌ {importErr}</div>
+              <div className="err-text mb-3">{t("syncPage.failErr", { error: importErr })}</div>
             )}
 
             {importSuccess && (
@@ -1201,7 +1402,10 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   border: "1px solid rgba(16, 185, 129, 0.3)",
                 }}
               >
-                ✅ 备份导入成功：当前工作空间已合并更新（{importSuccess.identityCount} 个身份，{importSuccess.keyCount} 把密钥）。
+                {t("syncPage.importOk", {
+                  identities: importSuccess.identityCount,
+                  keys: importSuccess.keyCount,
+                })}
               </div>
             )}
 
@@ -1217,10 +1421,15 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 }}
               >
                 <div style={{ fontWeight: 600, color: "var(--accent)", marginBottom: 3 }}>
-                  📦 备份包解密成功，资产清单：
+                  {t("syncPage.inspectOk")}
                 </div>
                 <div style={{ color: "var(--text)" }}>
-                  • 备份时间：{new Date(importSummary.createdAt).toLocaleString()} · 身份：<b>{importSummary.identityCount}</b> 个 · 密钥：<b>{importSummary.keyCount}</b> 把 · 仓库：<b>{importSummary.repoCount}</b> 个
+                  {t("syncPage.inspectMeta", {
+                    at: new Date(importSummary.createdAt).toLocaleString(),
+                    identities: importSummary.identityCount,
+                    keys: importSummary.keyCount,
+                    repos: importSummary.repoCount,
+                  })}
                 </div>
               </div>
             )}
@@ -1234,7 +1443,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
               >
                 <Eye size={13} />
-                {inspecting ? "正在验证解密…" : "解密并预览"}
+                {inspecting ? t("syncPage.inspecting") : t("syncPage.inspectBtn")}
               </button>
               {importSummary && (
                 <button
@@ -1245,7 +1454,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   style={{ display: "inline-flex", alignItems: "center", gap: 5 }}
                 >
                   <Upload size={13} />
-                  {importing ? "正在导入合并…" : "确认合并到当前空间"}
+                  {importing ? t("syncPage.importing") : t("syncPage.importBtn")}
                 </button>
               )}
             </div>
@@ -1257,22 +1466,22 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
         <div className="wizard-overlay" onClick={() => setShareQr(null)}>
           <div className="card dialog-card" style={{ width: 360 }} onClick={(e) => e.stopPropagation()}>
             <div className="card-head">
-              <div className="card-title">分享云配置</div>
+              <div className="card-title">{t("syncPage.shareTitle")}</div>
             </div>
             <div className="card-body stack" style={{ alignItems: "center", textAlign: "center" }}>
               <img
-                alt="云存储配置二维码"
+                alt={t("syncPage.qrAlt")}
                 src={`data:image/png;base64,${shareQr}`}
                 style={{ width: 240, height: 240 }}
               />
               <div className="muted sm">
-                二维码只含云存储连接信息，不含恢复密钥，也不会推送数据。需要手机拉到最新保险库时，请先自行推送到云端。换机恢复仍需输入恢复密钥。
+                {t("syncPage.shareNote")}
               </div>
             </div>
             <div className="card-foot">
               <span />
               <button type="button" className="btn sm" onClick={() => setShareQr(null)}>
-                关闭
+                {t("common.close")}
               </button>
             </div>
           </div>

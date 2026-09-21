@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.6.0"
+version = "1.9.1"
 description = "御钥师 (Git Keymaster) - 本地 Git 多账号/身份保险库与智能识别管理"
 authors = ["Jeck"]
 license = ""
@@ -50,6 +50,8 @@ tauri-plugin-dialog = "2.7.3"
 tauri-plugin-process = "2"
 url = "2"
 semver = "1"
+# 安卓侧载也要先验安装包 minisign；不能只挂在桌面 updater 插件上。
+minisign-verify = "0.2"
 
 # ---- 2FA / 账号管理 ----
 data-encoding = "2.6"
@@ -73,13 +75,16 @@ tauri-plugin-updater = "2"
 xcap = "0.9"
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = "0.38"
 winreg = "0.55"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
+    "Win32_System_StationsAndDesktops",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows = { version = "0.61", features = [
@@ -93,12 +98,8 @@ windows = { version = "0.61", features = [
 ] }
 windows-future = "0.2"
 
-# 注意：`target_os = "macos"` **不覆盖 iOS**。M13 接 iOS 生物识别时，
-# 需共享的条目要显式改成 cfg(any(target_os = "macos", target_os = "ios"))。
-[target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "3"
-block2 = "0.6"
-objc2-foundation = { version = "0.3.2", features = ["NSData", "NSError", "NSString"] }
+# `target_os = "macos"` 不覆盖 iOS。Face ID / Touch ID 的 LAContext 两边共用。
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2-local-authentication = { version = "0.3.2", default-features = false, features = [
     "std",
     "LABiometryType",
@@ -107,6 +108,37 @@ objc2-local-authentication = { version = "0.3.2", default-features = false, feat
     "block2",
 ] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+objc2 = "0.6"
+block2 = "0.6"
+objc2-foundation = { version = "0.3.2", features = ["NSData", "NSError", "NSString"] }
+
 # 原生文件选择器只给非 Windows 的桌面平台；移动端走 tauri-plugin-dialog / SAF。
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 rfd = "0.15"
+
+# iOS：后台遮罩 + Face ID + UIPasteboard / 打开 http(s)。
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+block2 = "0.6"
+dispatch2 = { version = "0.3", default-features = false, features = ["std"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSNotification",
+    "NSObject",
+    "NSString",
+    "NSData",
+    "NSError",
+    "NSURL",
+    "block2",
+] }
+objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "UIPasteboard",
+    "UIApplication",
+    "UIResponder",
+] }
+
+[dev-dependencies]
+minisign = "0.7"

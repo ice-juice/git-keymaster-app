@@ -9,6 +9,7 @@ import {
   type UnlockAnimStyle,
 } from "./lib/prefs";
 import { forgetAgentStatus } from "./lib/agentCache";
+import { clearAllDrafts } from "./shared/noteDrafts";
 
 interface AppStore {
   status: VaultStatus | null;
@@ -90,6 +91,8 @@ export const useApp = create<AppStore>((set, get) => ({
   lock: async () => {
     await api.vaultLock();
     forgetAgentStatus();
+    // 内存里的备忘录草稿也要丢，否则重新解锁还能读到上一个人没保存的正文。
+    clearAllDrafts();
     const status = await api.vaultStatus();
     set({ status, writesLocked: false, startupNote: "", playUnlockAnim: false });
   },

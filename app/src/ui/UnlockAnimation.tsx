@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import type { UnlockAnimStyle } from "../lib/prefs";
 import "./UnlockAnimation.css";
 
@@ -17,6 +18,7 @@ const KEY_SLOT = [
 const LOCK = { x: 71.8, y: 54 };
 
 export function UnlockAnimation({ style = "cyber", onDone }: Props) {
+  const { t } = useTranslation();
   const [chosen] = useState(() => Math.floor(Math.random() * 3));
   const [phase, setPhase] = useState<"play" | "reveal">("play");
   const finished = useRef(false);
@@ -89,7 +91,7 @@ export function UnlockAnimation({ style = "cyber", onDone }: Props) {
 
       <div className="ua-wipe" />
       <div className="ua-streaks" />
-      <div className="ua-hint">点击任意处跳过 · ESC</div>
+      <div className="ua-hint">{t("common.skipAnim")}</div>
     </div>,
     document.body,
   );

@@ -41,7 +41,11 @@ pub fn current_platform() -> &'static str {
     {
         "android"
     }
-    #[cfg(not(any(windows, target_os = "macos", target_os = "android")))]
+    #[cfg(target_os = "ios")]
+    {
+        "ios"
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "android", target_os = "ios")))]
     {
         "linux"
     }

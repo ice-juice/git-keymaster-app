@@ -162,6 +162,20 @@ pub fn rewrite_to_alias(alias: &str, repo_path: &str) -> String {
     format!("git@{}:{}.git", alias, repo_path)
 }
 
+/// 改写为 HTTPS 地址：`https://<host>/<repo_path>.git`
+pub fn rewrite_to_https(host: &str, repo_path: &str) -> String {
+    format!("https://{}/{}.git", host.trim().trim_end_matches('/'), repo_path.trim_start_matches('/'))
+}
+
+/// 对可匿名探测的托管主机给出 HTTPS URL（公开仓不必靠 SSH 证明存在）。
+pub fn https_probe_url(host: &str, repo_path: &str) -> Option<String> {
+    let host = host.trim().to_lowercase();
+    match host.as_str() {
+        "github.com" | "gitlab.com" | "gitee.com" => Some(rewrite_to_https(&host, repo_path)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +267,15 @@ mod tests {
             rewrite_to_alias("github-techn", "owner/repo"),
             "git@github-techn:owner/repo.git"
         );
+    }
+
+    #[test]
+    fn https_probe_url_for_public_hosts() {
+        assert_eq!(
+            https_probe_url("github.com", "ice-juice/git-keymaster-app").as_deref(),
+            Some("https://github.com/ice-juice/git-keymaster-app.git")
+        );
+        assert!(https_probe_url("ssh.boxexchanger.net", "owner/repo").is_none());
     }
 
     #[test]

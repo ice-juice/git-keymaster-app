@@ -242,6 +242,8 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: node scripts/sync-release-assets.mjs "${{ steps.meta.outputs.tag }}"
 
       - name: Upload installers
@@ -262,10 +264,21 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
       - name: Copy latest.json to legacy locale aliases
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
           command -v gh
@@ -374,6 +387,19 @@ jobs:
           ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
         run: node scripts/setup-android-signing.mjs
 
+      - name: Require updater signing secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]]; then
+            echo "::error::缺少 Secrets.TAURI_SIGNING_PRIVATE_KEY，无法给 APK / latest.json 做 minisign"
+            exit 1
+          fi
+          if [[ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ]]; then
+            echo "::error::缺少 Secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+            exit 1
+          fi
+
       - name: Install frontend dependencies
         working-directory: app
         run: npm ci
@@ -393,6 +419,9 @@ jobs:
         run: npx tauri android build --apk --target aarch64 --split-per-abi
 
       - name: Normalize Android APK name
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: node scripts/rename-release-assets.mjs --android
 
       - name: Upload Android APK to GitHub Release
@@ -412,18 +441,24 @@ jobs:
             echo "::error::期望刚好 1 个改名后的 APK，实际是 ${#apks[@]}"
             exit 1
           fi
+          if [[ ! -f "${apks[0]}.sig" ]]; then
+            echo "::error::缺少对应的 .apk.sig，安卓包必须先做 minisign"
+            exit 1
+          fi
           if ! gh release view "$tag" --repo ice-juice/git-keymaster-app >/dev/null 2>&1; then
             version="${tag#v}"
             notes="$(bash scripts/build-release-notes.sh "$version")"
             gh release create "$tag" --draft --title "Git Keymaster $tag" --notes "$notes" --target release --repo ice-juice/git-keymaster-app
           fi
-          gh release upload "$tag" "${apks[0]}" --clobber --repo ice-juice/git-keymaster-app
+          gh release upload "$tag" "${apks[0]}" "${apks[0]}.sig" --clobber --repo ice-juice/git-keymaster-app
 
       - name: Merge Android APK into latest.json
         if: steps.meta.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: node scripts/sync-release-assets.mjs "${{ steps.meta.outputs.tag }}"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: node scripts/sync-release-assets.mjs --merge-android "${{ steps.meta.outputs.tag }}"
 
       - name: Upload Android APK artifact
         if: ${{ !cancelled() }}
@@ -431,3 +466,108 @@ jobs:
         with:
           name: keymaster-android
           path: app/src-tauri/gen/android/app/build/outputs/apk/arm64/release/Git.Keymaster_*_arm64-v8a.apk
+
+  # 未签名 ipa 只 upload-artifact，不进 GitHub Release。
+  # 不依赖 preflight：允许从 dest 用 workflow_dispatch 只出包联调。
+  # 打 v* 标签时仍要求提交落在 release。
+  build-ios:
+    name: ios
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Guard iOS publish vs artifact-only
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == workflow_dispatch && "${{ inputs.create_release }}" != "true" ]]; then
+            echo "iOS artifact-only build from ${GITHUB_REF}"
+            exit 0
+          fi
+          if [[ "${GITHUB_REF}" == refs/heads/release ]]; then
+            echo "Building iOS from release branch"
+            exit 0
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            git fetch origin release --depth=100
+            if git merge-base --is-ancestor HEAD origin/release; then
+              echo "Tag ${GITHUB_REF_NAME} is on release"
+              exit 0
+            fi
+            echo "::error::v* 标签必须打在 release 分支的提交上"
+            exit 1
+          fi
+          echo "::error::带 create_release 的 iOS 打包只允许在 release 分支或基于该分支的 v* 标签上执行"
+          exit 1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: app/src-tauri
+          prefix-key: ios-aarch64
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: Update Tauri Icons from SVG
+        working-directory: app
+        run: npx tauri icon public/logo.svg
+
+      - name: Init Xcode project if missing
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d src-tauri/gen/apple ]]; then
+            npx tauri ios init --ci
+          fi
+
+      - name: Prepare unified package branding
+        run: node scripts/prepare-lang.mjs unified
+
+      - name: Verify prepared branding
+        run: node scripts/check-release-invariants.mjs --prepared unified
+
+      - name: Disable iOS code signing in Xcode project
+        run: node scripts/disable-ios-signing.mjs
+
+      - name: Build unsigned iOS app
+        working-directory: app
+        shell: bash
+        run: |
+          set -euo pipefail
+          # `tauri ios build -- KEY=VAL` 会把 KEY 丢给 cargo，到不了 xcodebuild。
+          # 2.11.4 的 --no-sign 才会走 cargo-mobile2 skip_codesign，并跳过需要证书的 export。
+          # 包装 xcodebuild：每次真正编译前再打一次 pbxproj，盖掉 Tauri 的 synchronize。
+          wrap="${RUNNER_TEMP:-/tmp}/xcodebuild-unsigned"
+          export XCODEBUILD="$(command -v xcodebuild)"
+          node ../scripts/disable-ios-signing.mjs --wrap "$wrap"
+          chmod +x "$wrap/xcodebuild"
+          export PATH="$wrap:$PATH"
+          npx tauri ios build --no-sign --ci --target aarch64
+
+      - name: Pack unsigned ipa
+        run: node scripts/pack-ios-ipa.mjs
+
+      - name: Upload iOS ipa artifact
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: keymaster-ios
+          path: app/src-tauri/gen/apple/御钥师_*.ipa

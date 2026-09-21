@@ -1,19 +1,44 @@
 //! M5 命令层：地址解析/身份推断、仓库扫描/体检/切换、归属标识管理、PAT 上传公钥。
 
 use crate::agent::AgentEnv;
-use crate::commands::{recover_lock, AppState};
+use crate::commands::{ensure_reveal_authorized, recover_lock, AppState};
 use crate::error::{AppError, Result};
-use crate::git::infer::{infer, Inference};
+use crate::git::infer::{
+    apply_probe_hits, classify_ls_remote, identities_for_probe, infer, Inference, ProbeFailClass,
+    ProbeHit,
+};
 use crate::git::url::parse_repo_url;
-use crate::git::{github, repo};
+use crate::git::{gitee, github, gitlab, repo, GitProvider};
 use crate::model::ManagedRepo;
 use crate::store;
 use crate::sys;
 use crate::vault::Vault;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, State};
+
+const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
+
+#[cfg(any(target_os = "android", target_os = "ios"))]
+fn unsupported_local_git<T>() -> Result<T> {
+    Err(AppError::Unsupported("本机 Git"))
+}
+
+/// `reqwest::blocking` 不能在 `#[tauri::command(async)]` 的 Tokio 线程里创建或收尾，
+/// 否则界面会一直转圈、甚至把运行时卡死（与云同步同一类问题）。
+async fn run_pat_http<T, F>(f: F) -> Result<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Other(format!("PAT 请求中断：{e}")))?
+}
 
 fn with_vault<T>(state: &State<AppState>, f: impl FnOnce(&Vault) -> Result<T>) -> Result<T> {
     let vault = recover_lock(&state.vault);
@@ -31,6 +56,207 @@ pub fn resolve_url(state: State<AppState>, url: String) -> Result<Inference> {
     with_vault(&state, |v| {
         let data = store::load_data(v)?;
         Ok(infer(&parsed, &data.identities, &data.clone_history))
+    })
+}
+
+fn current_agent_env(state: &State<AppState>) -> AgentEnv {
+    let current = recover_lock(&state.agent_env).clone();
+    if crate::agent::is_ready(&current) {
+        current
+    } else {
+        match crate::agent::ensure() {
+            Ok(started) => {
+                *recover_lock(&state.agent_env) = started.clone();
+                started
+            }
+            Err(_) => current,
+        }
+    }
+}
+
+fn configure_git_command(
+    cmd: &mut Command,
+    env: &AgentEnv,
+    proxy: Option<&crate::app_config::NetworkProxy>,
+) -> Result<()> {
+    crate::agent::apply_to_command(cmd, env);
+    let ssh = crate::agent::ssh_bin(env);
+    let home_cfg = crate::sys::home_included_config();
+    let ssh_cmd = if home_cfg.is_file() {
+        let cfg = home_cfg.to_string_lossy().replace('\\', "/");
+        format!("\"{ssh}\" -F \"{cfg}\" -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
+    } else {
+        format!("\"{ssh}\" -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
+    };
+    cmd.env("GIT_SSH_COMMAND", ssh_cmd);
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    cmd.env("GCM_INTERACTIVE", "never");
+    if let Some(p) = proxy {
+        crate::net::apply_git_command(cmd, p)?;
+    }
+    Ok(())
+}
+
+fn run_git_timeout(
+    env: &AgentEnv,
+    args: &[&str],
+    proxy: Option<&crate::app_config::NetworkProxy>,
+    timeout: Duration,
+) -> Result<(String, String, i32)> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (env, args, proxy, timeout);
+        return unsupported_local_git();
+    }
+    let mut cmd = Command::new("git");
+    cmd.args(args);
+    configure_git_command(&mut cmd, env, proxy)?;
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AppError::Io(format!("执行 git 失败：{e}")))?;
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let out_h = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = stdout_pipe.take() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_h = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = stderr_pipe.take() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let stdout = String::from_utf8_lossy(&out_h.join().unwrap_or_default()).to_string();
+                let stderr = String::from_utf8_lossy(&err_h.join().unwrap_or_default()).to_string();
+                return Ok((stdout, stderr, status.code().unwrap_or(-1)));
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = out_h.join();
+                let _ = err_h.join();
+                return Ok((String::new(), String::new(), -1));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(40)),
+            Err(e) => return Err(AppError::Io(format!("等待 git 失败：{e}"))),
+        }
+    }
+}
+
+fn public_https_probe_url(
+    parsed: &crate::git::url::ParsedRepo,
+    targets: &[crate::model::Identity],
+) -> Option<String> {
+    if let Some(host) = parsed.host.as_deref() {
+        if !parsed.is_alias {
+            if let Some(u) = crate::git::url::https_probe_url(host, &parsed.repo_path) {
+                return Some(u);
+            }
+        }
+    }
+    targets
+        .iter()
+        .find_map(|id| crate::git::url::https_probe_url(&id.real_host, &parsed.repo_path))
+}
+
+/// 对候选身份跑 `git ls-remote`：公开托管主机先 HTTPS 探仓库是否存在，再按身份走 SSH 别名。
+#[tauri::command]
+pub fn probe_url_identity(state: State<AppState>, url: String) -> Result<Inference> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (state, url);
+        return unsupported_local_git();
+    }
+    let parsed = parse_repo_url(&url)?;
+    let env = current_agent_env(&state);
+    let proxy = {
+        let cfg = recover_lock(&state.config);
+        crate::net::effective(&cfg)
+    };
+
+    with_vault(&state, |v| {
+        let data = store::load_data(v)?;
+        let targets: Vec<crate::model::Identity> = identities_for_probe(&parsed, &data.identities)
+            .into_iter()
+            .cloned()
+            .collect();
+        if targets.is_empty() {
+            return Ok(infer(&parsed, &data.identities, &data.clone_history));
+        }
+        let mut key_load_failed = HashSet::new();
+        for id in &targets {
+            if let Some(key_id) = &id.key_id {
+                if crate::agent::load_key(v, &env, key_id).is_err() {
+                    key_load_failed.insert(id.id.clone());
+                }
+            }
+        }
+        let public_https_ok = match public_https_probe_url(&parsed, &targets) {
+            Some(https_url) => matches!(
+                run_git_timeout(
+                    &env,
+                    &["ls-remote", &https_url],
+                    proxy.as_ref(),
+                    PROBE_TIMEOUT,
+                ),
+                Ok((_o, _e, 0))
+            ),
+            None => false,
+        };
+        let repo_path = parsed.repo_path.clone();
+        let hits = std::thread::scope(|scope| {
+            let handles: Vec<_> = targets
+                .iter()
+                .map(|id| {
+                    let env = env.clone();
+                    let proxy = proxy.clone();
+                    let alias_url = crate::git::url::rewrite_to_alias(&id.host_alias, &repo_path);
+                    let identity_id = id.id.clone();
+                    let key_failed = key_load_failed.contains(&identity_id);
+                    scope.spawn(move || {
+                        let (ssh_ok, mut fail) = match run_git_timeout(
+                            &env,
+                            &["ls-remote", &alias_url],
+                            proxy.as_ref(),
+                            PROBE_TIMEOUT,
+                        ) {
+                            Ok((_o, _e, 0)) => (true, ProbeFailClass::NetworkSsh),
+                            Ok((_o, e, code)) => (false, classify_ls_remote(code, &e)),
+                            Err(_) => (false, ProbeFailClass::NetworkSsh),
+                        };
+                        if !ssh_ok && key_failed {
+                            fail = ProbeFailClass::KeyMissing;
+                        }
+                        ProbeHit {
+                            identity_id,
+                            ssh_ok,
+                            fail,
+                        }
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().ok())
+                .collect::<Vec<_>>()
+        });
+        Ok(apply_probe_hits(
+            &parsed,
+            &data.identities,
+            &data.clone_history,
+            &hits,
+            public_https_ok,
+        ))
     })
 }
 
@@ -134,6 +360,11 @@ fn upsert_from_info(
 }
 
 fn set_origin_url(repo_path: &str, url: &str) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (repo_path, url);
+        return unsupported_local_git();
+    }
     let (_o, _e, code) = sys::run("git", &["-C", repo_path, "remote", "get-url", "origin"])?;
     let (args, fail): (Vec<&str>, &str) = if code == 0 {
         (vec!["-C", repo_path, "remote", "set-url", "origin", url], "更新 origin 失败")
@@ -150,6 +381,11 @@ fn set_origin_url(repo_path: &str, url: &str) -> Result<()> {
 /// 扫描根目录下的仓库并逐个体检（不入库，供预览）。
 #[tauri::command]
 pub fn scan_repos(state: State<AppState>, root: String, max_depth: Option<usize>) -> Result<Vec<repo::RepoInfo>> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (state, root, max_depth);
+        return unsupported_local_git();
+    }
     let depth = max_depth.unwrap_or(5);
     with_vault(&state, |v| {
         let data = store::load_data(v)?;
@@ -169,6 +405,11 @@ pub fn scan_and_import_repos(
     root: String,
     max_depth: Option<usize>,
 ) -> Result<ImportScanResult> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, root, max_depth);
+        return unsupported_local_git();
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let depth = max_depth.unwrap_or(5);
     let r = with_vault(&state, |v| {
@@ -304,6 +545,11 @@ pub struct SetRepoRemoteArgs {
 /// 更换已登记仓库的 origin URL；可选同时绑定身份并改写为别名地址。
 #[tauri::command]
 pub fn set_repo_remote(app: AppHandle, state: State<AppState>, args: SetRepoRemoteArgs) -> Result<ManagedRepoView> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, args);
+        return unsupported_local_git();
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let r = with_vault(&state, |v| {
         let mut data = store::load_data(v)?;
@@ -363,6 +609,11 @@ pub fn set_repo_remote(app: AppHandle, state: State<AppState>, args: SetRepoRemo
 /// 用资源管理器打开仓库目录。
 #[tauri::command]
 pub fn open_repo_dir(path: String) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = path;
+        return unsupported_local_git();
+    }
     let p = PathBuf::from(path.trim());
     if !p.is_dir() {
         return Err(AppError::Invalid("目录不存在，无法打开".into()));
@@ -381,7 +632,7 @@ pub fn open_repo_dir(path: String) -> Result<()> {
             .spawn()
             .map_err(|e| AppError::Io(format!("打开目录失败：{e}")))?;
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
     {
         std::process::Command::new("xdg-open")
             .arg(&p)
@@ -422,6 +673,11 @@ pub fn add_owner(app: AppHandle, state: State<AppState>, identity_id: String, ow
 /// 切换某仓库的身份：改 remote 为别名地址 + 设提交身份 + 学习归属。
 #[tauri::command]
 pub fn switch_repo_identity(app: AppHandle, state: State<AppState>, repo_path: String, identity_id: String) -> Result<String> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, repo_path, identity_id);
+        return unsupported_local_git();
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let r = with_vault(&state, |v| {
         let mut data = store::load_data(v)?;
@@ -484,6 +740,11 @@ pub struct CloneResult {
 /// 探测选定文件夹适合 clone 还是 init，不落盘、不执行 git。
 #[tauri::command]
 pub fn inspect_clone_target(dest_dir: String, repo_name: String) -> Result<repo::ClonePlan> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (dest_dir, repo_name);
+        return unsupported_local_git();
+    }
     if dest_dir.trim().is_empty() {
         return Err(AppError::Invalid("请先选择目标文件夹".into()));
     }
@@ -505,23 +766,14 @@ fn run_git(
     args: &[&str],
     proxy: Option<&crate::app_config::NetworkProxy>,
 ) -> Result<(String, String, i32)> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (env, args, proxy);
+        return unsupported_local_git();
+    }
     let mut cmd = Command::new("git");
     cmd.args(args);
-    crate::agent::apply_to_command(&mut cmd, env);
-    let ssh = crate::agent::ssh_bin(env);
-    if env.ssh.is_some() || ssh != "ssh" {
-        let home_cfg = crate::sys::home_included_config();
-        let ssh_cmd = if home_cfg.is_file() {
-            let cfg = home_cfg.to_string_lossy().replace('\\', "/");
-            format!("\"{ssh}\" -F \"{cfg}\" -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
-        } else {
-            format!("\"{ssh}\" -o BatchMode=yes -o StrictHostKeyChecking=accept-new")
-        };
-        cmd.env("GIT_SSH_COMMAND", ssh_cmd);
-    }
-    if let Some(p) = proxy {
-        crate::net::apply_git_command(&mut cmd, p)?;
-    }
+    configure_git_command(&mut cmd, env, proxy)?;
     let output = cmd
         .output()
         .map_err(|e| AppError::Io(format!("执行 git 失败：{e}")))?;
@@ -533,6 +785,11 @@ fn run_git(
 }
 
 fn apply_local_identity(repo_path: &str, name: Option<&str>, email: Option<&str>) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (repo_path, name, email);
+        return unsupported_local_git();
+    }
     if let Some(n) = name {
         sys::run("git", &["-C", repo_path, "config", "user.name", n])?;
     }
@@ -545,6 +802,11 @@ fn apply_local_identity(repo_path: &str, name: Option<&str>, email: Option<&str>
 /// 按探测结果把仓库落到本地：空目录 clone，已有项目 init，已有裸仓库补 remote。
 #[tauri::command]
 pub fn clone_repo(app: AppHandle, state: State<AppState>, args: CloneOrInitArgs) -> Result<CloneResult> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, state, args);
+        return unsupported_local_git();
+    }
     crate::commands::ensure_writes_allowed(&state)?;
     let parsed = parse_repo_url(&args.url)?;
     let dest = PathBuf::from(args.dest_dir.trim());
@@ -678,24 +940,99 @@ pub struct GithubPatStatus {
     pub configured: bool,
 }
 
-/// 查询是否已保存 GitHub PAT（不回传令牌本身）。
+fn pat_of(secrets: &crate::model::Secrets, provider: GitProvider) -> Option<&str> {
+    match provider {
+        GitProvider::Github => secrets.github_pat.as_deref(),
+        GitProvider::Gitlab => secrets.gitlab_pat.as_deref(),
+        GitProvider::Gitee => secrets.gitee_pat.as_deref(),
+    }
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+}
+
+fn set_pat(secrets: &mut crate::model::Secrets, provider: GitProvider, token: Option<String>) {
+    match provider {
+        GitProvider::Github => secrets.github_pat = token,
+        GitProvider::Gitlab => secrets.gitlab_pat = token,
+        GitProvider::Gitee => secrets.gitee_pat = token,
+    }
+}
+
+fn provider_whoami(
+    provider: GitProvider,
+    token: &str,
+    proxy: Option<&crate::app_config::NetworkProxy>,
+) -> Result<String> {
+    match provider {
+        GitProvider::Github => github::whoami(token, proxy),
+        GitProvider::Gitlab => gitlab::whoami(token, proxy),
+        GitProvider::Gitee => gitee::whoami(token, proxy),
+    }
+}
+
+fn provider_list_orgs(
+    provider: GitProvider,
+    token: &str,
+    proxy: Option<&crate::app_config::NetworkProxy>,
+) -> Result<Vec<String>> {
+    match provider {
+        GitProvider::Github => github::list_orgs(token, proxy),
+        GitProvider::Gitlab => gitlab::list_orgs(token, proxy),
+        GitProvider::Gitee => gitee::list_orgs(token, proxy),
+    }
+}
+
+fn provider_upload_key(
+    provider: GitProvider,
+    token: &str,
+    title: &str,
+    public_openssh: &str,
+    proxy: Option<&crate::app_config::NetworkProxy>,
+) -> Result<()> {
+    match provider {
+        GitProvider::Github => github::upload_public_key(token, title, public_openssh, proxy),
+        GitProvider::Gitlab => gitlab::upload_public_key(token, title, public_openssh, proxy),
+        GitProvider::Gitee => gitee::upload_public_key(token, title, public_openssh, proxy),
+    }
+}
+
+/// 二次验证后回传已保存的 PAT 明文（吃免密查看时效）。
+#[tauri::command]
+pub fn reveal_git_pat(
+    state: State<AppState>,
+    provider: GitProvider,
+    password: Option<String>,
+) -> Result<String> {
+    ensure_reveal_authorized(&state, password.as_deref())?;
+    with_vault(&state, |v| {
+        let secrets = store::load_secrets(v)?;
+        let token = pat_of(&secrets, provider)
+            .ok_or_else(|| AppError::Invalid("尚未配置 PAT".into()))?
+            .to_string();
+        crate::util::audit(v.root(), &format!("查看 {} PAT", provider.as_str()));
+        Ok(token)
+    })
+}
+
+/// 查询是否已保存某平台 PAT（不回传令牌本身）。
 #[tauri::command(async)]
-pub fn github_pat_status(state: State<'_, AppState>) -> Result<GithubPatStatus> {
+pub fn git_pat_status(state: State<'_, AppState>, provider: GitProvider) -> Result<GithubPatStatus> {
     with_vault(&state, |v| {
         let secrets = store::load_secrets(v)?;
         Ok(GithubPatStatus {
-            configured: secrets
-                .github_pat
-                .as_deref()
-                .map(|s| !s.trim().is_empty())
-                .unwrap_or(false),
+            configured: pat_of(&secrets, provider).is_some(),
         })
     })
 }
 
-/// 保存 GitHub PAT（存入 vault，绝不落明文）。
+/// 保存某平台 PAT（存入 vault，绝不落明文、不进日志）。
 #[tauri::command]
-pub fn set_github_pat(app: AppHandle, state: State<AppState>, token: String) -> Result<()> {
+pub fn set_git_pat(
+    app: AppHandle,
+    state: State<AppState>,
+    provider: GitProvider,
+    token: String,
+) -> Result<()> {
     crate::commands::ensure_writes_allowed(&state)?;
     let token = token.trim().to_string();
     if token.is_empty() {
@@ -703,24 +1040,24 @@ pub fn set_github_pat(app: AppHandle, state: State<AppState>, token: String) -> 
     }
     with_vault(&state, |v| {
         let mut secrets = store::load_secrets(v)?;
-        secrets.github_pat = Some(token);
+        set_pat(&mut secrets, provider, Some(token));
         store::save_secrets(v, &secrets)?;
-        crate::util::audit(v.root(), "保存 GitHub PAT");
+        crate::util::audit(v.root(), &format!("保存 {} PAT", provider.as_str()));
         Ok(())
     })?;
     crate::sync::scheduler::kick_publish(app);
     Ok(())
 }
 
-/// 清除已保存的 GitHub PAT。
+/// 清除已保存的某平台 PAT。
 #[tauri::command]
-pub fn clear_github_pat(app: AppHandle, state: State<AppState>) -> Result<()> {
+pub fn clear_git_pat(app: AppHandle, state: State<AppState>, provider: GitProvider) -> Result<()> {
     crate::commands::ensure_writes_allowed(&state)?;
     with_vault(&state, |v| {
         let mut secrets = store::load_secrets(v)?;
-        secrets.github_pat = None;
+        set_pat(&mut secrets, provider, None);
         store::save_secrets(v, &secrets)?;
-        crate::util::audit(v.root(), "清除 GitHub PAT");
+        crate::util::audit(v.root(), &format!("清除 {} PAT", provider.as_str()));
         Ok(())
     })?;
     crate::sync::scheduler::kick_publish(app);
@@ -729,48 +1066,95 @@ pub fn clear_github_pat(app: AppHandle, state: State<AppState>) -> Result<()> {
 
 /// 校验 PAT 并返回账号名。
 #[tauri::command(async)]
-pub fn test_github_pat(state: State<'_, AppState>) -> Result<String> {
+pub async fn test_git_pat(state: State<'_, AppState>, provider: GitProvider) -> Result<String> {
     let proxy = crate::net::effective(&recover_lock(&state.config));
-    with_vault(&state, |v| {
+    let token = with_vault(&state, |v| {
         let secrets = store::load_secrets(v)?;
-        let token = secrets
-            .github_pat
-            .ok_or_else(|| AppError::Invalid("尚未配置 PAT".into()))?;
-        github::whoami(&token, proxy.as_ref())
-    })
+        pat_of(&secrets, provider)
+            .ok_or_else(|| AppError::Invalid("尚未配置 PAT".into()))
+            .map(|s| s.to_string())
+    })?;
+    run_pat_http(move || provider_whoami(provider, &token, proxy.as_ref())).await
 }
 
 /// 拉取 PAT 账号所属组织（供批量导入归属标识）。
 #[tauri::command(async)]
-pub fn list_github_orgs(state: State<'_, AppState>) -> Result<Vec<String>> {
+pub async fn list_git_orgs(state: State<'_, AppState>, provider: GitProvider) -> Result<Vec<String>> {
     let proxy = crate::net::effective(&recover_lock(&state.config));
-    with_vault(&state, |v| {
+    let token = with_vault(&state, |v| {
         let secrets = store::load_secrets(v)?;
-        let token = secrets
-            .github_pat
-            .ok_or_else(|| AppError::Invalid("尚未配置 PAT".into()))?;
-        github::list_orgs(&token, proxy.as_ref())
-    })
+        pat_of(&secrets, provider)
+            .ok_or_else(|| AppError::Invalid("尚未配置 PAT".into()))
+            .map(|s| s.to_string())
+    })?;
+    run_pat_http(move || provider_list_orgs(provider, &token, proxy.as_ref())).await
 }
 
-/// 用 PAT 上传某把密钥的公钥到 GitHub。
+/// 用 PAT 上传某把密钥的公钥到对应平台。
 #[tauri::command]
-pub fn upload_public_key(state: State<AppState>, key_id: String, title: String) -> Result<()> {
+pub fn upload_git_public_key(
+    state: State<AppState>,
+    provider: GitProvider,
+    key_id: String,
+    title: String,
+) -> Result<()> {
     crate::commands::ensure_writes_allowed(&state)?;
     let proxy = crate::net::effective(&recover_lock(&state.config));
-    with_vault(&state, |v| {
+    let (token, public_openssh, key_name, root) = with_vault(&state, |v| {
         let secrets = store::load_secrets(v)?;
-        let token = secrets
-            .github_pat
-            .ok_or_else(|| AppError::Invalid("尚未配置 PAT，可改用复制公钥手动添加".into()))?;
+        let token = pat_of(&secrets, provider)
+            .ok_or_else(|| AppError::Invalid("尚未配置 PAT，可改用复制公钥手动添加".into()))?
+            .to_string();
         let data = store::load_data(v)?;
         let record = data
             .keys
             .iter()
             .find(|k| k.id == key_id)
             .ok_or_else(|| AppError::Invalid("密钥不存在".into()))?;
-        github::upload_public_key(&token, &title, &record.public_openssh, proxy.as_ref())?;
-        crate::util::audit(v.root(), &format!("PAT 上传公钥 {}", record.name));
-        Ok(())
-    })
+        Ok((
+            token,
+            record.public_openssh.clone(),
+            record.name.clone(),
+            v.root().to_path_buf(),
+        ))
+    })?;
+    provider_upload_key(provider, &token, &title, &public_openssh, proxy.as_ref())?;
+    crate::util::audit(&root, &format!("PAT 上传公钥 {key_name}"));
+    Ok(())
+}
+
+/// 查询是否已保存 GitHub PAT（不回传令牌本身）。
+#[tauri::command(async)]
+pub fn github_pat_status(state: State<'_, AppState>) -> Result<GithubPatStatus> {
+    git_pat_status(state, GitProvider::Github)
+}
+
+/// 保存 GitHub PAT（存入 vault，绝不落明文）。
+#[tauri::command]
+pub fn set_github_pat(app: AppHandle, state: State<AppState>, token: String) -> Result<()> {
+    set_git_pat(app, state, GitProvider::Github, token)
+}
+
+/// 清除已保存的 GitHub PAT。
+#[tauri::command]
+pub fn clear_github_pat(app: AppHandle, state: State<AppState>) -> Result<()> {
+    clear_git_pat(app, state, GitProvider::Github)
+}
+
+/// 校验 PAT 并返回账号名。
+#[tauri::command(async)]
+pub async fn test_github_pat(state: State<'_, AppState>) -> Result<String> {
+    test_git_pat(state, GitProvider::Github).await
+}
+
+/// 拉取 PAT 账号所属组织（供批量导入归属标识）。
+#[tauri::command(async)]
+pub async fn list_github_orgs(state: State<'_, AppState>) -> Result<Vec<String>> {
+    list_git_orgs(state, GitProvider::Github).await
+}
+
+/// 用 PAT 上传某把密钥的公钥到 GitHub。
+#[tauri::command]
+pub fn upload_public_key(state: State<AppState>, key_id: String, title: String) -> Result<()> {
+    upload_git_public_key(state, GitProvider::Github, key_id, title)
 }

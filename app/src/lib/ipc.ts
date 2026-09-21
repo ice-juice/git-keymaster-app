@@ -1,5 +1,6 @@
 // 类型化 IPC 封装：对 Rust 命令的薄包装 + 类型定义。
 import { invoke } from "@tauri-apps/api/core";
+import { i18n } from "./i18n";
 
 export interface AppErrorShape {
   code: string;
@@ -19,8 +20,16 @@ export interface VaultStatus {
   graceActive: boolean;
   graceExpiresAt: string | null;
   closeAction: "tray" | "quit" | null;
+  mobileBackgroundRun?: boolean;
   writesLocked?: boolean;
   startupNote?: string | null;
+}
+
+export interface AutoLockSettings {
+  autoLockMinutes: number;
+  lockOnSleep: boolean;
+  /** 本平台能否判定锁屏。false 时只有休眠会触发锁定。 */
+  screenLockDetectable: boolean;
 }
 
 export interface BiometricStatus {
@@ -190,12 +199,24 @@ export interface AgentStatus {
   keys: AgentKeyResolved[];
   unify: AgentUnifyStatus;
 }
+export type GitProvider = "github" | "gitlab" | "gitee";
+
+export type ProbeKind =
+  | "sshOk"
+  | "publicOwner"
+  | "publicNoClaim"
+  | "repoMissing"
+  | "keyMissing"
+  | "noAccess"
+  | "networkSsh";
+
 export interface Candidate {
   identityId: string;
   identityName: string;
   hostAlias: string;
   confidence: "certain" | "veryHigh" | "mediumHigh" | "low";
   basis: string;
+  probeKind?: ProbeKind;
 }
 export interface Inference {
   rewrittenUrl: string | null;
@@ -346,6 +367,14 @@ export interface AutoSyncSettings {
   lastAutoSyncAt?: string | null;
   lastAutoSyncMessage?: string | null;
   defaultMinutes: number;
+  syncAttachmentsWifiOnly: boolean;
+  syncAttachmentsManualOnly: boolean;
+}
+
+export interface BlobSyncProgress {
+  phase: "upload" | "download" | string;
+  current: number;
+  total: number;
 }
 
 export interface CloudSnapshot {
@@ -450,6 +479,13 @@ export const api = {
   vaultTryGraceUnlock: () => invoke<boolean>("vault_try_grace_unlock"),
   setLaunchAtLogin: (enabled: boolean) => invoke<void>("set_launch_at_login", { enabled }),
   setGraceDays: (days: number) => invoke<void>("set_grace_days", { days }),
+  reportActivity: () => invoke<void>("report_activity"),
+  getAutoLockSettings: () => invoke<AutoLockSettings>("get_auto_lock_settings"),
+  setAutoLockMinutes: (minutes: number) => invoke<number>("set_auto_lock_minutes", { minutes }),
+  setLockOnSleep: (enabled: boolean) => invoke<void>("set_lock_on_sleep", { enabled }),
+  setMobileBackgroundRun: (enabled: boolean) =>
+    invoke<void>("set_mobile_background_run", { enabled }),
+  mobileLeaveApp: (keepAlive: boolean) => invoke<void>("mobile_leave_app", { keepAlive }),
   factoryReset: (confirmed: boolean, confirmPhrase: string) =>
     invoke<{ steps: string[] }>("factory_reset", { confirmed, confirmPhrase }),
   applyCloseChoice: (action: "tray" | "quit" | "cancel", remember: boolean) =>
@@ -513,6 +549,7 @@ export const api = {
 
   // repo (M5)
   resolveUrl: (url: string) => invoke<Inference>("resolve_url", { url }),
+  probeUrlIdentity: (url: string) => invoke<Inference>("probe_url_identity", { url }),
   scanRepos: (root: string, maxDepth?: number) => invoke<RepoInfo[]>("scan_repos", { root, maxDepth }),
   scanAndImportRepos: (root: string, maxDepth?: number) =>
     invoke<ImportScanResult>("scan_and_import_repos", { root, maxDepth }),
@@ -533,10 +570,33 @@ export const api = {
   testGithubPat: () => invoke<string>("test_github_pat"),
   listGithubOrgs: () => invoke<string[]>("list_github_orgs"),
   uploadPublicKey: (keyId: string, title: string) => invoke<void>("upload_public_key", { keyId, title }),
+  gitPatStatus: (provider: GitProvider) =>
+    invoke<{ configured: boolean }>("git_pat_status", { provider }),
+  revealGitPat: (provider: GitProvider, password?: string | null) =>
+    invoke<string>("reveal_git_pat", { provider, password: password ?? null }),
+  setGitPat: (provider: GitProvider, token: string) =>
+    invoke<void>("set_git_pat", { provider, token }),
+  clearGitPat: (provider: GitProvider) => invoke<void>("clear_git_pat", { provider }),
+  testGitPat: (provider: GitProvider) => invoke<string>("test_git_pat", { provider }),
+  listGitOrgs: (provider: GitProvider) => invoke<string[]>("list_git_orgs", { provider }),
+  uploadGitPublicKey: (provider: GitProvider, keyId: string, title: string) =>
+    invoke<void>("upload_git_public_key", { provider, keyId, title }),
+  ghCliStatus: () =>
+    invoke<{ installed: boolean; loggedIn: boolean; login: string | null }>("gh_cli_status"),
+  ghCliLogin: () =>
+    invoke<{
+      started: boolean;
+      deviceCode: string | null;
+      installed: boolean;
+      loggedIn: boolean;
+      login: string | null;
+    }>("gh_cli_login"),
+  ghCliCancel: () =>
+    invoke<{ installed: boolean; loggedIn: boolean; login: string | null }>("gh_cli_cancel"),
 
   // backup (M6)
-  exportVaultBackup: (destPath: string, password: string) =>
-    invoke<BackupSummary>("export_vault_backup", { destPath, password }),
+  exportVaultBackup: (destPath: string, password: string, accessPassword: string) =>
+    invoke<BackupSummary>("export_vault_backup", { destPath, password, accessPassword }),
   inspectVaultBackup: (srcPath: string, password: string) =>
     invoke<BackupSummary>("inspect_vault_backup", { srcPath, password }),
   importVaultBackup: (srcPath: string, password: string, merge: boolean) =>
@@ -546,8 +606,10 @@ export const api = {
   getCloudSyncConfig: () => invoke<S3Config | null>("get_cloud_sync_config"),
   saveCloudSyncConfig: (syncConfig: S3Config | null) =>
     invoke<void>("save_cloud_sync_config", { syncConfig }),
-  exportS3Config: (destPath: string, syncConfig: S3Config) =>
-    invoke<void>("export_s3_config", { destPath, syncConfig }),
+  verifyAccessPassword: (accessPassword: string) =>
+    invoke<void>("verify_access_password", { accessPassword }),
+  exportS3Config: (destPath: string, syncConfig: S3Config, accessPassword: string) =>
+    invoke<void>("export_s3_config", { destPath, syncConfig, accessPassword }),
   importS3Config: (srcPath: string) => invoke<S3Config>("import_s3_config", { srcPath }),
   importS3ConfigText: (raw: string) => invoke<S3Config>("import_s3_config_text", { raw }),
   testCloudSyncConfig: (syncConfig: S3Config) =>
@@ -559,6 +621,10 @@ export const api = {
   cloudSyncPull: () => invoke<SyncResult>("cloud_sync_pull"),
   getAutoSyncSettings: () => invoke<AutoSyncSettings>("get_auto_sync_settings"),
   setAutoSyncMinutes: (minutes: number) => invoke<number>("set_auto_sync_minutes", { minutes }),
+  setAttachmentSyncGuards: (wifiOnly: boolean, manualOnly: boolean) =>
+    invoke<AutoSyncSettings>("set_attachment_sync_guards", { wifiOnly, manualOnly }),
+  reportNetworkUnmetered: (unmetered: boolean) =>
+    invoke<void>("report_network_unmetered", { unmetered }),
   listCloudSnapshots: (force?: boolean) =>
     invoke<CloudSnapshot[]>("list_cloud_snapshots", force === undefined ? {} : { force }),
   restoreCloudSnapshot: (snapshotId: string) =>
@@ -600,7 +666,8 @@ export const api = {
   totpGenerateCode: (id: string, password?: string) =>
     invoke<TotpCode>("totp_generate_code", { id, password: password ?? null }),
   totpParseUri: (uri: string) => invoke<ParsedTotpPreview>("totp_parse_uri", { uri }),
-  totpImportFromImage: (path: string) => invoke<ParsedTotpPreview>("totp_import_from_image", { path }),
+  totpParseImport: (text: string) => invoke<TotpImportResult>("totp_parse_import", { text }),
+  totpImportFromImage: (path: string) => invoke<TotpImportResult>("totp_import_from_image", { path }),
   totpScanScreen: () => invoke<ScreenHit[]>("totp_scan_screen"),
   renderQrPng: (text: string) => invoke<string>("render_qr_png", { text }),
   decodeQrFromImage: (bytes: number[]) => invoke<string[]>("decode_qr_from_image", { bytes }),
@@ -617,7 +684,7 @@ export const api = {
   accountDelete: (id: string) => invoke<void>("account_delete", { id }),
   accountSaveGroups: (groups: GroupMeta[]) => invoke<void>("account_save_groups", { groups }),
   accountRevealPassword: (id: string, password?: string) =>
-    invoke<string>("account_reveal_password", { id, password: password ?? null }),
+    invoke<AccountReveal>("account_reveal_password", { id, password: password ?? null }),
   accountTouch: (id: string) => invoke<void>("account_touch", { id }),
   accountHistoryList: (id: string) => invoke<HistoryMeta[]>("account_history_list", { id }),
   accountRevealHistory: (id: string, index: number, password?: string) =>
@@ -626,14 +693,55 @@ export const api = {
     invoke<void>("account_rollback_history", { id, index }),
   accountClearHistory: (id: string) => invoke<void>("account_clear_history", { id }),
 
+  fileList: () => invoke<FileVaultList>("file_list"),
+  fileAddFromPath: (path: string, args?: FileAddArgs) =>
+    invoke<FileEntry>("file_add_from_path", { path, args: args ?? null }),
+  fileAddFromPaths: (paths: string[], args?: FileAddArgs) =>
+    invoke<FileEntry>("file_add_from_paths", { paths, args: args ?? null }),
+  fileAddBytes: (originalName: string, bytes: number[], args?: FileAddArgs) =>
+    invoke<FileEntry>("file_add_bytes", { originalName, bytes, args: args ?? null }),
+  fileAddBytesMany: (items: FileBytesItem[], args?: FileAddArgs) =>
+    invoke<FileEntry>("file_add_bytes_many", { items, args: args ?? null }),
+  fileUpdate: (id: string, args: FileUpdateArgs) => invoke<FileEntry>("file_update", { id, args }),
+  fileDelete: (id: string) => invoke<void>("file_delete", { id }),
+  fileExport: (id: string, destPath: string, password?: string, attachmentId?: string) =>
+    invoke<void>("file_export", {
+      id,
+      destPath,
+      password: password ?? null,
+      attachmentId: attachmentId ?? null,
+    }),
+  fileSaveGroups: (groups: GroupMeta[]) => invoke<void>("file_save_groups", { groups }),
+
+  noteList: () => invoke<NoteList>("note_list"),
+  noteGetBody: (id: string) => invoke<NoteBody>("note_get_body", { id }),
+  noteUpsert: (args: NoteUpsertArgs) => invoke<NoteEntry>("note_upsert", { args }),
+  noteDelete: (id: string) => invoke<void>("note_delete", { id }),
+  noteAssetAdd: (args: { path?: string; bytes?: number[] }) =>
+    invoke<NoteAssetAddResult>("note_asset_add", { path: args.path ?? null, bytes: args.bytes ?? null }),
+  noteAssetGet: (hash: string) => invoke<string>("note_asset_get", { hash }),
+  noteSaveGroups: (groups: GroupMeta[]) => invoke<void>("note_save_groups", { groups }),
+  noteExport: (id: string, destPath: string, mode?: string) =>
+    invoke<void>("note_export", { id, destPath, mode: mode ?? null }),
+  noteExportContent: (id: string, mode?: string) =>
+    invoke<string>("note_export_content", { id, mode: mode ?? null }),
+  noteWriteExportFile: (destPath: string, bytes: number[]) =>
+    invoke<void>("note_write_export_file", { destPath, bytes }),
+
   clipboardWrite: (text: string, secret = false) =>
     invoke<ClipboardWriteResult>("clipboard_write", { text, secret }),
+  clipboardRead: () => invoke<string>("clipboard_read"),
   clipboardClear: () => invoke<void>("clipboard_clear"),
   getRevealSettings: () => invoke<RevealSettings>("get_reveal_settings"),
   setRevealGraceMinutes: (minutes: number) => invoke<number>("set_reveal_grace_minutes", { minutes }),
   setClipboardClearSeconds: (seconds: number) =>
     invoke<number>("set_clipboard_clear_seconds", { seconds }),
+  getClipboardWatch: () => invoke<boolean>("get_clipboard_watch"),
+  setClipboardWatch: (enabled: boolean) => invoke<boolean>("set_clipboard_watch", { enabled }),
   setAccountHistoryLimit: (limit: number) => invoke<number>("set_account_history_limit", { limit }),
+  getScreenCaptureSettings: () => invoke<ScreenCaptureSettings>("get_screen_capture_settings"),
+  setAllowScreenshots: (allow: boolean) =>
+    invoke<ScreenCaptureSettings>("set_allow_screenshots", { allow }),
   iconListBuiltin: () => invoke<BuiltinIconInfo[]>("icon_list_builtin"),
   iconUploadCustom: (filePath: string) => invoke<CustomIconInfo>("icon_upload_custom", { filePath }),
   iconGetCustom: (iconRef: string) => invoke<string>("icon_get_custom", { iconRef }),
@@ -641,9 +749,31 @@ export const api = {
   securityChecklist: () => invoke<SecurityChecklist>("security_checklist"),
 };
 
-export function errMessage(e: unknown): string {
-  if (e && typeof e === "object" && "message" in e) return String((e as AppErrorShape).message);
+function rawErrorText(e: unknown): string {
+  if (e == null) return "";
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message || e.name || String(e);
+  if (typeof e === "object") {
+    const o = e as Record<string, unknown>;
+    if (typeof o.message === "string" && o.message.trim()) return o.message;
+    if (typeof o.error === "string" && o.error.trim()) return o.error;
+  }
   return String(e);
+}
+
+const CMD_MISSING = /command\s*([a-z][a-z0-9_]*)\s*not\s*found/i;
+const CMD_MISSING_COMPACT = /^command([a-z][a-z0-9_]*)notfound$/i;
+const CMD_DENIED = /command\s*([a-z][a-z0-9_]*)\s*not\s*allowed/i;
+
+/** 把 IPC / 异常收成可读句子。Android WebView 有时会把空格挤掉。 */
+export function errMessage(e: unknown): string {
+  const raw = rawErrorText(e).replace(/[\u00a0\s]+/g, " ").trim();
+  const compact = raw.replace(/\s+/g, "");
+  const missing = raw.match(CMD_MISSING) || compact.match(CMD_MISSING_COMPACT);
+  if (missing?.[1]) return i18n.t("common.commandMissing", { cmd: missing[1] });
+  const denied = raw.match(CMD_DENIED);
+  if (denied?.[1]) return i18n.t("common.commandDenied", { cmd: denied[1] });
+  return raw || String(e);
 }
 
 export function errCode(e: unknown): string {
@@ -674,6 +804,115 @@ export interface TotpEntry {
   hasSeed?: boolean;
 }
 
+export interface FileAttachment {
+  id: string;
+  originalName: string;
+  mime?: string | null;
+  size: number;
+  sha256: string;
+}
+
+export interface FileEntry {
+  id: string;
+  name: string;
+  originalName: string;
+  mime?: string | null;
+  size: number;
+  sha256: string;
+  attachments?: FileAttachment[];
+  group?: string | null;
+  note?: string | null;
+  icon?: string | null;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FileVaultList {
+  entries: FileEntry[];
+  groups: GroupMeta[];
+  usageBytes: number;
+}
+
+export interface FileAddArgs {
+  name?: string;
+  note?: string;
+  group?: string;
+}
+
+export interface FileBytesItem {
+  originalName: string;
+  bytes: number[];
+}
+
+export interface FileUpdateArgs {
+  name?: string;
+  note?: string;
+  group?: string;
+  icon?: string;
+  sortOrder?: number;
+  keepAttachmentIds?: string[];
+  addPaths?: string[];
+  addBytes?: FileBytesItem[];
+}
+
+export function entryAttachments(e: FileEntry): FileAttachment[] {
+  if (e.attachments && e.attachments.length > 0) return e.attachments;
+  if (e.sha256) {
+    return [
+      {
+        id: e.sha256,
+        originalName: e.originalName,
+        mime: e.mime,
+        size: e.size,
+        sha256: e.sha256,
+      },
+    ];
+  }
+  return [];
+}
+
+export interface NoteEntry {
+  id: string;
+  title: string;
+  format: string;
+  group?: string | null;
+  tags: string[];
+  icon?: string | null;
+  pinned: boolean;
+  sortOrder: number;
+  excerpt?: string | null;
+  bodySha256: string;
+  assetHashes: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NoteList {
+  entries: NoteEntry[];
+  groups: GroupMeta[];
+}
+
+export interface NoteBody {
+  format: string;
+  markdown: string;
+}
+
+export interface NoteUpsertArgs {
+  id?: string;
+  title: string;
+  format?: string;
+  tags?: string[];
+  group?: string;
+  icon?: string;
+  pinned?: boolean;
+  markdown: string;
+}
+
+export interface NoteAssetAddResult {
+  hash: string;
+}
+
 export interface AccountEntry {
   id: string;
   platform: string;
@@ -691,6 +930,12 @@ export interface AccountEntry {
   createdAt: string;
   updatedAt: string;
   hasPassword?: boolean;
+  extraFieldKeys?: string[];
+}
+
+export interface AccountReveal {
+  password: string;
+  extraFields: Record<string, string>;
 }
 
 export interface TotpCode {
@@ -715,10 +960,18 @@ export interface ParsedTotpPreview {
   secret?: string;
 }
 
+export interface TotpImportResult {
+  source: "otpauth" | "google-migration" | string;
+  entries: ParsedTotpPreview[];
+  skippedHotp: number;
+  batchIndex: number;
+  batchSize: number;
+}
+
 export interface ScreenHit {
   display: string;
   uri: string;
-  parsed: { issuer: string; account: string; algorithm: string; digits: number; period: number };
+  parsed: { issuer: string; account: string; algorithm: string; digits: number; period: number; secret?: string };
 }
 
 export interface HistoryMeta {
@@ -743,6 +996,13 @@ export interface RevealSettings {
   revealGraceMinutes: number;
   clipboardClearSeconds: number;
   accountHistoryLimit: number;
+}
+
+export type ScreenCaptureCapability = "exclude" | "overlay" | "unsupported";
+
+export interface ScreenCaptureSettings {
+  allowScreenshots: boolean;
+  capability: ScreenCaptureCapability;
 }
 
 export type SecuritySeverity = "ok" | "info" | "warn";
@@ -801,4 +1061,5 @@ export interface AccountUpsertArgs {
   pinned?: boolean;
   sortOrder?: number;
   totpRef?: string;
+  extraFields?: Record<string, string>;
 }

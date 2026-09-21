@@ -1,8 +1,10 @@
 //! 加密数据持久化：用 vault 派生的子密钥加密 identities/secrets/key 文件。
 //! 文件格式：`nonce(24) || XChaCha20-Poly1305 密文`。
 
+pub mod blob;
+
 use crate::error::{AppError, Result};
-use crate::model::{AccountData, Secrets, TotpData, VaultData};
+use crate::model::{AccountData, FileData, NoteData, Secrets, TotpData, VaultData};
 use crate::vault::atomic_write;
 use crate::vault::crypto::{self, KEY_LEN, LABEL_KEYFILE, LABEL_METADATA, XNONCE_LEN};
 use crate::vault::Vault;
@@ -34,8 +36,30 @@ fn data_path(vault: &Vault) -> PathBuf {
 fn secrets_path(vault: &Vault) -> PathBuf {
     vault.root().join("data").join("secrets.enc")
 }
-fn key_path(vault: &Vault, key_id: &str) -> PathBuf {
-    vault.root().join("keys").join(format!("{key_id}.enc"))
+/// 校验一个要拼进 vault 路径的标识。
+///
+/// `key_id` 与图标哈希都会被 `format!("{id}.enc")` 拼进工作空间，而它们**可以来自云端**：
+/// 同步时 `keys/{id}.key` 的 id 是从清单里的逻辑路径切出来的（见 `sync::engine`）。
+/// 一条 `keys/../../.ssh/id_rsa.key` 就能把文件写到工作空间外。
+/// 本地生成的 id 是 UUID，所以这里收得很紧不会影响正常数据。
+fn ensure_safe_id(kind: &str, id: &str) -> Result<()> {
+    let ok = !id.is_empty()
+        && id.len() <= 128
+        && id != "."
+        && id != ".."
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'));
+    if ok {
+        Ok(())
+    } else {
+        Err(AppError::Invalid(format!("非法的{kind}标识：{id}")))
+    }
+}
+
+fn key_path(vault: &Vault, key_id: &str) -> Result<PathBuf> {
+    ensure_safe_id("密钥", key_id)?;
+    Ok(vault.root().join("keys").join(format!("{key_id}.enc")))
 }
 fn totp_path(vault: &Vault) -> PathBuf {
     vault.root().join("data").join("totp.enc")
@@ -43,8 +67,18 @@ fn totp_path(vault: &Vault) -> PathBuf {
 fn accounts_path(vault: &Vault) -> PathBuf {
     vault.root().join("data").join("accounts.enc")
 }
-fn icon_path(vault: &Vault, hash: &str) -> PathBuf {
-    vault.root().join("icons").join(format!("{hash}.webp"))
+fn files_path(vault: &Vault) -> PathBuf {
+    vault.root().join("data").join("files.enc")
+}
+fn notes_path(vault: &Vault) -> PathBuf {
+    vault.root().join("data").join("notes.enc")
+}
+fn icon_path(vault: &Vault, hash: &str) -> Result<PathBuf> {
+    // 图标哈希同样从云端逻辑路径 `icons/{hash}.webp` 里切出来。
+    if !crate::store::blob::is_sha256_hex(hash) {
+        return Err(AppError::Invalid(format!("非法的图标哈希：{hash}")));
+    }
+    Ok(vault.root().join("icons").join(format!("{hash}.webp")))
 }
 
 fn load_sealed<T: Default + DeserializeOwned>(vault: &Vault, path: &Path) -> Result<T> {
@@ -81,22 +115,93 @@ pub fn save_secrets(vault: &Vault, secrets: &Secrets) -> Result<()> {
     atomic_write(&secrets_path(vault), &sealed)
 }
 
+/// 首次解锁：把 config.json 里的旧明文写进 secrets.enc，再补回内存供设置页回填。
+/// 必须先成功落盘信封，再清待迁区——反过来会在写失败时把唯一副本丢掉。
+pub fn migrate_and_hydrate_config_secrets(
+    vault: &Vault,
+    cfg: &mut crate::app_config::AppConfig,
+) -> Result<bool> {
+    let mut secrets = load_secrets(vault)?;
+    let mut dirty = false;
+
+    if let Some(pending) = cfg.take_pending_legacy_secrets() {
+        if let Some(sk) = pending.s3_secret_access_key {
+            if !sk.trim().is_empty() {
+                secrets.cloud_sync_secret_access_key = Some(sk);
+                dirty = true;
+            }
+        }
+        if let Some(pw) = pending.proxy_password {
+            if !pw.trim().is_empty() {
+                secrets.network_proxy_password = Some(pw);
+                dirty = true;
+            }
+        }
+    }
+
+    // restore / 刚保存的表单可能还停在结构体字段上，待迁区未必有。
+    if let Some(sk) = cfg.take_cloud_sync_secret() {
+        secrets.cloud_sync_secret_access_key = Some(sk);
+        dirty = true;
+    }
+    if let Some(pw) = cfg.take_proxy_password() {
+        secrets.network_proxy_password = Some(pw);
+        dirty = true;
+    }
+
+    if dirty {
+        save_secrets(vault, &secrets)?;
+    }
+
+    cfg.apply_runtime_secrets(
+        secrets.cloud_sync_secret_access_key.as_deref(),
+        secrets.network_proxy_password.as_deref(),
+    );
+    Ok(dirty)
+}
+
+pub fn set_cloud_sync_secret(vault: &Vault, secret: Option<String>) -> Result<()> {
+    let mut secrets = load_secrets(vault)?;
+    let next = secret.filter(|s| !s.trim().is_empty());
+    if secrets.cloud_sync_secret_access_key != next {
+        secrets.cloud_sync_secret_access_key = next;
+        save_secrets(vault, &secrets)?;
+    }
+    Ok(())
+}
+
+pub fn set_proxy_password(vault: &Vault, password: Option<String>) -> Result<()> {
+    let mut secrets = load_secrets(vault)?;
+    let next = password.filter(|s| !s.trim().is_empty());
+    if secrets.network_proxy_password != next {
+        secrets.network_proxy_password = next;
+        save_secrets(vault, &secrets)?;
+    }
+    Ok(())
+}
+
+pub fn cloud_sync_secret(vault: &Vault) -> Result<Option<String>> {
+    Ok(load_secrets(vault)?
+        .cloud_sync_secret_access_key
+        .filter(|s| !s.trim().is_empty()))
+}
+
 /// 保存私钥密文副本（keys/<id>.enc）。
 pub fn save_key(vault: &Vault, key_id: &str, private_bytes: &[u8]) -> Result<()> {
     let key = vault.subkey(LABEL_KEYFILE)?;
     let sealed = seal(&key, private_bytes)?;
-    atomic_write(&key_path(vault, key_id), &sealed)
+    atomic_write(&key_path(vault, key_id)?, &sealed)
 }
 
 /// 读取私钥密文副本明文（需已解锁）。
 pub fn load_key(vault: &Vault, key_id: &str) -> Result<Vec<u8>> {
     let key = vault.subkey(LABEL_KEYFILE)?;
-    let raw = std::fs::read(key_path(vault, key_id))?;
+    let raw = std::fs::read(key_path(vault, key_id)?)?;
     open(&key, &raw)
 }
 
 pub fn key_exists(vault: &Vault, key_id: &str) -> bool {
-    key_path(vault, key_id).exists()
+    key_path(vault, key_id).is_ok_and(|p| p.exists())
 }
 
 pub fn load_totp(vault: &Vault) -> Result<TotpData> {
@@ -121,12 +226,34 @@ pub fn save_accounts(vault: &Vault, data: &AccountData) -> Result<()> {
     atomic_write(&accounts_path(vault), &sealed)
 }
 
+pub fn load_files(vault: &Vault) -> Result<FileData> {
+    load_sealed(vault, &files_path(vault))
+}
+
+pub fn save_files(vault: &Vault, data: &FileData) -> Result<()> {
+    let key = vault.subkey(LABEL_METADATA)?;
+    let json = serde_json::to_vec(data)?;
+    let sealed = seal(&key, &json)?;
+    atomic_write(&files_path(vault), &sealed)
+}
+
+pub fn load_notes(vault: &Vault) -> Result<NoteData> {
+    load_sealed(vault, &notes_path(vault))
+}
+
+pub fn save_notes(vault: &Vault, data: &NoteData) -> Result<()> {
+    let key = vault.subkey(LABEL_METADATA)?;
+    let json = serde_json::to_vec(data)?;
+    let sealed = seal(&key, &json)?;
+    atomic_write(&notes_path(vault), &sealed)
+}
+
 pub fn save_icon(vault: &Vault, hash: &str, webp: &[u8]) -> Result<()> {
-    atomic_write(&icon_path(vault, hash), webp)
+    atomic_write(&icon_path(vault, hash)?, webp)
 }
 
 pub fn load_icon(vault: &Vault, hash: &str) -> Result<Vec<u8>> {
-    let path = icon_path(vault, hash);
+    let path = icon_path(vault, hash)?;
     if !path.is_file() {
         return Err(AppError::Invalid("自定义图标不存在".into()));
     }
@@ -134,7 +261,7 @@ pub fn load_icon(vault: &Vault, hash: &str) -> Result<Vec<u8>> {
 }
 
 pub fn icon_exists(vault: &Vault, hash: &str) -> bool {
-    icon_path(vault, hash).is_file()
+    icon_path(vault, hash).is_ok_and(|p| p.is_file())
 }
 
 pub fn list_icon_hashes(vault: &Vault) -> Vec<String> {
@@ -158,7 +285,8 @@ pub fn list_icon_hashes(vault: &Vault) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Identity, KeyRecord};
+    use crate::model::{AccountSecret, Identity, KeyRecord};
+    use std::collections::HashMap;
     use crate::vault::header::KdfParams;
     use crate::vault::kdf::{ITERS_FLOOR, MEM_FLOOR_KIB};
 
@@ -223,7 +351,7 @@ mod tests {
         let secret = b"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END-----\n";
         save_key(&v, "k1", secret).unwrap();
         assert!(key_exists(&v, "k1"));
-        let raw = std::fs::read(key_path(&v, "k1")).unwrap();
+        let raw = std::fs::read(key_path(&v, "k1").unwrap()).unwrap();
         assert!(!raw.windows(4).any(|w| w == b"fake"), "密文不含明文片段");
         let got = load_key(&v, "k1").unwrap();
         assert_eq!(got, secret);
@@ -236,12 +364,101 @@ mod tests {
         let mut s = Secrets::default();
         s.key_passphrases.insert("k1".into(), "s3cr3t-pass".into());
         s.github_pat = Some("ghp_xxx".into());
+        s.gitlab_pat = Some("glpat-xxx".into());
+        s.gitee_pat = Some("gitee_xxx".into());
         save_secrets(&v, &s).unwrap();
         let raw = std::fs::read(secrets_path(&v)).unwrap();
-        assert!(!String::from_utf8_lossy(&raw).contains("s3cr3t-pass"));
+        let raw_s = String::from_utf8_lossy(&raw);
+        assert!(!raw_s.contains("s3cr3t-pass"));
+        assert!(!raw_s.contains("glpat-xxx"));
+        assert!(!raw_s.contains("gitee_xxx"));
         let got = load_secrets(&v).unwrap();
         assert_eq!(got.key_passphrases.get("k1").unwrap(), "s3cr3t-pass");
         assert_eq!(got.github_pat.as_deref(), Some("ghp_xxx"));
+        assert_eq!(got.gitlab_pat.as_deref(), Some("glpat-xxx"));
+        assert_eq!(got.gitee_pat.as_deref(), Some("gitee_xxx"));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn account_extra_fields_encrypted_on_disk() {
+        let (v, root) = unlocked_vault();
+        let mut s = Secrets::default();
+        let mut extra = HashMap::new();
+        extra.insert("recovery".into(), "secret-answer-xyz".into());
+        s.account_secrets.insert(
+            "acc1".into(),
+            AccountSecret {
+                password: "plain-pw-secret".into(),
+                extra_fields: extra,
+                history: vec![],
+            },
+        );
+        save_secrets(&v, &s).unwrap();
+        let raw = std::fs::read(secrets_path(&v)).unwrap();
+        let text = String::from_utf8_lossy(&raw);
+        assert!(!text.contains("plain-pw-secret"));
+        assert!(!text.contains("secret-answer-xyz"));
+        let got = load_secrets(&v).unwrap();
+        assert_eq!(
+            got.account_secrets
+                .get("acc1")
+                .and_then(|a| a.extra_fields.get("recovery"))
+                .map(String::as_str),
+            Some("secret-answer-xyz")
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn legacy_config_plaintext_migrates_off_disk() {
+        let (v, root) = unlocked_vault();
+        let mut cfg = crate::app_config::AppConfig::default();
+        cfg.cloud_sync = Some(crate::sync::s3::S3Config {
+            endpoint: "https://example.r2.cloudflarestorage.com".into(),
+            bucket: "vault".into(),
+            region: "auto".into(),
+            access_key_id: "AKIAEXAMPLE".into(),
+            secret_access_key: "sk-legacy-plain".into(),
+            prefix: "gam-sync/".into(),
+        });
+        cfg.network_proxy = Some(crate::app_config::NetworkProxy {
+            password: Some("proxy-legacy-plain".into()),
+            ..crate::app_config::NetworkProxy::default()
+        });
+        cfg.capture_legacy_secrets();
+        assert!(cfg.to_disk_json().unwrap().contains("sk-legacy-plain"));
+
+        assert!(migrate_and_hydrate_config_secrets(&v, &mut cfg).unwrap());
+        let disk = cfg.to_disk_json().unwrap();
+        assert!(
+            !disk.contains("sk-legacy-plain"),
+            "迁走后 config.json 不得再留 Secret Key"
+        );
+        assert!(!disk.contains("proxy-legacy-plain"));
+        assert!(disk.contains("AKIAEXAMPLE"));
+        assert_eq!(
+            cfg.cloud_sync.as_ref().unwrap().secret_access_key,
+            "sk-legacy-plain"
+        );
+
+        let sealed = load_secrets(&v).unwrap();
+        assert_eq!(
+            sealed.cloud_sync_secret_access_key.as_deref(),
+            Some("sk-legacy-plain")
+        );
+        assert_eq!(
+            sealed.network_proxy_password.as_deref(),
+            Some("proxy-legacy-plain")
+        );
+
+        cfg.clear_runtime_secrets();
+        assert!(cfg.cloud_sync.as_ref().unwrap().secret_access_key.is_empty());
+        assert!(!migrate_and_hydrate_config_secrets(&v, &mut cfg).unwrap());
+        assert_eq!(
+            cfg.cloud_sync.as_ref().unwrap().secret_access_key,
+            "sk-legacy-plain"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -285,6 +502,54 @@ mod tests {
         assert!(!String::from_utf8_lossy(&raw).contains("techn4950"));
         let loaded = load_totp(&v).unwrap();
         assert_eq!(loaded.entries, data.entries);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn files_and_notes_roundtrip_encrypted() {
+        let (v, root) = unlocked_vault();
+        let mut files = FileData::default();
+        files.entries.push(crate::model::FileEntry {
+            id: "f1".into(),
+            name: "护照扫描件".into(),
+            original_name: "passport.png".into(),
+            mime: Some("image/png".into()),
+            size: 12,
+            sha256: "aa".repeat(32),
+            attachments: vec![],
+            group: None,
+            note: Some("secret-file-note".into()),
+            icon: None,
+            sort_order: 0,
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        });
+        save_files(&v, &files).unwrap();
+        let raw = std::fs::read(files_path(&v)).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("护照扫描件"));
+        assert!(!String::from_utf8_lossy(&raw).contains("secret-file-note"));
+        assert_eq!(load_files(&v).unwrap().entries, files.entries);
+
+        let mut notes = NoteData::default();
+        notes.entries.push(crate::model::NoteEntry {
+            id: "n1".into(),
+            title: "私密备忘".into(),
+            format: "markdown".into(),
+            group: None,
+            tags: vec!["ops".into()],
+            icon: None,
+            pinned: true,
+            sort_order: 0,
+            excerpt: Some("正文摘要".into()),
+            body_sha256: "bb".repeat(32),
+            asset_hashes: vec!["cc".repeat(32)],
+            created_at: "now".into(),
+            updated_at: "now".into(),
+        });
+        save_notes(&v, &notes).unwrap();
+        let raw = std::fs::read(notes_path(&v)).unwrap();
+        assert!(!String::from_utf8_lossy(&raw).contains("私密备忘"));
+        assert_eq!(load_notes(&v).unwrap().entries, notes.entries);
         std::fs::remove_dir_all(&root).ok();
     }
 }

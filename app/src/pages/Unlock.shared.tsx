@@ -20,9 +20,26 @@ export function UnlockView() {
   const [gate, setGate] = useState<Gate>("password");
   const userPickedGate = useRef(false);
   const autoStarted = useRef(false);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const fieldClusterRef = useRef<HTMLDivElement>(null);
+  const mobile = resolvePlatform() === "mobile";
+
+  function markIme(on: boolean) {
+    stageRef.current?.classList.toggle("is-ime", on);
+  }
+
+  function revealUnlockField() {
+    if (!mobile) return;
+    markIme(true);
+    window.requestAnimationFrame(() => {
+      fieldClusterRef.current?.scrollIntoView({ block: "end", inline: "nearest" });
+    });
+  }
 
   const fingerprintReady = !!(bio?.enabled && bio.available);
   const bioName = bioNoun(bio);
+  const macKeychainHint =
+    !mobile && /Mac/.test(navigator.userAgent) && !/iPhone|iPad|iPod/.test(navigator.userAgent);
 
   useEffect(() => {
     api
@@ -99,7 +116,7 @@ export function UnlockView() {
           : t("unlock.subtitlePassword");
 
   return (
-    <div className="unlock-stage">
+    <div className="unlock-stage" ref={stageRef}>
       <div className="unlock-card">
         <AppLogo size={46} style={{ margin: "0 auto 10px" }} />
         <div className="title-lg">{t("unlock.title")}</div>
@@ -119,40 +136,49 @@ export function UnlockView() {
               <Fingerprint size={36} />
             </button>
             <div className="unlock-bio-hint">
-              {busy ? t("unlock.busyBio") : t("unlock.hintBio")}
+              {busy
+                ? t(macKeychainHint ? "unlock.busyBioMac" : "unlock.busyBio")
+                : t(macKeychainHint ? "unlock.hintBioMac" : "unlock.hintBio")}
             </div>
           </div>
         )}
 
-        {gate === "password" && (
-          <input
-            className="input"
-            type="password"
-            placeholder={t("unlock.passwordPh")}
-            value={pw}
-            autoFocus
-            onChange={(e) => setPw(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && unlock()}
-          />
-        )}
-
-        {gate === "recovery" && (
-          <textarea
-            className="input mono"
-            placeholder={t("unlock.recoveryPh")}
-            value={recovery}
-            autoFocus
-            onChange={(e) => setRecovery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && e.ctrlKey && unlock()}
-          />
-        )}
-
-        {err && <div className="err-text">{err}</div>}
-
         {gate !== "bio" && (
-          <button type="button" className="btn primary lg" style={{ width: "100%", marginTop: 16 }} disabled={busy} onClick={unlock}>
-            {busy ? t("unlock.unlocking") : gate === "recovery" ? t("unlock.useRecovery") : t("unlock.unlock")}
-          </button>
+          <div className="unlock-field-cluster" ref={fieldClusterRef}>
+            {gate === "password" && (
+              <input
+                className="input"
+                type="password"
+                placeholder={t("unlock.passwordPh")}
+                value={pw}
+                autoFocus
+                onFocus={revealUnlockField}
+                onBlur={() => window.setTimeout(() => {
+                  if (!stageRef.current?.contains(document.activeElement)) markIme(false);
+                }, 80)}
+                onChange={(e) => setPw(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && unlock()}
+              />
+            )}
+            {gate === "recovery" && (
+              <textarea
+                className="input mono"
+                placeholder={t("unlock.recoveryPh")}
+                value={recovery}
+                autoFocus
+                onFocus={revealUnlockField}
+                onBlur={() => window.setTimeout(() => {
+                  if (!stageRef.current?.contains(document.activeElement)) markIme(false);
+                }, 80)}
+                onChange={(e) => setRecovery(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && e.ctrlKey && unlock()}
+              />
+            )}
+            {err && <div className="err-text">{err}</div>}
+            <button type="button" className="btn primary lg" style={{ width: "100%", marginTop: 16 }} disabled={busy} onClick={unlock}>
+              {busy ? t("unlock.unlocking") : gate === "recovery" ? t("unlock.useRecovery") : t("unlock.unlock")}
+            </button>
+          </div>
         )}
 
         <div className="unlock-alts">

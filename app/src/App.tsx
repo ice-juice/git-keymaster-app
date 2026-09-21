@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { HashRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
+import { HashRouter, Routes, Route, Navigate, Outlet, useSearchParams } from "react-router-dom";
 import { listen } from "@tauri-apps/api/event";
 import { api } from "./lib/ipc";
 import { useApp } from "./store";
@@ -14,16 +14,39 @@ import { Keys } from "./pages/Keys";
 import { ConfigPage } from "./pages/ConfigPage";
 import { AgentPage } from "./pages/Agent";
 import { Repos } from "./pages/Repos";
-import { ClonePage } from "./pages/Clone";
 import { SyncPage } from "./pages/Sync";
 import { Settings } from "./pages/Settings";
 import { TotpPage } from "./pages/Totp";
 import { AccountsPage } from "./pages/Accounts";
+import { FilesPage } from "./pages/Files";
+import { NotesPage } from "./pages/Notes";
+import { NoteMobileEditorPreview } from "./pages/NoteMobileEditor.preview";
 import { CloseConfirmHost } from "./ui/CloseConfirm";
 import { ToastHost } from "./ui/Toast";
 import UnlockAnimation from "./ui/UnlockAnimation";
 import { MobileShell } from "./ui/MobileShell";
-import { useIsCompact, supportsLocalGitTools } from "./lib/platform";
+import { CommandPalette } from "./ui/CommandPalette";
+import { isAndroid, useIsCompact, supportsLocalGitTools } from "./lib/platform";
+import { decideMobileRootBack } from "./shared/mobileBack";
+import { startNetworkGuard } from "./shared/networkGuard";
+import { startActivityHeartbeat } from "./shared/activityHeartbeat";
+import { clearAllDrafts } from "./shared/noteDrafts";
+import { useScreenCaptureGuard } from "./shared/hooks/useScreenCaptureGuard";
+import { useImeInset } from "./shared/hooks/useImeInset";
+import { useSafeAreaInset } from "./shared/hooks/useSafeAreaInset";
+import { useClipboardCloneHint } from "./shared/hooks/useClipboardCloneHint";
+import { ClipboardCloneHint } from "./ui/ClipboardCloneHint";
+
+function ClipboardHintHost({ enabled }: { enabled: boolean }) {
+  const { hint, dismiss } = useClipboardCloneHint(enabled);
+  return <ClipboardCloneHint hint={hint} onDismiss={dismiss} />;
+}
+
+function CloneRedirect() {
+  const [params] = useSearchParams();
+  const qs = params.toString();
+  return <Navigate to={`/repos?tab=clone${qs ? `&${qs}` : ""}`} replace />;
+}
 
 function AppShell({ compact }: { compact: boolean }) {
   if (compact) {
@@ -55,6 +78,9 @@ export default function App() {
   } = useApp();
 
   const compact = useIsCompact();
+  useImeInset(compact);
+  useSafeAreaInset(compact);
+  const privacyCover = useScreenCaptureGuard();
   // 本机 Git / SSH 工具链相关页面在移动端没有消费者，连路由都不注册，
   // 避免深链接或历史记录把用户带到一个必然报错的页面。
   // 平台标记（<html data-platform>）已由 main.tsx 在首帧前写好，这里无需再动。
@@ -67,6 +93,52 @@ export default function App() {
       onDone={endUnlockAnim}
     />
   ) : null;
+
+  useEffect(() => startNetworkGuard(), []);
+  useEffect(() => startActivityHeartbeat(), []);
+
+  // 后端因空闲/休眠/锁屏锁定后，界面必须立刻退回解锁页，
+  // 否则会留着一屏已解密的内容给下一个走到电脑前的人。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("vault-auto-locked", async () => {
+      clearAllDrafts();
+      await refresh();
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        /* 非 Tauri 环境 */
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, [refresh]);
+
+  useEffect(() => {
+    if (!compact || status?.unlocked) return;
+    const run = () => {
+      const { decision } = decideMobileRootBack({
+        overlayConsumed: false,
+        pathname: "/",
+        unlocked: false,
+        backgroundRun: !!status?.mobileBackgroundRun,
+        android: isAndroid(),
+      });
+      if (decision !== "stay") void api.mobileLeaveApp(decision === "home").catch(() => {});
+      return decision;
+    };
+    window.__kmAndroidBack = run;
+    return () => {
+      if (window.__kmAndroidBack === run) delete window.__kmAndroidBack;
+    };
+  }, [compact, status?.unlocked, status?.mobileBackgroundRun]);
+
+  const isNotesPreview =
+    import.meta.env.DEV &&
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("preview") === "notes";
 
   useEffect(() => {
     (async () => {
@@ -126,6 +198,10 @@ export default function App() {
     };
   }, [refresh]);
 
+  if (isNotesPreview) {
+    return <NoteMobileEditorPreview />;
+  }
+
   let screen: ReactNode;
   if (loading) {
     screen = (
@@ -140,6 +216,8 @@ export default function App() {
   } else {
     screen = (
       <HashRouter>
+        <CommandPalette />
+        <ClipboardHintHost enabled={localTools} />
         <Routes>
           {localTools && <Route path="/identities/new" element={<NewIdentity />} />}
           <Route element={<AppShell compact={compact} />}>
@@ -148,9 +226,11 @@ export default function App() {
             {localTools && <Route path="/config" element={<ConfigPage />} />}
             {localTools && <Route path="/agent" element={<AgentPage />} />}
             {localTools && <Route path="/repos" element={<Repos />} />}
-            {localTools && <Route path="/clone" element={<ClonePage />} />}
+            {localTools && <Route path="/clone" element={<CloneRedirect />} />}
             <Route path="/totp" element={<TotpPage />} />
             <Route path="/accounts" element={<AccountsPage />} />
+            <Route path="/files" element={<FilesPage />} />
+            <Route path="/notes" element={<NotesPage />} />
             <Route path="/sync" element={<SyncPage />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -170,6 +250,7 @@ export default function App() {
         <div className="app-view">{screen}</div>
       </div>
       {unlockOverlay}
+      {privacyCover && <div className="privacy-cover" aria-hidden="true" />}
     </>
   );
 }

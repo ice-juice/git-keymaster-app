@@ -22,17 +22,17 @@ export const THEME_OPTIONS: ThemeOption[] = [
     id: "dark",
     name: "冷萃深色",
     desc: "内敛低饱和、柔和炭灰、夜间护眼不刺眼",
-    previewBg: "#12151c",
-    previewCard: "#181d28",
-    previewAccent: "#6366f1",
+    previewBg: "#10141c",
+    previewCard: "#1a2030",
+    previewAccent: "#818cf8",
   },
   {
     id: "navy",
     name: "沉稳黛蓝",
     desc: "商务蓝调深色、专业典雅",
-    previewBg: "#060912",
-    previewCard: "#0e1628",
-    previewAccent: "#0284c7",
+    previewBg: "#0b1220",
+    previewCard: "#152037",
+    previewAccent: "#38bdf8",
   },
 ];
 
@@ -47,6 +47,8 @@ export function getSavedTheme(): ThemeMode {
 }
 
 export function applyTheme(theme: ThemeMode) {
-  document.documentElement.setAttribute("data-theme", theme);
+  const root = document.documentElement;
+  root.setAttribute("data-theme", theme);
+  root.style.colorScheme = theme === "light" ? "light" : "dark";
   localStorage.setItem(STORAGE_KEY, theme);
 }

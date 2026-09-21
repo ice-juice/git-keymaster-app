@@ -25,10 +25,32 @@ pub async fn check(
     let fallback = manual_download_url(src);
 
     let endpoints = resolve_check_endpoints(src, proxy).await?;
+    let fetched = manifest::fetch_manifest(src, proxy).await?;
+    let Some(doc) = fetched else {
+        return Ok(UpdateCheckResult::none(
+            current_version,
+            src.clone(),
+            fallback,
+            platform,
+            self_update_supported,
+            sideload_update_supported,
+            store_update_supported,
+        ));
+    };
+    let wm = crate::update::watermark::load();
+    let trust = manifest::accept_manifest(src, &doc, &wm)?;
+    if matches!(trust, manifest::ManifestTrust::Signed) {
+        let _ = manifest::record_verified_manifest(trust, &doc.version, false);
+    }
     let updater = build_updater(app, endpoints, proxy)?;
 
     match updater.check().await {
         Ok(Some(update)) => {
+            if !manifest::versions_equal(&update.version, &doc.version) {
+                return Err(AppError::Invalid(
+                    "更新插件读到的版本与已验证清单不一致，已拒绝".into(),
+                ));
+            }
             let newer = is_newer(&current_version, &update.version);
             let pub_date = update.date.and_then(|d| {
                 d.format(&time::format_description::well_known::Rfc3339)

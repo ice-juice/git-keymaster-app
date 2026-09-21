@@ -23,6 +23,7 @@ import { AppLogo } from "../ui/AppLogo";
 import { useAppName } from "../lib/config";
 import { S3SetupGuide } from "../ui/S3SetupGuide";
 import { writeClipboard } from "../lib/clipboard";
+import { can } from "../platform/capabilities";
 
 export function InitMobile() {
   const { t } = useTranslation();
@@ -162,10 +163,11 @@ export function InitMobile() {
           <div className="stack" style={{ gap: 12 }}>
             {/* 顶栏说明 */}
             <div className="callout info sm">
-              电脑须已接入云并成功推送。扫码只带入云配置（不含恢复密钥），扫完后仍需输入旧设备恢复密钥解密保险库。
+              {t("init.restoreCloudHintMobile")}
             </div>
 
             {/* 推荐大卡片：扫描二维码 */}
+            {can("cameraQrScan") && (
             <div className="m-init-qr-card">
               <div className="m-init-qr-badge">{t("init.mobileQrBadge")}</div>
               <div className="m-init-qr-title">{t("init.mobileQrTitle")}</div>
@@ -180,16 +182,17 @@ export function InitMobile() {
                 onClick={m.scanS3Qr}
               >
                 <Camera size={18} />
-                <span>{m.busy ? "正在识别二维码…" : "扫描电脑上的二维码"}</span>
+                <span>{m.busy ? t("init.scanningQr") : t("init.scanComputerQr")}</span>
               </button>
 
               {m.s3Ready() && (
                 <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--green)", fontWeight: 600, marginTop: 2 }}>
                   <CheckCircle2 size={14} />
-                  <span>已成功填入云存储配置（{m.s3.bucket}）</span>
+                  <span>{t("init.s3Filled", { bucket: m.s3.bucket })}</span>
                 </div>
               )}
             </div>
+            )}
 
             {/* 手动填写与预设配置卡片 */}
             <div className="m-init-card">
@@ -199,10 +202,10 @@ export function InitMobile() {
               >
                 <span className="m-init-card-title">
                   {manualOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                  <span>手动填写或查看存储参数</span>
+                  <span>{t("init.manualParams")}</span>
                 </span>
                 <span className="badge sm muted">
-                  {m.s3Ready() ? "已配置" : "备用"}
+                  {m.s3Ready() ? t("init.configured") : t("init.backup")}
                 </span>
               </div>
 
@@ -211,7 +214,7 @@ export function InitMobile() {
                   {/* 快速预设胶囊栏 */}
                   <div>
                     <div style={{ fontSize: 11.5, fontWeight: 600, color: "var(--text-mute)", marginBottom: 6 }}>
-                      快速预设服务商
+                      {t("init.quickProviders")}
                     </div>
                     <div className="m-preset-chips">
                       <button
@@ -242,14 +245,14 @@ export function InitMobile() {
                         style={{ color: "var(--accent)" }}
                       >
                         <BookOpen size={13} />
-                        <span>小白引导</span>
+                        <span>{t("init.guide")}</span>
                       </button>
                     </div>
                   </div>
 
                   {/* 存储字段排布 */}
                   <div className="field">
-                    <label className="field-label">存储端点 (Endpoint)</label>
+                    <label className="field-label">{t("init.endpointFull")}</label>
                     <input
                       className="input"
                       placeholder="https://<account_id>.r2.cloudflarestorage.com"
@@ -259,7 +262,7 @@ export function InitMobile() {
                   </div>
 
                   <div className="field">
-                    <label className="field-label">存储桶名 (Bucket)</label>
+                    <label className="field-label">{t("init.bucketFull")}</label>
                     <input
                       className="input"
                       placeholder="my-git-vault-backup"
@@ -270,16 +273,16 @@ export function InitMobile() {
 
                   <div className="m-grid-2">
                     <div className="field">
-                      <label className="field-label">区域 (Region)</label>
+                      <label className="field-label">{t("init.regionFull")}</label>
                       <input
                         className="input"
-                        placeholder="auto 或 us-east-1"
+                        placeholder={t("init.regionPh")}
                         value={m.s3.region}
                         onChange={(e) => m.setS3({ ...m.s3, region: e.target.value })}
                       />
                     </div>
                     <div className="field">
-                      <label className="field-label">路径前缀 (Prefix)</label>
+                      <label className="field-label">{t("init.prefixFull")}</label>
                       <input
                         className="input"
                         placeholder="gam-sync/"
@@ -293,7 +296,7 @@ export function InitMobile() {
                     <label className="field-label">Access Key ID</label>
                     <input
                       className="input"
-                      placeholder="AKIA... 或 R2 Access Key"
+                      placeholder="AKIA... / R2 Access Key"
                       value={m.s3.accessKeyId}
                       onChange={(e) => m.setS3({ ...m.s3, accessKeyId: e.target.value })}
                     />
@@ -315,7 +318,7 @@ export function InitMobile() {
                         className="btn ghost sm"
                         onClick={() => m.setShowSecret((v) => !v)}
                         style={{ position: "absolute", right: 4, top: 4, padding: "4px 8px" }}
-                        aria-label="切换显示密码"
+                        aria-label={t("init.toggleSecret")}
                       >
                         {m.showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
                       </button>
@@ -337,7 +340,7 @@ export function InitMobile() {
                       disabled={m.busy}
                       onClick={m.importS3File}
                     >
-                      导入配置文件
+                      {t("init.importFile")}
                     </button>
                     <button
                       type="button"
@@ -345,7 +348,7 @@ export function InitMobile() {
                       disabled={m.busy}
                       onClick={m.testS3}
                     >
-                      {m.busy ? "正在探测…" : "测试连通性"}
+                      {m.busy ? t("init.testing") : t("init.testConn")}
                     </button>
                   </div>
                 </div>
@@ -358,25 +361,25 @@ export function InitMobile() {
         {m.mode === "restore" && m.step === 2 && (
           <div className="stack" style={{ gap: 12 }}>
             <div className="callout warn sm">
-              扫码只带入了云配置。请输入旧设备初始化时备份的恢复密钥（GAM1-…）以解密工作空间；二维码中不含恢复密钥。
+              {t("init.restoreKeyWarnMobile")}
             </div>
 
             <div className="m-init-card">
               <div className="m-input-header-action">
-                <label className="field-label" style={{ margin: 0 }}>旧设备恢复密钥</label>
+                <label className="field-label" style={{ margin: 0 }}>{t("init.titles.oldRecovery")}</label>
                 <button
                   type="button"
                   className="m-paste-btn"
                   onClick={m.pasteRestoreKey}
                 >
                   <ClipboardPaste size={13} />
-                  <span>粘贴剪贴板</span>
+                  <span>{t("init.pasteClipboard")}</span>
                 </button>
               </div>
 
               <textarea
                 className="input mono"
-                placeholder="粘贴恢复密钥（如 GAM1-...）"
+                placeholder={t("init.restoreKeyPh")}
                 value={m.restoreKey}
                 onChange={(e) => {
                   m.setRestoreKey(e.target.value);
@@ -392,7 +395,7 @@ export function InitMobile() {
                 onClick={m.doPreview}
                 style={{ alignSelf: "flex-start" }}
               >
-                {m.busy ? "正在验证解密…" : "验证恢复密钥并预览"}
+                {m.busy ? t("init.verifyingDecrypt") : t("init.verifyPreview")}
               </button>
             </div>
 
@@ -400,10 +403,10 @@ export function InitMobile() {
             {m.preview && m.preview.hasManifest && (
               <div className="stack" style={{ gap: 10 }}>
                 <div className="callout good">
-                  <strong>✓ 成功解开工作空间</strong>（{m.preview.workspaceId.slice(0, 8)}…）
+                  <strong>✓ {t("init.unlockedOk")}</strong>（{m.preview.workspaceId.slice(0, 8)}…）
                   <div style={{ marginTop: 4, fontSize: 12 }}>
-                    包含 {m.preview.identityCount} 个 Git 身份 · {m.preview.keyCount} 把密钥
-                    {m.preview.updatedAt ? ` · 云端更新于 ${new Date(m.preview.updatedAt).toLocaleDateString()}` : ""}
+                    {t("init.previewInclude", { identities: m.preview.identityCount, keys: m.preview.keyCount })}
+                    {m.preview.updatedAt ? t("init.cloudUpdated", { when: new Date(m.preview.updatedAt).toLocaleDateString() }) : ""}
                   </div>
                 </div>
                 <RestoreScope
@@ -421,16 +424,16 @@ export function InitMobile() {
           <div className="stack" style={{ gap: 12 }}>
             {m.preview && (
               <div className="callout info sm">
-                即将把 {m.preview.identityCount} 个身份与 {m.preview.keyCount} 把密钥还原到手机安全沙箱。
+                {t("init.willRestoreMobile", { identities: m.preview.identityCount, keys: m.preview.keyCount })}
               </div>
             )}
 
             <div className="m-init-card">
               <div style={{ fontSize: 14, fontWeight: 650, color: "var(--text)", marginBottom: 4 }}>
-                设置本机日常访问密码
+                {t("init.titles.setLocalPassword")}
               </div>
               <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.45, marginBottom: 8 }}>
-                用于在本手机上日常解锁应用，可以与旧电脑密码不同。旧恢复密钥保持有效。
+                {t("init.localPwHintMobile")}
               </div>
 
               <PasswordFields
@@ -449,13 +452,13 @@ export function InitMobile() {
         {m.mode === "restore" && m.step === 4 && (
           <div className="stack" style={{ textAlign: "center", padding: "30px 10px", gap: 12 }}>
             <div style={{ fontSize: 44 }}>🎉</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>已从云端成功恢复</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>{t("init.restoredTitleMobile")}</div>
             <div className="muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
-              {m.restoreResult || "工作空间已用同一把主密钥重建，两端数据完全连通。"}
+              {m.restoreResult || t("init.restoredFallbackMobile")}
             </div>
             {m.preview && (
               <div className="badge good" style={{ alignSelf: "center", padding: "6px 14px", fontSize: 13 }}>
-                已恢复 {m.preview.identityCount} 个身份 · {m.preview.keyCount} 把密钥
+                {t("init.restoredBadge", { identities: m.preview.identityCount, keys: m.preview.keyCount })}
               </div>
             )}
             <div style={{ marginTop: 20 }}>
@@ -475,7 +478,7 @@ export function InitMobile() {
         {m.mode === "create" && m.step === 1 && (
           <div className="stack" style={{ gap: 12 }}>
             <div className="callout info sm">
-              🔑 访问密码用于本机日常解锁，数据仅在本地私有沙箱中加密存储，绝不泄露。
+              🔑 {t("init.createPwHintMobile")}
             </div>
             <div className="m-init-card">
               <PasswordFields
@@ -493,7 +496,7 @@ export function InitMobile() {
         {m.mode === "create" && m.step === 2 && (
           <div className="stack" style={{ gap: 12 }}>
             <div className="callout danger sm">
-              ⚠️ 这是唯一一次完整显示恢复密钥。请立刻复制并妥善离线保存！若丢失且遗忘密码将无法解密。
+              ⚠️ {t("init.recoveryOnceMobile")}
             </div>
             <div className="m-init-card">
               <div className="reckey" style={{ fontSize: 12.5, wordBreak: "break-all", padding: "12px 10px" }}>
@@ -506,7 +509,7 @@ export function InitMobile() {
                 style={{ alignSelf: "center", minWidth: 140 }}
               >
                 <Copy size={14} />
-                <span>{copiedKey ? "已复制到剪贴板！" : "复制恢复密钥"}</span>
+                <span>{copiedKey ? t("init.copiedClipboard") : t("init.copyRecovery")}</span>
               </button>
             </div>
           </div>
@@ -514,22 +517,22 @@ export function InitMobile() {
 
         {m.mode === "create" && m.step === 3 && (
           <div className="stack" style={{ gap: 12 }}>
-            <div className="muted" style={{ fontSize: 13 }}>请把刚才备份的恢复密钥填入下方校验：</div>
+            <div className="muted" style={{ fontSize: 13 }}>{t("init.pasteRecoveryShort")}</div>
             <div className="m-init-card">
               <div className="m-input-header-action">
-                <label className="field-label" style={{ margin: 0 }}>恢复密钥</label>
+                <label className="field-label" style={{ margin: 0 }}>{t("init.steps.recovery")}</label>
                 <button
                   type="button"
                   className="m-paste-btn"
                   onClick={m.pasteConfirm}
                 >
                   <ClipboardPaste size={13} />
-                  <span>一键粘贴</span>
+                  <span>{t("init.pasteOnce")}</span>
                 </button>
               </div>
               <textarea
                 className="input mono"
-                placeholder="粘贴或输入刚才的恢复密钥（如 GAM1-...）"
+                placeholder={t("init.recoveryPh")}
                 value={m.confirm}
                 onChange={(e) => m.setConfirm(e.target.value)}
                 style={{ minHeight: 88, fontSize: 13, lineHeight: 1.5 }}
@@ -541,9 +544,9 @@ export function InitMobile() {
         {m.mode === "create" && m.step === 4 && (
           <div className="stack" style={{ textAlign: "center", padding: "30px 10px", gap: 12 }}>
             <div style={{ fontSize: 44 }}>🎉</div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>加密工作空间已就绪</div>
+            <div style={{ fontSize: 18, fontWeight: 700, color: "var(--text)" }}>{t("init.readyTitle")}</div>
             <div className="muted" style={{ fontSize: 13, lineHeight: 1.5 }}>
-              你可以随时在电脑端推送数据后，在手机端使用云同步随时同步最新的 Git 身份与 2FA 凭证。
+              {t("init.readyDescMobile")}
             </div>
             <div style={{ marginTop: 20 }}>
               <button
@@ -552,7 +555,7 @@ export function InitMobile() {
                 onClick={() => m.refresh()}
                 style={{ width: "100%", minHeight: 46, fontSize: 15 }}
               >
-                开始使用
+                {t("init.pageStart")}
               </button>
             </div>
           </div>
@@ -569,7 +572,7 @@ export function InitMobile() {
             onClick={m.goBack}
             style={{ minWidth: 80 }}
           >
-            {m.step <= 1 ? "返回" : "上一步"}
+            {m.step <= 1 ? t("common.back") : t("init.prev")}
           </button>
 
           <div style={{ flex: 1, display: "flex", justifyContent: "flex-end" }}>
@@ -580,7 +583,7 @@ export function InitMobile() {
                 disabled={m.busy}
                 onClick={m.doInit}
               >
-                {m.busy ? "正在创建…" : "下一步"}
+                {m.busy ? t("init.creating") : t("common.next")}
               </button>
             )}
 
@@ -590,7 +593,7 @@ export function InitMobile() {
                 className="btn primary"
                 onClick={() => m.setStep(3)}
               >
-                我已安全保存，继续
+                {t("init.savedContinue")}
               </button>
             )}
 
@@ -600,7 +603,7 @@ export function InitMobile() {
                 className="btn primary"
                 onClick={m.verifyConfirm}
               >
-                校验并完成
+                {t("init.verifyFinish")}
               </button>
             )}
 
@@ -610,7 +613,7 @@ export function InitMobile() {
                 className="btn primary"
                 onClick={m.goRestoreCloud}
               >
-                下一步
+                {t("common.next")}
               </button>
             )}
 
@@ -624,7 +627,7 @@ export function InitMobile() {
                   m.setStep(3);
                 }}
               >
-                确认预览，继续
+                {t("init.confirmPreview")}
               </button>
             )}
 
@@ -635,7 +638,7 @@ export function InitMobile() {
                 disabled={m.busy}
                 onClick={m.doRestore}
               >
-                {m.busy ? "正在解密并还原…" : "恢复到本机"}
+                {m.busy ? t("init.restoring") : t("init.restoreLocal")}
               </button>
             )}
           </div>

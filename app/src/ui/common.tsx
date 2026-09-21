@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useTranslation } from "react-i18next";
 import { CircleHelp, Trash2, AlertTriangle } from "lucide-react";
 import { useIsCompact } from "../lib/platform";
 
@@ -122,7 +123,7 @@ export function Badge({ kind = "muted", children }: { kind?: string; children: R
 
 /** 设置等页面的错误提示：居中弹窗，避免顶部一行红字被忽略。 */
 export function ErrorDialog({
-  title = "操作未能完成",
+  title,
   message,
   onClose,
 }: {
@@ -130,6 +131,8 @@ export function ErrorDialog({
   message: string;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
+  const heading = title || t("common.errorTitle");
   useEffect(() => {
     if (!message) return;
     const onKey = (e: KeyboardEvent) => {
@@ -150,8 +153,8 @@ export function ErrorDialog({
     >
       <div className="close-dialog settings-error-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="close-dialog-titlebar">
-          <span id="error-dialog-title">{title}</span>
-          <button type="button" className="close-dialog-x" onClick={onClose} aria-label="关闭">
+          <span id="error-dialog-title">{heading}</span>
+          <button type="button" className="close-dialog-x" onClick={onClose} aria-label={t("common.close")}>
             ×
           </button>
         </div>
@@ -162,7 +165,7 @@ export function ErrorDialog({
         </div>
         <div className="close-dialog-footer settings-error-actions">
           <button type="button" className="btn primary sm" onClick={onClose} autoFocus>
-            知道了
+            {t("common.gotIt")}
           </button>
         </div>
       </div>
@@ -176,7 +179,7 @@ export function ConfirmDangerDialog({
   title,
   message,
   detail,
-  confirmLabel = "确认删除",
+  confirmLabel,
   busy,
   onCancel,
   onConfirm,
@@ -189,6 +192,7 @@ export function ConfirmDangerDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useTranslation();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !busy) onCancel();
@@ -222,10 +226,10 @@ export function ConfirmDangerDialog({
           style={{ justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border)", borderBottom: "none" }}
         >
           <button type="button" className="btn ghost sm" disabled={busy} onClick={onCancel}>
-            取消
+            {t("common.cancel")}
           </button>
           <button type="button" className="btn danger sm" disabled={busy} onClick={onConfirm} autoFocus>
-            {busy ? "正在删除…" : confirmLabel}
+            {busy ? t("common.deleting") : confirmLabel || t("common.confirmDelete")}
           </button>
         </div>
       </div>
@@ -239,8 +243,8 @@ export function ConfirmDialog({
   title,
   message,
   detail,
-  confirmLabel = "确定",
-  cancelLabel = "取消",
+  confirmLabel,
+  cancelLabel,
   tone = "default",
   busy,
   busyLabel,
@@ -258,6 +262,7 @@ export function ConfirmDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useTranslation();
   const danger = tone === "danger";
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -303,7 +308,7 @@ export function ConfirmDialog({
           style={{ justifyContent: "flex-end", gap: 8, borderTop: "1px solid var(--border)", borderBottom: "none" }}
         >
           <button type="button" className="btn ghost sm" disabled={busy} onClick={onCancel}>
-            {cancelLabel}
+            {cancelLabel || t("common.cancel")}
           </button>
           <button
             type="button"
@@ -312,7 +317,7 @@ export function ConfirmDialog({
             onClick={onConfirm}
             autoFocus
           >
-            {busy ? busyLabel || "处理中…" : confirmLabel}
+            {busy ? busyLabel || t("common.busy") : confirmLabel || t("common.ok")}
           </button>
         </div>
       </div>

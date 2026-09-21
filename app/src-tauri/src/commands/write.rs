@@ -310,6 +310,11 @@ pub fn apply_config(app: AppHandle, state: State<AppState>, entry: ManagedEntry)
 
 /// 用 `ssh -F <工作空间正本> -G <alias>` 校验解析出的 hostname 与预期一致。
 fn verify_with_ssh_g(entry: &ManagedEntry, workspace: Option<&std::path::Path>) -> bool {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (entry, workspace);
+        return false;
+    }
     let cfg = workspace.map(sys::workspace_ssh_config);
     let cfg_s = cfg.as_ref().map(|p| p.to_string_lossy().replace('\\', "/"));
     let alias = entry.alias.as_str();
@@ -403,6 +408,8 @@ pub fn create_identity(app: AppHandle, state: State<AppState>, args: CreateIdent
         identity_file,
         identities_only: true,
     };
+    // 带换行的 HostName 会往托管区块注入 ProxyCommand，必须在落盘前拦住。
+    entry.validate()?;
     let cfg_path = sys::workspace_ssh_config(v.root());
     let old_cfg = load_workspace_ssh_config(v);
     let backup = util::backup_file(&cfg_path)?;
@@ -721,6 +728,7 @@ pub fn update_identity(app: AppHandle, state: State<AppState>, args: UpdateIdent
             identity_file,
             identities_only: true,
         };
+        entry.validate()?;
         intermediate = managed::upsert(&intermediate, entry);
     }
     let _ = util::backup_file(&config_path);

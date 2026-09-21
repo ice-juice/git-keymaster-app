@@ -1,5 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Plus, Search, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { useOverlayBack } from "../shared/mobileBack";
 
 export type MobileAddAction = {
   key: string;
@@ -20,6 +22,7 @@ export function MobileListToolbar({
   addActions,
   sheetOpen,
   onSheetOpenChange,
+  beforeAdd,
 }: {
   query: string;
   onQueryChange: (q: string) => void;
@@ -30,9 +33,12 @@ export function MobileListToolbar({
   addActions?: MobileAddAction[];
   sheetOpen?: boolean;
   onSheetOpenChange?: (open: boolean) => void;
+  beforeAdd?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const hasSheet = !!addActions?.length;
   const open = !!sheetOpen;
+  useOverlayBack(open, () => onSheetOpenChange?.(false));
 
   useEffect(() => {
     if (!open) return;
@@ -68,13 +74,14 @@ export function MobileListToolbar({
             <button
               type="button"
               className="m-list-search-clear"
-              aria-label="清除搜索"
+              aria-label={t("common.clearSearch")}
               onClick={() => onQueryChange("")}
             >
               <X size={14} />
             </button>
           )}
         </label>
+        {beforeAdd}
         <button
           type="button"
           className={"m-list-add-btn" + (open ? " on" : "")}
@@ -125,7 +132,7 @@ export function MobileListToolbar({
               className="m-list-sheet-cancel"
               onClick={() => onSheetOpenChange?.(false)}
             >
-              取消
+              {t("common.cancel")}
             </button>
           </div>
         </div>
