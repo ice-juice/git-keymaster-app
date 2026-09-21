@@ -3,7 +3,7 @@
 use crate::commands::{ensure_reveal_authorized, ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::icons;
-use crate::model::{GroupMeta, TotpEntry};
+use crate::model::{GroupMeta, GroupRemap, TotpEntry};
 use crate::qrscan;
 use crate::store;
 use crate::totp;
@@ -235,7 +235,12 @@ pub fn totp_delete(app: AppHandle, state: State<AppState>, id: String) -> Result
 }
 
 #[tauri::command]
-pub fn totp_save_groups(app: AppHandle, state: State<AppState>, groups: Vec<GroupMeta>) -> Result<()> {
+pub fn totp_save_groups(
+    app: AppHandle,
+    state: State<AppState>,
+    groups: Vec<GroupMeta>,
+    remap: Option<GroupRemap>,
+) -> Result<()> {
     ensure_writes_allowed(&state)?;
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
@@ -243,6 +248,11 @@ pub fn totp_save_groups(app: AppHandle, state: State<AppState>, groups: Vec<Grou
         return Err(AppError::Locked);
     }
     let mut data = store::load_totp(v)?;
+    if let Some(remap) = remap.as_ref() {
+        for entry in &mut data.entries {
+            crate::model::remap_entry_group(&mut entry.group, remap);
+        }
+    }
     data.groups = groups;
     store::save_totp(v, &data)?;
     drop(vault);

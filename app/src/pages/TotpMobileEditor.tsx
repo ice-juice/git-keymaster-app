@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   ChevronDown,
@@ -6,7 +6,6 @@ import {
   ChevronUp,
   KeyRound,
   Trash2,
-  Upload,
   Check,
   Globe,
   FileText,
@@ -16,9 +15,14 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api, type TotpEntry } from "../lib/ipc";
+import { rememberCustomIcon } from "../lib/secretsUi";
 import { detectTotpInput } from "../lib/totpInput";
-import { IconMark } from "../ui/IconMark";
+import { colorIconRef } from "../shared/iconColor";
+import { findBuiltinAccount, platformEntryMode } from "../shared/iconAliases";
+import { BuiltinIconSelect } from "../ui/BuiltinIconSelect";
+import { IconUploadStack } from "../ui/IconColorPicker";
 import { GroupPicker } from "../ui/GroupPicker";
+import { OptionSelect } from "../ui/OptionSelect";
 import { NOTE_MAX, type TotpModel } from "../shared/hooks/useTotpModel";
 import { useOverlayBack } from "../shared/mobileBack";
 
@@ -40,8 +44,78 @@ export function TotpMobileEditor({
     (value?.digits && value.digits !== 6) ||
     (value?.period && value.period !== 30);
   const [showAdvanced, setShowAdvanced] = useState(!!nonDefaultAlgo);
+  const [platformMode, setPlatformMode] = useState<"builtin" | "custom">("builtin");
+  const platformSync = useRef("");
+  useEffect(() => {
+    if (!value || m.builtins.length === 0) return;
+    const key = value.id || "new";
+    if (platformSync.current === key) return;
+    platformSync.current = key;
+    setPlatformMode(platformEntryMode(m.builtins, value.issuer, value.icon));
+  }, [value, m.builtins]);
 
   if (!value) return null;
+
+  const pickedBuiltin = findBuiltinAccount(m.builtins, value.issuer, value.icon);
+
+  function chooseBuiltinIssuer() {
+    if (!value) return;
+    setPlatformMode("builtin");
+    const hit = findBuiltinAccount(m.builtins, value.issuer, value.icon);
+    if (!hit) {
+      m.setEditor({
+        ...value,
+        issuer: "",
+        icon: value.icon?.startsWith("custom:") ? value.icon : undefined,
+      });
+      return;
+    }
+    m.setEditor({
+      ...value,
+      issuer: hit.name,
+      icon: value.icon?.startsWith("custom:") ? value.icon : `builtin:${hit.id}`,
+    });
+  }
+
+  function chooseCustomIssuer() {
+    if (!value) return;
+    setPlatformMode("custom");
+    if (value.icon?.startsWith("builtin:")) m.setEditor({ ...value, icon: undefined });
+  }
+
+  function chooseListedBuiltin(next: string) {
+    if (!value) return;
+    if (!next) {
+      m.setEditor({
+        ...value,
+        issuer: "",
+        icon: value.icon?.startsWith("custom:") ? value.icon : undefined,
+      });
+      return;
+    }
+    const hit = m.builtins.find((item) => `builtin:${item.id}` === next);
+    if (!hit) return;
+    m.setEditor({
+      ...value,
+      issuer: hit.name,
+      icon: value.icon?.startsWith("custom:") ? value.icon : next,
+    });
+  }
+
+  function applyIssuerText(raw: string) {
+    if (!value) return;
+    const matched = findBuiltinAccount(m.builtins, raw);
+    if (matched && raw.trim().toLowerCase() === matched.name.toLowerCase()) {
+      setPlatformMode("builtin");
+      m.setEditor({
+        ...value,
+        issuer: matched.name,
+        icon: value.icon?.startsWith("custom:") ? value.icon : `builtin:${matched.id}`,
+      });
+      return;
+    }
+    m.setEditor({ ...value, issuer: raw });
+  }
 
   function applySecretDraft(next: string) {
     if (!value) return;
@@ -57,15 +131,20 @@ export function TotpMobileEditor({
       return;
     }
     if (d.kind === "otpauth") {
+      const issuerRaw = d.issuer || value.issuer || "";
+      const keepCustom = value.icon?.startsWith("custom:");
+      const matched = findBuiltinAccount(m.builtins, issuerRaw);
+      if (matched) setPlatformMode("builtin");
+      else if (issuerRaw.trim()) setPlatformMode("custom");
       m.setEditor({
         ...value,
         secret: d.secret,
-        issuer: d.issuer || value.issuer,
+        issuer: matched ? matched.name : issuerRaw,
         account: d.account || value.account,
         algorithm: d.algorithm || value.algorithm || "SHA1",
         digits: d.digits || value.digits || 6,
         period: d.period || value.period || 30,
-        icon: value.icon,
+        icon: keepCustom ? value.icon : matched ? `builtin:${matched.id}` : value.icon,
       });
       if ((d.algorithm && d.algorithm !== "SHA1") || d.digits !== 6 || d.period !== 30) {
         setShowAdvanced(true);
@@ -84,6 +163,7 @@ export function TotpMobileEditor({
     });
     if (typeof path !== "string") return;
     const info = await api.iconUploadCustom(path);
+    rememberCustomIcon(info.iconRef, info.dataUrl);
     m.setEditor({ ...value, icon: info.iconRef });
   }
 
@@ -186,12 +266,45 @@ export function TotpMobileEditor({
 
           <div className="m-field">
             <label className="m-field-label">{t("totp.issuer")}</label>
-            <input
-              className="input"
-              value={value.issuer || ""}
-              placeholder={t("totp.issuerPh")}
-              onChange={(e) => m.setEditor({ ...value, issuer: e.target.value })}
-            />
+            <div className="platform-brand">
+              <IconUploadStack
+                icon={value.icon}
+                builtins={m.builtins}
+                label={value.issuer}
+                size={44}
+                onPickColor={(hex) => m.setEditor({ ...value, icon: colorIconRef(hex) })}
+                onUpload={() => void pickIcon()}
+              />
+              <div className="platform-brand-main">
+                <div className="choice-row">
+                  <button type="button" className={"choice" + (platformMode === "builtin" ? " on" : "")} onClick={chooseBuiltinIssuer}>
+                    {t("accounts.platformBuiltin")}
+                  </button>
+                  <button type="button" className={"choice" + (platformMode === "custom" ? " on" : "")} onClick={chooseCustomIssuer}>
+                    {t("accounts.platformCustom")}
+                  </button>
+                </div>
+                <div className="platform-brand-tools">
+                  {platformMode === "builtin" ? (
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <BuiltinIconSelect
+                        value={pickedBuiltin ? `builtin:${pickedBuiltin.id}` : ""}
+                        builtins={m.builtins}
+                        autoLabel={t("accounts.platformBuiltinPh")}
+                        onChange={chooseListedBuiltin}
+                      />
+                    </div>
+                  ) : (
+                    <input
+                      className="input"
+                      value={value.issuer || ""}
+                      placeholder={t("totp.issuerPh")}
+                      onChange={(e) => applyIssuerText(e.target.value)}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="m-field">
@@ -202,35 +315,6 @@ export function TotpMobileEditor({
               placeholder={t("totp.accountPh")}
               onChange={(e) => m.setEditor({ ...value, account: e.target.value })}
             />
-          </div>
-
-          <div className="m-field">
-            <label className="m-field-label">{t("totp.icon")}</label>
-            <div className="row" style={{ gap: 8, alignItems: "center" }}>
-              <IconMark icon={value.icon} builtins={m.builtins} label={value.issuer} size={38} />
-              <select
-                className="input"
-                style={{ flex: 1 }}
-                value={value.icon?.startsWith("builtin:") ? value.icon : ""}
-                onChange={(e) => m.setEditor({ ...value, icon: e.target.value || undefined })}
-              >
-                <option value="">{t("totp.iconAuto")}</option>
-                {m.builtins.map((b) => (
-                  <option key={b.id} value={`builtin:${b.id}`}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="btn sm"
-                style={{ flexShrink: 0 }}
-                onClick={pickIcon}
-              >
-                <Upload size={13} />
-                <span>{t("totp.upload")}</span>
-              </button>
-            </div>
           </div>
         </section>
 
@@ -310,27 +394,29 @@ export function TotpMobileEditor({
             <div className="stack" style={{ gap: 12, marginTop: 4 }}>
               <div className="m-field">
                 <label className="m-field-label">{t("totp.algo")}</label>
-                <select
-                  className="input"
+                <OptionSelect
+                  title={t("totp.algo")}
                   value={value.algorithm || "SHA1"}
-                  onChange={(e) => m.setEditor({ ...value, algorithm: e.target.value })}
-                >
-                  <option value="SHA1">SHA1 (标准推荐)</option>
-                  <option value="SHA256">SHA256</option>
-                  <option value="SHA512">SHA512</option>
-                </select>
+                  onChange={(next) => m.setEditor({ ...value, algorithm: next })}
+                  options={[
+                    { value: "SHA1", label: "SHA1 (标准推荐)" },
+                    { value: "SHA256", label: "SHA256" },
+                    { value: "SHA512", label: "SHA512" },
+                  ]}
+                />
               </div>
 
               <div className="m-field">
                 <label className="m-field-label">{t("totp.digitsLabel")}</label>
-                <select
-                  className="input"
-                  value={value.digits || 6}
-                  onChange={(e) => m.setEditor({ ...value, digits: Number(e.target.value) })}
-                >
-                  <option value={6}>{t("totp.digits6")}</option>
-                  <option value={8}>{t("totp.digits8")}</option>
-                </select>
+                <OptionSelect
+                  title={t("totp.digitsLabel")}
+                  value={String(value.digits || 6)}
+                  onChange={(next) => m.setEditor({ ...value, digits: Number(next) })}
+                  options={[
+                    { value: "6", label: t("totp.digits6") },
+                    { value: "8", label: t("totp.digits8") },
+                  ]}
+                />
               </div>
 
               <div className="m-field">

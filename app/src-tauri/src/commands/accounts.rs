@@ -4,7 +4,7 @@ use crate::app_config;
 use crate::commands::{ensure_reveal_authorized, ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::icons;
-use crate::model::{AccountEntry, AccountSecret, GroupMeta, PasswordHistoryItem};
+use crate::model::{AccountEntry, AccountSecret, GroupMeta, GroupRemap, PasswordHistoryItem};
 use crate::store;
 use crate::util;
 use serde::{Deserialize, Serialize};
@@ -292,7 +292,12 @@ pub fn account_delete(app: AppHandle, state: State<AppState>, id: String) -> Res
 }
 
 #[tauri::command]
-pub fn account_save_groups(app: AppHandle, state: State<AppState>, groups: Vec<GroupMeta>) -> Result<()> {
+pub fn account_save_groups(
+    app: AppHandle,
+    state: State<AppState>,
+    groups: Vec<GroupMeta>,
+    remap: Option<GroupRemap>,
+) -> Result<()> {
     ensure_writes_allowed(&state)?;
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
@@ -300,6 +305,11 @@ pub fn account_save_groups(app: AppHandle, state: State<AppState>, groups: Vec<G
         return Err(AppError::Locked);
     }
     let mut data = store::load_accounts(v)?;
+    if let Some(remap) = remap.as_ref() {
+        for entry in &mut data.entries {
+            crate::model::remap_entry_group(&mut entry.group, remap);
+        }
+    }
     data.groups = groups;
     store::save_accounts(v, &data)?;
     drop(vault);

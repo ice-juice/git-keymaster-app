@@ -2,8 +2,6 @@ import { useMemo, useRef, useState, useEffect } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   ChevronLeft,
-  Eye,
-  EyeOff,
   Globe,
   KeyRound,
   Layers,
@@ -12,21 +10,27 @@ import {
   Shield,
   Tag,
   Trash2,
-  Upload,
   User,
   Check,
   FileText,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { api } from "../lib/ipc";
+import { api, errMessage } from "../lib/ipc";
+import { rememberCustomIcon } from "../lib/secretsUi";
 import { detectAccountSource, resolvePlatformBrand, suggestIcon } from "../lib/accountInput";
 import { Badge } from "../ui/common";
 import { IconMark } from "../ui/IconMark";
 import { GroupPicker } from "../ui/GroupPicker";
+import { OptionSelect } from "../ui/OptionSelect";
 import { type AccountsModel } from "../shared/hooks/useAccountsModel";
+import { AccountTagSuggestions } from "./Accounts.shared";
 import { useOverlayBack } from "../shared/mobileBack";
 import { AccountExtraFields } from "../ui/AccountExtraFields";
+import { BuiltinIconSelect } from "../ui/BuiltinIconSelect";
+import { IconUploadStack } from "../ui/IconColorPicker";
 import { PasswordGenerateControls } from "../ui/PasswordGenerate";
+import { colorIconRef, parseIconColor } from "../shared/iconColor";
+import { findBuiltinAccount, platformEntryMode } from "../shared/iconAliases";
 
 export function AccountMobileEditor({
   m,
@@ -40,9 +44,10 @@ export function AccountMobileEditor({
 
   useOverlayBack(!!value, onClose);
 
-  const [showPw, setShowPw] = useState(false);
   const [platformMsg, setPlatformMsg] = useState("");
+  const [platformMode, setPlatformMode] = useState<"builtin" | "custom">("builtin");
   const [suggestOpen, setSuggestOpen] = useState(false);
+  const platformSync = useRef("");
   const suggestRef = useRef<HTMLDivElement>(null);
 
   const isEditing = !!value?.id;
@@ -89,6 +94,14 @@ export function AccountMobileEditor({
   }, [value?.platform, existingPlatforms, existingRecords, m.builtins]);
 
   useEffect(() => {
+    if (!value || m.builtins.length === 0) return;
+    const key = value.id || "new";
+    if (platformSync.current === key) return;
+    platformSync.current = key;
+    setPlatformMode(platformEntryMode(m.builtins, value.platform, value.icon));
+  }, [value, m.builtins]);
+
+  useEffect(() => {
     if (!suggestOpen) return;
     const handleClickOutside = (e: MouseEvent) => {
       if (suggestRef.current && !suggestRef.current.contains(e.target as Node)) {
@@ -106,6 +119,7 @@ export function AccountMobileEditor({
     const d = detectAccountSource(raw, m.builtins);
     const brand = resolvePlatformBrand(d.platform || raw, d.icon, existingRecords, m.builtins);
     const keepCustom = value.icon?.startsWith("custom:");
+    const keptColor = parseIconColor(value.icon);
     const hasSibling = existingRecords.some(
       (e) => e.platform.trim().toLowerCase() === (brand.platform || raw).trim().toLowerCase(),
     );
@@ -123,11 +137,61 @@ export function AccountMobileEditor({
               : t("accounts.detectName"),
     );
 
+    const matched = findBuiltinAccount(m.builtins, brand.platform || raw, keepCustom ? undefined : brand.icon);
+    if (matched) setPlatformMode("builtin");
     m.setEditor({
       ...value,
-      platform: brand.platform || raw,
+      platform: matched ? matched.name : (brand.platform || raw),
       url: d.url || value.url,
-      icon: keepCustom ? value.icon : brand.icon || value.icon,
+      icon: keepCustom
+        ? value.icon
+        : matched
+          ? `builtin:${matched.id}`
+          : brand.icon || (keptColor ? colorIconRef(keptColor) : undefined),
+    });
+  }
+
+  function chooseBuiltinPlatform() {
+    if (!value) return;
+    setPlatformMode("builtin");
+    const hit = findBuiltinAccount(m.builtins, value.platform, value.icon);
+    if (!hit) {
+      m.setEditor({
+        ...value,
+        platform: "",
+        icon: value.icon?.startsWith("custom:") ? value.icon : undefined,
+      });
+      return;
+    }
+    m.setEditor({
+      ...value,
+      platform: hit.name,
+      icon: value.icon?.startsWith("custom:") ? value.icon : `builtin:${hit.id}`,
+    });
+  }
+
+  function chooseCustomPlatform() {
+    if (!value) return;
+    setPlatformMode("custom");
+    if (value.icon?.startsWith("builtin:")) m.setEditor({ ...value, icon: undefined });
+  }
+
+  function chooseListedBuiltin(next: string) {
+    if (!value) return;
+    if (!next) {
+      m.setEditor({
+        ...value,
+        platform: "",
+        icon: value.icon?.startsWith("custom:") ? value.icon : undefined,
+      });
+      return;
+    }
+    const hit = m.builtins.find((item) => `builtin:${item.id}` === next);
+    if (!hit) return;
+    m.setEditor({
+      ...value,
+      platform: hit.name,
+      icon: value.icon?.startsWith("custom:") ? value.icon : next,
     });
   }
 
@@ -149,14 +213,20 @@ export function AccountMobileEditor({
 
   async function pickIcon() {
     if (!value) return;
-    const path = await open({
-      filters: [{ name: t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "ico", "bmp"] }],
-    });
-    if (typeof path !== "string") return;
-    const info = await api.iconUploadCustom(path);
-    m.setEditor({ ...value, icon: info.iconRef });
+    try {
+      const path = await open({
+        filters: [{ name: t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "ico", "bmp"] }],
+      });
+      if (typeof path !== "string") return;
+      const info = await api.iconUploadCustom(path);
+      rememberCustomIcon(info.iconRef, info.dataUrl);
+      m.setEditor({ ...value, icon: info.iconRef });
+    } catch (e) {
+      m.setErr(errMessage(e) || t("accounts.iconUploadFailed"));
+    }
   }
 
+  const pickedBuiltin = findBuiltinAccount(m.builtins, value.platform, value.icon);
   const canSave =
     !m.writesLocked &&
     !m.busy &&
@@ -195,70 +265,105 @@ export function AccountMobileEditor({
 
       {/* 2. 表单主体滚动区 */}
       <main className="m-subpage-content">
-        {/* 卡片 1: 平台与账号信息 */}
+        {/* 卡片 1: 平台 */}
         <section className="m-form-card">
           <div className="m-form-card-title">
             <div className="row" style={{ gap: 6 }}>
               <Shield size={15} style={{ color: "var(--accent)" }} />
-              <span>{t("accounts.platform")} & {t("accounts.username")}</span>
+              <span>{t("accounts.platform")}</span>
             </div>
           </div>
 
           <div className="m-field" ref={suggestRef} style={{ position: "relative" }}>
             <label className="m-field-label">{t("accounts.platform")}</label>
             {isPlatformLocked ? (
-              <div
-                className="row"
-                style={{
-                  gap: 10,
-                  padding: "10px 12px",
-                  background: "var(--gray-soft)",
-                  borderRadius: "12px",
-                  border: "1px solid var(--border)",
-                  alignItems: "center",
-                }}
-              >
-                <IconMark icon={value.icon} builtins={m.builtins} label={value.platform} size={26} />
-                <span style={{ fontWeight: 700, fontSize: "14.5px", flex: 1 }}>{value.platform}</span>
-                <Badge kind="info">{t("accounts.lockedInGroup")}</Badge>
+              <div className="platform-brand is-locked">
+                <IconMark icon={value.icon} builtins={m.builtins} label={value.platform} size={36} />
+                <div className="platform-brand-main">
+                  <span className="platform-brand-name">{value.platform}</span>
+                  <Badge kind="info">{t("accounts.lockedInGroup")}</Badge>
+                </div>
               </div>
             ) : (
-              <>
-                <input
-                  className="input"
-                  autoFocus={!value.platform}
-                  enterKeyHint="next"
-                  autoCapitalize="none"
-                  placeholder={t("accounts.platformPh")}
-                  value={value.platform || ""}
-                  onChange={(e) => {
-                    applyPlatform(e.target.value);
-                    setSuggestOpen(true);
-                  }}
-                  onFocus={() => setSuggestOpen(true)}
+              <div className="platform-brand">
+                <IconUploadStack
+                  icon={value.icon}
+                  builtins={m.builtins}
+                  label={value.platform}
+                  size={44}
+                  onPickColor={(hex) => m.setEditor({ ...value, icon: colorIconRef(hex) })}
+                  onUpload={() => void pickIcon()}
                 />
-                {suggestOpen && candidates.length > 0 && (
-                  <div className="platform-suggest-menu" style={{ width: "100%", zIndex: 30 }}>
-                    {candidates.map((item) => (
-                      <div
-                        key={item.name}
-                        className="platform-suggest-item"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          applyPlatform(item.name);
-                          setSuggestOpen(false);
-                        }}
-                      >
-                        <IconMark icon={item.icon} builtins={m.builtins} label={item.name} size={22} />
-                        <span style={{ fontSize: "13.5px", fontWeight: 600, flex: 1 }}>{item.name}</span>
-                        {item.isExisting && <Badge kind="info">{t("accounts.existing")}</Badge>}
-                      </div>
-                    ))}
+                <div className="platform-brand-main">
+                  <div className="choice-row">
+                    <button type="button" className={"choice" + (platformMode === "builtin" ? " on" : "")} onClick={chooseBuiltinPlatform}>
+                      {t("accounts.platformBuiltin")}
+                    </button>
+                    <button type="button" className={"choice" + (platformMode === "custom" ? " on" : "")} onClick={chooseCustomPlatform}>
+                      {t("accounts.platformCustom")}
+                    </button>
                   </div>
-                )}
-                {platformMsg && <div className="m-field-hint">{platformMsg}</div>}
-              </>
+                  <div className="platform-brand-tools">
+                    {platformMode === "builtin" ? (
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <BuiltinIconSelect
+                          value={pickedBuiltin ? `builtin:${pickedBuiltin.id}` : ""}
+                          builtins={m.builtins}
+                          autoLabel={t("accounts.platformBuiltinPh")}
+                          onChange={chooseListedBuiltin}
+                        />
+                      </div>
+                    ) : (
+                      <div style={{ flex: 1, minWidth: 0, position: "relative" }}>
+                        <input
+                          className="input"
+                          autoFocus={!value.platform}
+                          enterKeyHint="next"
+                          autoCapitalize="none"
+                          placeholder={t("accounts.platformPh")}
+                          value={value.platform || ""}
+                          onChange={(e) => {
+                            applyPlatform(e.target.value);
+                            setSuggestOpen(true);
+                          }}
+                          onFocus={() => setSuggestOpen(true)}
+                        />
+                        {suggestOpen && candidates.length > 0 && (
+                          <div className="platform-suggest-menu" style={{ width: "100%", zIndex: 30 }}>
+                            {candidates.map((item) => (
+                              <div
+                                key={item.name}
+                                className="platform-suggest-item"
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  applyPlatform(item.name);
+                                  setSuggestOpen(false);
+                                }}
+                              >
+                                <IconMark icon={item.icon} builtins={m.builtins} label={item.name} size={22} />
+                                <span style={{ fontSize: "13.5px", fontWeight: 600, flex: 1 }}>{item.name}</span>
+                                {item.isExisting && <Badge kind="info">{t("accounts.existing")}</Badge>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {platformMsg && <div className="m-field-hint">{platformMsg}</div>}
+                </div>
+              </div>
             )}
+          </div>
+        </section>
+
+        {/* 卡片 2: 账号（用户名） */}
+        <section className="m-form-card">
+          <div className="m-form-card-title">
+            <div className="row" style={{ gap: 6 }}>
+              <User size={15} style={{ color: "var(--accent)" }} />
+              <span>{t("accounts.username")}</span>
+            </div>
           </div>
 
           <div className="m-field">
@@ -279,40 +384,9 @@ export function AccountMobileEditor({
               onChange={(e) => m.setEditor({ ...value, username: e.target.value })}
             />
           </div>
-
-          {!isPlatformLocked && (
-            <div className="m-field">
-              <label className="m-field-label">{t("accounts.icon")}</label>
-              <div className="row" style={{ gap: 8, alignItems: "center" }}>
-                <IconMark icon={value.icon} builtins={m.builtins} label={value.platform} size={38} />
-                <select
-                  className="input"
-                  style={{ flex: 1 }}
-                  value={value.icon?.startsWith("builtin:") ? value.icon : ""}
-                  onChange={(e) => m.setEditor({ ...value, icon: e.target.value || undefined })}
-                >
-                  <option value="">{t("accounts.iconAutoByPlatform")}</option>
-                  {m.builtins.map((b) => (
-                    <option key={b.id} value={`builtin:${b.id}`}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="btn sm"
-                  style={{ flexShrink: 0 }}
-                  onClick={pickIcon}
-                >
-                  <Upload size={13} />
-                  <span>{t("accounts.upload")}</span>
-                </button>
-              </div>
-            </div>
-          )}
         </section>
 
-        {/* 卡片 2: 密码凭据 */}
+        {/* 卡片 3: 密码凭据 */}
         <section className="m-form-card">
           <div className="m-form-card-title">
             <div className="row" style={{ gap: 6 }}>
@@ -326,31 +400,19 @@ export function AccountMobileEditor({
           </div>
 
           <div className="m-field">
-            <div className="row" style={{ gap: 8 }}>
-              <input
-                className="input mono"
-                type={showPw ? "text" : "password"}
-                autoComplete="new-password"
-                enterKeyHint="done"
-                placeholder={
-                  isEditing
-                    ? (value.hasPassword === false ? t("accounts.passwordRefillPh") : t("accounts.passwordKeepPh"))
-                    : t("accounts.passwordPh")
-                }
-                value={value.password || ""}
-                onChange={(e) => m.setEditor({ ...value, password: e.target.value })}
-                style={{ flex: 1, letterSpacing: showPw ? "normal" : "0.15em" }}
-              />
-              <button
-                type="button"
-                className="btn sm pw-gen-touch"
-                style={{ flexShrink: 0 }}
-                onClick={() => setShowPw((prev) => !prev)}
-              >
-                {showPw ? <EyeOff size={14} /> : <Eye size={14} />}
-                <span>{showPw ? t("accounts.hide") : t("accounts.show")}</span>
-              </button>
-            </div>
+            <input
+              className="input mono"
+              type="password"
+              autoComplete="new-password"
+              enterKeyHint="done"
+              placeholder={
+                isEditing
+                  ? (value.hasPassword === false ? t("accounts.passwordRefillPh") : t("accounts.passwordKeepPh"))
+                  : t("accounts.passwordPh")
+              }
+              value={value.password || ""}
+              onChange={(e) => m.setEditor({ ...value, password: e.target.value })}
+            />
             <PasswordGenerateControls
               compact
               password={value.password || ""}
@@ -360,7 +422,7 @@ export function AccountMobileEditor({
           </div>
         </section>
 
-        {/* 卡片 3: 分组、2FA 关联与详情 */}
+        {/* 卡片 4: 分组、2FA 关联与详情 */}
         <section className="m-form-card">
           <div className="m-form-card-title">
             <div className="row" style={{ gap: 6 }}>
@@ -386,18 +448,18 @@ export function AccountMobileEditor({
                 <span>{t("accounts.linkTotp")}</span>
               </span>
             </label>
-            <select
-              className="input"
+            <OptionSelect
+              title={t("accounts.linkTotp")}
               value={value.totpRef || ""}
-              onChange={(e) => m.setEditor({ ...value, totpRef: e.target.value || undefined })}
-            >
-              <option value="">{t("accounts.noLink")}</option>
-              {m.totps.map((totp) => (
-                <option key={totp.id} value={totp.id}>
-                  {totp.issuer} / {totp.account}
-                </option>
-              ))}
-            </select>
+              onChange={(next) => m.setEditor({ ...value, totpRef: next || undefined })}
+              options={[
+                { value: "", label: t("accounts.noLink") },
+                ...m.totps.map((totp) => ({
+                  value: totp.id,
+                  label: `${totp.issuer} / ${totp.account}`,
+                })),
+              ]}
+            />
             {m.totps.length === 0 && (
               <div className="m-field-hint">{t("accounts.noTotp")}</div>
             )}
@@ -449,6 +511,11 @@ export function AccountMobileEditor({
                 })
               }
             />
+            <AccountTagSuggestions
+              existing={m.allTags}
+              value={value.tags}
+              onChange={(tags) => m.setEditor({ ...value, tags })}
+            />
           </div>
 
           <div className="m-field">
@@ -496,7 +563,7 @@ export function AccountMobileEditor({
           </div>
         </section>
 
-        {/* 卡片 4: 危险操作 (仅编辑时展示) */}
+        {/* 卡片 5: 危险操作 (仅编辑时展示) */}
         {isEditing && (
           <section className="m-form-card" style={{ marginTop: 4 }}>
             <button

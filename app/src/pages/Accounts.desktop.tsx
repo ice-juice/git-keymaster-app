@@ -11,6 +11,7 @@ export function AccountsDesktop() {
   useItemFocus(true, () => {
     m.setGroup("全部");
     m.setQ("");
+    m.clearPlatformTags();
     m.setCollapsed({});
   });
 

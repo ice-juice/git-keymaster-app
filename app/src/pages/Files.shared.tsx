@@ -4,7 +4,7 @@ import { Download, Pencil, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { resolvePlatform } from "../platform/resolve";
 import { Badge, ConfirmDangerDialog, Empty, ErrorDialog, FieldLabel } from "../ui/common";
-import { GroupDialog } from "../ui/GroupDialog";
+import { GroupManageDialogs, groupManageHandlers } from "../ui/GroupDialog";
 import { GroupPicker } from "../ui/GroupPicker";
 import { GroupTabs } from "../ui/GroupTabs";
 import { ReauthDialog } from "../ui/ReauthDialog";
@@ -33,6 +33,7 @@ function groupLabel(g: string, t: (key: string, opts?: Record<string, unknown>) 
 
 export function FilesFilters({ m, hideSearch }: { m: FilesModel; hideSearch?: boolean }) {
   const { t } = useTranslation();
+  const manage = groupManageHandlers(m);
   return (
     <div className="group-filter-row">
       <GroupTabs
@@ -45,7 +46,9 @@ export function FilesFilters({ m, hideSearch }: { m: FilesModel; hideSearch?: bo
           color: m.groups.find((item) => item.name === g)?.color,
           sortable: g !== "全部" && g !== "未分组",
         }))}
-        onCreate={() => m.setGroupDlg(true)}
+        onCreate={manage.onCreate}
+        onEdit={manage.onEdit}
+        onDelete={manage.onDelete}
         onReorder={m.writesLocked ? undefined : m.reorderGroups}
         createLabel={t("files.newGroup")}
         createDisabled={m.writesLocked}
@@ -315,7 +318,8 @@ export function FilesDialogs({ m, skipEditor }: { m: FilesModel; skipEditor?: bo
   useOverlayBack(!!m.exportPick, () => m.setExportPick(null));
   useOverlayBack(!!m.pendingDelete, () => m.setPendingDelete(null));
   useOverlayBack(!!m.reauth, () => m.reauthCancel.current?.());
-  useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(false));
+  useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(null));
+  useOverlayBack(!!m.pendingDeleteGroup, () => m.setPendingDeleteGroup(null));
   return (
     <>
       <ErrorDialog message={m.err} onClose={() => m.setErr("")} />
@@ -326,9 +330,17 @@ export function FilesDialogs({ m, skipEditor }: { m: FilesModel; skipEditor?: bo
           onConfirm={(pw) => m.reauth!(pw)}
         />
       )}
-      {m.groupDlg && (
-        <GroupDialog existing={m.groups.map((g) => g.name)} onCancel={() => m.setGroupDlg(false)} onConfirm={m.saveGroup} />
-      )}
+      <GroupManageDialogs
+        groups={m.groups}
+        groupDlg={m.groupDlg}
+        pendingDeleteGroup={m.pendingDeleteGroup}
+        busy={m.busy}
+        onCancel={() => m.setGroupDlg(null)}
+        onConfirm={m.saveGroup}
+        onCancelDelete={() => m.setPendingDeleteGroup(null)}
+        onConfirmDelete={() => void m.confirmDeleteGroup()}
+        deleteCount={m.entries.filter((e) => e.group === m.pendingDeleteGroup).length}
+      />
       {!skipEditor && m.editor && <FileEditModal m={m} />}
       {m.exportPick && (
         <div className="wizard-overlay">

@@ -662,7 +662,8 @@ export const api = {
   totpAdd: (args: TotpUpsertArgs) => invoke<TotpEntry>("totp_add", { args }),
   totpUpdate: (args: TotpUpsertArgs) => invoke<TotpEntry>("totp_update", { args }),
   totpDelete: (id: string) => invoke<void>("totp_delete", { id }),
-  totpSaveGroups: (groups: GroupMeta[]) => invoke<void>("totp_save_groups", { groups }),
+  totpSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
+    invoke<void>("totp_save_groups", { groups, remap: remap ?? null }),
   totpGenerateCode: (id: string, password?: string) =>
     invoke<TotpCode>("totp_generate_code", { id, password: password ?? null }),
   totpParseUri: (uri: string) => invoke<ParsedTotpPreview>("totp_parse_uri", { uri }),
@@ -682,7 +683,8 @@ export const api = {
   accountAdd: (args: AccountUpsertArgs) => invoke<AccountEntry>("account_add", { args }),
   accountUpdate: (args: AccountUpsertArgs) => invoke<AccountEntry>("account_update", { args }),
   accountDelete: (id: string) => invoke<void>("account_delete", { id }),
-  accountSaveGroups: (groups: GroupMeta[]) => invoke<void>("account_save_groups", { groups }),
+  accountSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
+    invoke<void>("account_save_groups", { groups, remap: remap ?? null }),
   accountRevealPassword: (id: string, password?: string) =>
     invoke<AccountReveal>("account_reveal_password", { id, password: password ?? null }),
   accountTouch: (id: string) => invoke<void>("account_touch", { id }),
@@ -711,7 +713,8 @@ export const api = {
       password: password ?? null,
       attachmentId: attachmentId ?? null,
     }),
-  fileSaveGroups: (groups: GroupMeta[]) => invoke<void>("file_save_groups", { groups }),
+  fileSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
+    invoke<void>("file_save_groups", { groups, remap: remap ?? null }),
 
   noteList: () => invoke<NoteList>("note_list"),
   noteGetBody: (id: string) => invoke<NoteBody>("note_get_body", { id }),
@@ -720,7 +723,8 @@ export const api = {
   noteAssetAdd: (args: { path?: string; bytes?: number[] }) =>
     invoke<NoteAssetAddResult>("note_asset_add", { path: args.path ?? null, bytes: args.bytes ?? null }),
   noteAssetGet: (hash: string) => invoke<string>("note_asset_get", { hash }),
-  noteSaveGroups: (groups: GroupMeta[]) => invoke<void>("note_save_groups", { groups }),
+  noteSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
+    invoke<void>("note_save_groups", { groups, remap: remap ?? null }),
   noteExport: (id: string, destPath: string, mode?: string) =>
     invoke<void>("note_export", { id, destPath, mode: mode ?? null }),
   noteExportContent: (id: string, mode?: string) =>
@@ -785,6 +789,11 @@ export interface GroupMeta {
   name: string;
   color?: string | null;
   sortOrder: number;
+}
+
+export interface GroupRemap {
+  from: string;
+  to?: string | null;
 }
 
 export interface TotpEntry {

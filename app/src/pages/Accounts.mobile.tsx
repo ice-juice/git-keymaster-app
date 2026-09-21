@@ -21,9 +21,12 @@ import { MobileListToolbar } from "../ui/MobileListToolbar";
 import { useTranslation } from "react-i18next";
 import { pushMobileBack } from "../shared/mobileBack";
 import { useAccountsModel, type AccountsModel } from "../shared/hooks/useAccountsModel";
-import { AccountsDialogs, AccountsFilters } from "./Accounts.shared";
+import { AccountTag } from "../ui/AccountTag";
+import { AccountsDialogs, AccountsFilters, PlatformTagFilter } from "./Accounts.shared";
+import { activeAccountTag, tagsInAccounts, visibleAccountsForTag } from "../shared/accountList";
 import { AccountMobileEditor } from "./AccountMobileEditor";
 import { useItemFocus } from "../shared/hooks/useItemFocus";
+import { parseIconColor, pickPlatformIcon } from "../shared/iconColor";
 
 function AccountMobileCard({
   e,
@@ -41,7 +44,7 @@ function AccountMobileCard({
   const isCopiedTotp = e.totpRef ? m.copiedKey === `totp-${e.totpRef}` : false;
   const pwMissing = e.hasPassword === false;
 
-  const meta = [e.displayName, e.note].filter(Boolean).join(" · ");
+  const shownUser = m.displayUsername(e.id, e.username);
 
   return (
     <div className="m-account-card" data-focus-id={e.id}>
@@ -56,13 +59,34 @@ function AccountMobileCard({
             >
               {isCopiedUser ? <Check size={14} /> : <Copy size={14} />}
             </button>
-            <span className="m-account-username">{e.username}</span>
-            {e.pinned && <Badge kind="warn">{t("accounts.pinned")}</Badge>}
-            {e.tags?.map((tag) => (
-              <Badge key={tag}>{tag}</Badge>
-            ))}
+            <button
+              type="button"
+              className="m-account-username"
+              title={m.maskPref.enabled ? (m.userShown[e.id] ? t("accounts.hideUser") : t("accounts.showUser")) : e.username}
+              onClick={() => m.maskPref.enabled && m.toggleUserShown(e.id)}
+            >
+              {shownUser}
+            </button>
           </div>
-          {meta && <div className="m-account-meta-line">{meta}</div>}
+          {(e.displayName || e.note || e.pinned || (e.tags && e.tags.length > 0)) && (
+            <div className="m-account-meta">
+              {(e.displayName || e.note) && (
+                <span className="m-account-meta-text" title={[e.displayName, e.note].filter(Boolean).join(" · ")}>
+                  {e.displayName && <span className="m-account-meta-name">{e.displayName}</span>}
+                  {e.displayName && e.note && <span className="m-account-meta-dot">·</span>}
+                  {e.note && <span className="m-account-meta-note">{e.note}</span>}
+                </span>
+              )}
+              {(e.pinned || (e.tags && e.tags.length > 0)) && (
+                <span className="m-account-badges">
+                  {e.pinned && <Badge kind="warn">{t("accounts.pinned")}</Badge>}
+                  {e.tags?.map((tag) => (
+                    <AccountTag key={tag} tag={tag} />
+                  ))}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <div className="m-account-ops">
           <button
@@ -141,6 +165,8 @@ function AccountMobileCard({
 const PLATFORM_COLORS = ["#2563eb", "#db2777", "#d97706", "#7c3aed", "#dc2626", "#0284c7", "#65a30d", "#ea580c"];
 
 function platformAccent(platform: string, icon: string | undefined | null, builtins: BuiltinIconInfo[]): string {
+  const tint = parseIconColor(icon);
+  if (tint) return tint;
   if (icon?.startsWith("builtin:")) {
     const found = builtins.find((b) => b.id === icon.slice("builtin:".length))?.color;
     if (found) return found;
@@ -170,7 +196,10 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
     <div className="m-platform-stack">
       {m.platforms.map(([platform, list]) => {
         const folded = !!m.collapsed[platform];
-        const iconItem = list.find((e) => e.icon)?.icon || list[0]?.icon;
+        const tags = tagsInAccounts(list);
+        const selected = activeAccountTag(tags, m.selectedTags[platform]);
+        const shown = visibleAccountsForTag(list, selected);
+        const iconItem = pickPlatformIcon(list.map((e) => e.icon));
         const urlItem = list.find((e) => e.url)?.url;
         const accent = platformAccent(platform, iconItem, m.builtins);
 
@@ -212,14 +241,18 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
                         ev.stopPropagation();
                         m.setEditingPlatformModal({
                           platform,
-                          icon: list.find((e) => e.icon)?.icon ?? undefined,
+                          icon: iconItem,
                         });
                       }}
                     >
                       <Pencil size={13} />
                     </button>
                   </span>
-                  <span className="m-platform-count">{t("accounts.accountCount", { n: list.length })}</span>
+                  <span className="m-platform-count">
+                    {selected
+                      ? t("accounts.accountCountFiltered", { shown: shown.length, n: list.length })
+                      : t("accounts.accountCount", { n: list.length })}
+                  </span>
                 </div>
                 {urlItem && (
                   <span
@@ -240,7 +273,16 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
 
             {!folded && (
               <div className="m-account-list">
-                {list.map((e) => (
+                <PlatformTagFilter
+                  tags={tags}
+                  value={selected}
+                  onChange={(tag) => m.setPlatformTag(platform, tag)}
+                  compact
+                />
+                {shown.length === 0 && selected && (
+                  <div className="platform-tag-empty">{t("accounts.emptyTag")}</div>
+                )}
+                {shown.map((e) => (
                   <AccountMobileCard key={e.id} e={e} m={m} onMore={() => setMenu(e)} />
                 ))}
                 <button
@@ -251,7 +293,7 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
                     m.setEditor({
                       platform,
                       url: list.find((e) => e.url)?.url,
-                      icon: list.find((e) => e.icon)?.icon ?? undefined,
+                      icon: iconItem,
                       isPlatformLocked: true,
                     })
                   }
@@ -321,6 +363,7 @@ export function AccountsMobile() {
   useItemFocus(true, () => {
     m.setGroup("全部");
     m.setQ("");
+    m.clearPlatformTags();
     m.setCollapsed({});
   });
 

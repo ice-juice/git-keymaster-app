@@ -16,7 +16,8 @@ import { i18n } from "../../lib/i18n";
 import { firstOtpauth, pickQrFromGallery, scanQrWithCamera, totpImportUris } from "../../lib/qrCapture";
 import { isMobilePlatform } from "../../lib/platform";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
-import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
+import { applyGroupOrder, removeGroupMeta, renameGroupMeta, sortGroups } from "../../ui/groupOrder";
+import type { GroupDialogState } from "../../ui/GroupDialog";
 import { useApp } from "../../store";
 
 const VIEW_KEY = "gam.totp.view";
@@ -49,8 +50,9 @@ export function useTotpModel() {
   const [editor, setEditor] = useState<null | Partial<TotpEntry> & { secret?: string }>(null);
   const [secretDlg, setSecretDlg] = useState<null | { id: string; secret?: string; uri?: string; qr?: string }>(null);
   const [batchImport, setBatchImport] = useState<TotpImportResult | null>(null);
-  const [groupDlg, setGroupDlg] = useState(false);
+  const [groupDlg, setGroupDlg] = useState<GroupDialogState | null>(null);
   const [pendingDelete, setPendingDelete] = useState<TotpEntry | null>(null);
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
 
@@ -400,11 +402,48 @@ export function useTotpModel() {
   }
 
   async function saveGroup(name: string, color: string | null) {
+    if (groupDlg?.mode === "edit") {
+      const oldName = groupDlg.name;
+      const next = renameGroupMeta(groups, oldName, name, color);
+      const remap = oldName !== name ? { from: oldName, to: name } : null;
+      await api.totpSaveGroups(next, remap);
+      setGroups(next);
+      if (remap) {
+        setEntries((prev) => prev.map((e) => (e.group === oldName ? { ...e, group: name } : e)));
+        if (group === oldName) setGroup(name);
+      }
+      setGroupDlg(null);
+      return;
+    }
     const next = [...groups, { name, color, sortOrder: groups.length }];
     await api.totpSaveGroups(next);
     setGroups(next);
     setGroup(name);
-    setGroupDlg(false);
+    setGroupDlg(null);
+  }
+
+  function requestDeleteGroup(name: string) {
+    if (writesLocked || !groups.some((g) => g.name === name)) return;
+    setPendingDeleteGroup(name);
+  }
+
+  async function confirmDeleteGroup() {
+    if (!pendingDeleteGroup) return;
+    const name = pendingDeleteGroup;
+    setBusy(true);
+    try {
+      const next = removeGroupMeta(groups, name);
+      await api.totpSaveGroups(next, { from: name, to: null });
+      setGroups(next);
+      setEntries((prev) => prev.map((e) => (e.group === name ? { ...e, group: undefined } : e)));
+      if (group === name) setGroup("未分组");
+      setPendingDeleteGroup(null);
+      setGroupDlg(null);
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function reorderGroups(orderedNames: string[]) {
@@ -556,6 +595,8 @@ export function useTotpModel() {
     setGroupDlg,
     pendingDelete,
     setPendingDelete,
+    pendingDeleteGroup,
+    setPendingDeleteGroup,
     busy,
     batchProgress,
     batchUpdateGroup,
@@ -572,6 +613,8 @@ export function useTotpModel() {
     scanCamera,
     scanScreen,
     saveGroup,
+    requestDeleteGroup,
+    confirmDeleteGroup,
     reorderGroups,
     deleteEntry,
     confirmDeleteEntry,

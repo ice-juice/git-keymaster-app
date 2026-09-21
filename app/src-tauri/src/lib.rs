@@ -11,6 +11,7 @@ pub mod camera_perm;
 #[cfg(windows)]
 mod desktop_media;
 pub mod commands;
+mod content_file;
 pub mod session;
 pub mod security;
 pub mod error;
@@ -79,6 +80,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(camera_perm::init())
         .plugin(clipboard::init())
+        .plugin(content_file::init())
         .plugin(screen_protect::init())
         .plugin(biometric::init())
         .plugin(mobile::update::init())

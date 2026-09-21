@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { ArrowUpToLine, Check, ChevronDown, Columns2, Eye, FileCode2, Pin, Plus, Rows2, Save, Tag, Trash2, Type, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDangerDialog, Empty, ErrorDialog } from "../ui/common";
-import { GroupDialog } from "../ui/GroupDialog";
+import { GroupManageDialogs, groupManageHandlers } from "../ui/GroupDialog";
 import { GroupReorderButtons } from "../ui/GroupReorderButtons";
 import { GroupTabs } from "../ui/GroupTabs";
 import { moveGroupNames } from "../ui/groupOrder";
@@ -19,6 +19,7 @@ import {
   type NotesViewLayout,
 } from "../shared/hooks/useNotesModel";
 import { useOverlayBack } from "../shared/mobileBack";
+import { noteTagColor } from "../shared/tagColor";
 import { api } from "../lib/ipc";
 import type { NoteEntry } from "../lib/ipc";
 
@@ -118,6 +119,7 @@ export const NotePreview = forwardRef<
 
 export function NotesFilters({ m, hideSearch }: { m: NotesModel; hideSearch?: boolean }) {
   const { t } = useTranslation();
+  const manage = groupManageHandlers(m);
   return (
     <div className="stack" style={{ gap: 8 }}>
       <div className="group-filter-row">
@@ -131,7 +133,9 @@ export function NotesFilters({ m, hideSearch }: { m: NotesModel; hideSearch?: bo
             color: m.groups.find((item) => item.name === g)?.color,
             sortable: g !== "全部" && g !== "未分组",
           }))}
-          onCreate={() => m.setGroupDlg(true)}
+          onCreate={manage.onCreate}
+          onEdit={manage.onEdit}
+          onDelete={manage.onDelete}
           onReorder={m.writesLocked ? undefined : m.reorderGroups}
           createLabel={t("notes.newGroup")}
           createDisabled={m.writesLocked}
@@ -142,16 +146,21 @@ export function NotesFilters({ m, hideSearch }: { m: NotesModel; hideSearch?: bo
       </div>
       {m.allTags.length > 0 && (
         <div className="note-tag-row">
-          {m.allTags.map((tag) => (
-            <button
-              key={tag}
-              type="button"
-              className={"note-tag" + (m.selectedTag === tag ? " on" : "")}
-              onClick={() => m.setSelectedTag(m.selectedTag === tag ? null : tag)}
-            >
-              #{tag}
-            </button>
-          ))}
+          {m.allTags.map((tag) => {
+            const selected = m.selectedTag === tag;
+            const color = noteTagColor(tag, selected);
+            return (
+              <button
+                key={tag}
+                type="button"
+                className={"note-tag" + (selected ? " on" : "")}
+                style={{ color: color.fg, background: color.bg, borderColor: color.border }}
+                onClick={() => m.setSelectedTag(selected ? null : tag)}
+              >
+                #{tag}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
@@ -166,22 +175,6 @@ export function NoteSelectedMark() {
   );
 }
 
-export const TAG_PALETTE = [
-  { bg: "rgba(79, 70, 229, 0.16)", fg: "#3730a3" },
-  { bg: "rgba(219, 39, 119, 0.16)", fg: "#9d174d" },
-  { bg: "rgba(5, 150, 105, 0.16)", fg: "#065f46" },
-  { bg: "rgba(217, 119, 6, 0.18)", fg: "#92400e" },
-  { bg: "rgba(2, 132, 199, 0.16)", fg: "#075985" },
-  { bg: "rgba(124, 58, 237, 0.16)", fg: "#5b21b6" },
-  { bg: "rgba(225, 29, 72, 0.16)", fg: "#9f1239" },
-  { bg: "rgba(13, 148, 136, 0.16)", fg: "#115e59" },
-] as const;
-
-export function tagTone(tag: string) {
-  let hash = 0;
-  for (let i = 0; i < tag.length; i++) hash = (hash * 31 + tag.charCodeAt(i)) | 0;
-  return Math.abs(hash) % TAG_PALETTE.length;
-}
 
 export function NoteIndexTags({ tags }: { tags?: string[] }) {
   const shown = (tags || []).map((tag) => tag.trim()).filter(Boolean).slice(0, 3);
@@ -189,9 +182,9 @@ export function NoteIndexTags({ tags }: { tags?: string[] }) {
   return (
     <div className="note-index-tags">
       {shown.map((tag) => {
-        const tone = TAG_PALETTE[tagTone(tag)];
+        const color = noteTagColor(tag);
         return (
-          <span key={tag} className="note-index-tag" style={{ backgroundColor: tone.bg, color: tone.fg }}>
+          <span key={tag} className="note-index-tag" style={{ backgroundColor: color.bg, color: color.fg }}>
             #{tag}
           </span>
         );
@@ -599,13 +592,13 @@ export function NoteTagEditor({ m }: { m: NotesModel }) {
         onPointerDown={onTrackPointerDown}
       >
         {m.draft.tags.map((tag, index) => {
-          const tone = TAG_PALETTE[tagTone(tag)];
+          const color = noteTagColor(tag);
           return (
             <span
               key={tag}
               data-note-index={index}
               className={"note-tag on" + (dragTag === tag ? " is-dragging" : "")}
-              style={{ backgroundColor: tone.bg, color: tone.fg, borderColor: "transparent" }}
+              style={{ backgroundColor: color.bg, color: color.fg, borderColor: color.border }}
               title={t("notes.dragTag")}
               draggable={false}
               onDragStart={(e) => e.preventDefault()}
@@ -650,6 +643,7 @@ export function NoteTagEditor({ m }: { m: NotesModel }) {
                   key={tag}
                   type="button"
                   className="note-tag-suggest-item"
+                  style={{ color: noteTagColor(tag).fg }}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => commit(tag)}
                 >
@@ -774,16 +768,25 @@ export function NoteExportModal({ m }: { m: NotesModel }) {
 
 export function NotesDialogs({ m }: { m: NotesModel }) {
   const { t } = useTranslation();
-  useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(false));
+  useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(null));
+  useOverlayBack(!!m.pendingDeleteGroup, () => m.setPendingDeleteGroup(null));
   useOverlayBack(!!m.exportModal, () => m.setExportModal(false));
   useOverlayBack(!!m.pendingDelete, () => m.setPendingDelete(null));
   useOverlayBack(!!m.leaveConfirm, () => m.setLeaveConfirm(null));
   return (
     <>
       <ErrorDialog message={m.err} onClose={() => m.setErr("")} />
-      {m.groupDlg && (
-        <GroupDialog existing={m.groups.map((g) => g.name)} onCancel={() => m.setGroupDlg(false)} onConfirm={m.saveGroup} />
-      )}
+      <GroupManageDialogs
+        groups={m.groups}
+        groupDlg={m.groupDlg}
+        pendingDeleteGroup={m.pendingDeleteGroup}
+        busy={m.busy}
+        onCancel={() => m.setGroupDlg(null)}
+        onConfirm={m.saveGroup}
+        onCancelDelete={() => m.setPendingDeleteGroup(null)}
+        onConfirmDelete={() => void m.confirmDeleteGroup()}
+        deleteCount={m.entries.filter((e) => e.group === m.pendingDeleteGroup).length}
+      />
       <NoteExportModal m={m} />
       {m.pendingDelete && (
         <ConfirmDangerDialog

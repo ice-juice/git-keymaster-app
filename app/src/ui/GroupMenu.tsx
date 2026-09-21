@@ -25,15 +25,27 @@ export function GroupMenuList({
   value,
   onSelect,
   onReorder,
+  onEdit,
+  onDelete,
+  searchPlaceholder,
+  emptyLabel,
+  forceSearch,
 }: {
   items: GroupMenuItem[];
   value: string;
   onSelect: (key: string) => void;
   onReorder?: (orderedKeys: string[]) => void;
+  onEdit?: (key: string) => void;
+  onDelete?: (key: string) => void;
+  searchPlaceholder?: string;
+  emptyLabel?: string;
+  /** 桌面下拉等场景强制显示搜索框（不受条目数量限制） */
+  forceSearch?: boolean;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
-  const showSearch = items.length > 8;
+  const mobile = resolvePlatform() === "mobile";
+  const showSearch = forceSearch || mobile || items.length > 8;
   const visible = useMemo(() => filterGroupItems(items, query), [items, query]);
   const sortableKeys = useMemo(
     () =>
@@ -59,14 +71,14 @@ export function GroupMenuList({
             type="search"
             className="input"
             value={query}
-            placeholder={t("group.searchPh")}
+            placeholder={searchPlaceholder || t("group.searchPh")}
             onChange={(e) => setQuery(e.target.value)}
           />
         </label>
       )}
       <div className="group-menu-list" role="listbox">
         {visible.length === 0 ? (
-          <div className="group-menu-empty">{t("group.noMatch")}</div>
+          <div className="group-menu-empty">{emptyLabel || t("group.noMatch")}</div>
         ) : (
           visible.map((item) => {
             const on = item.key === value;
@@ -82,6 +94,7 @@ export function GroupMenuList({
                 <button
                   type="button"
                   className="group-menu-item-pick"
+                  title={item.label}
                   onClick={() => onSelect(item.key)}
                 >
                   <span className="group-menu-item-main">
@@ -89,13 +102,15 @@ export function GroupMenuList({
                     <span className="group-menu-item-label">{item.label}</span>
                     {item.count != null && <span className="group-tab-count">{item.count}</span>}
                   </span>
-                  {on && !showOrder ? <Check size={15} /> : null}
+                  {on ? <Check size={15} /> : null}
                 </button>
-                {showOrder ? (
+                {sortIndex >= 0 && (onEdit || onDelete || showOrder) ? (
                   <GroupReorderButtons
-                    canUp={sortIndex > 0}
-                    canDown={sortIndex < sortableKeys.length - 1}
+                    canUp={showOrder && sortIndex > 0}
+                    canDown={showOrder && sortIndex < sortableKeys.length - 1}
                     onMove={(action) => move(item.key, action)}
+                    onEdit={onEdit ? () => onEdit(item.key) : undefined}
+                    onDelete={onDelete ? () => onDelete(item.key) : undefined}
                   />
                 ) : null}
               </div>

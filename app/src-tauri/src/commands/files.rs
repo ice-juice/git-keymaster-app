@@ -3,7 +3,9 @@
 use crate::app_config;
 use crate::commands::{ensure_reveal_authorized, ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
-use crate::model::{collect_blob_hashes, file_usage_bytes, FileAttachment, FileEntry, GroupMeta};
+use crate::model::{
+    collect_blob_hashes, file_usage_bytes, FileAttachment, FileEntry, GroupMeta, GroupRemap,
+};
 use crate::store;
 use crate::store::blob::{self, DEFAULT_CHUNK_SIZE};
 use crate::util;
@@ -512,11 +514,17 @@ pub fn file_save_groups(
     app: AppHandle,
     state: State<'_, AppState>,
     groups: Vec<GroupMeta>,
+    remap: Option<GroupRemap>,
 ) -> Result<()> {
     ensure_writes_allowed(&state)?;
     let vault = recover_lock(&state.vault);
     let v = unlocked_vault(&vault)?;
     let mut data = store::load_files(v)?;
+    if let Some(remap) = remap.as_ref() {
+        for entry in &mut data.entries {
+            crate::model::remap_entry_group(&mut entry.group, remap);
+        }
+    }
     data.groups = groups;
     store::save_files(v, &data)?;
     drop(vault);

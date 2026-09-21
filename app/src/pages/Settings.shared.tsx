@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { OptionSelect } from "../ui/OptionSelect";
 import { getVersion } from "@tauri-apps/api/app";
 import {
   Palette,
@@ -36,7 +37,16 @@ import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../lib/secretsU
 import { notifyClipboardWatchChanged } from "../shared/clipboardWatch";
 import { useApp } from "../store";
 import { THEME_OPTIONS } from "../lib/theme";
-import { getNotesAutoSave, setNotesAutoSaveStored, UNLOCK_ANIM_STYLES } from "../lib/prefs";
+import {
+  getMaskAccountKeep,
+  getMaskAccountMiddle,
+  getNotesAutoSave,
+  setMaskAccountKeepStored,
+  setMaskAccountMiddleStored,
+  setNotesAutoSaveStored,
+  UNLOCK_ANIM_STYLES,
+} from "../lib/prefs";
+import { clampMaskKeep, MAX_MASK_KEEP, MIN_MASK_KEEP } from "../shared/maskAccount";
 import { PageHead, Card, FieldLabel, Badge, ErrorDialog } from "../ui/common";
 import { PatGuideDialog } from "../ui/PatGuideDialog";
 import { ReauthDialog } from "../ui/ReauthDialog";
@@ -215,12 +225,11 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
       <div className="field">
         <label className="field-label">{t("pat.platformLabel")}</label>
         <div className="row" style={{ flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-          <select
-            className="input"
+          <OptionSelect
+            title={t("pat.platformLabel")}
             value={provider}
-            style={{ flex: 1, minWidth: 160 }}
-            onChange={(e) => {
-              setProvider(e.target.value as GitProvider);
+            onChange={(next) => {
+              setProvider(next as GitProvider);
               setToken("");
               setRevealed(null);
               setPlain(false);
@@ -228,13 +237,11 @@ export function GithubPatSettings({ writesLocked }: { writesLocked: boolean }) {
               setMsg("");
               setErr("");
             }}
-          >
-            {PAT_PROVIDERS.map((p) => (
-              <option key={p.id} value={p.id}>
-                {t(`pat.platform.${p.id}`)}
-              </option>
-            ))}
-          </select>
+            options={PAT_PROVIDERS.map((p) => ({
+              value: p.id,
+              label: t(`pat.platform.${p.id}`),
+            }))}
+          />
           <button type="button" className="btn ghost sm" onClick={() => setGuideOpen(true)}>
             {t("pat.guideOpen")}
           </button>
@@ -948,7 +955,7 @@ export function AboutUpdateCard() {
   useEffect(() => {
     getVersion()
       .then(setVersion)
-      .catch(() => setVersion("1.9.1"));
+      .catch(() => setVersion("1.9.2"));
     loadPrefs().catch((e) => setErr(errMessage(e)));
   }, []);
 
@@ -1445,6 +1452,8 @@ export function SettingsView() {
   const [bio, setBio] = useState<BiometricStatus | null>(null);
   const [bioPw, setBioPw] = useState("");
   const [notesAutoSave, setNotesAutoSave] = useState(getNotesAutoSave);
+  const [maskAccount, setMaskAccount] = useState(getMaskAccountMiddle);
+  const [maskAccountKeep, setMaskAccountKeep] = useState(getMaskAccountKeep);
   const [allowScreenshots, setAllowScreenshots] = useState(false);
   const [screenshotCapability, setScreenshotCapability] = useState<ScreenCaptureCapability>("exclude");
 
@@ -1818,6 +1827,45 @@ export function SettingsView() {
             <>
               <SecurityChecklistCard refreshNonce={checklistNonce} onJump={jumpToSetting} />
 
+              <Card title={t("settings.accountsCard")}>
+                <div className="field">
+                  <div className="between">
+                    <div>
+                      <FieldLabel name={t("settings.maskAccount")} tip={t("settings.maskAccountTip")} />
+                      <div className="hint">{t("settings.maskAccountHint")}</div>
+                    </div>
+                    <button
+                      type="button"
+                      className={"switch" + (maskAccount ? "" : " off")}
+                      onClick={() => {
+                        const next = !maskAccount;
+                        setMaskAccount(next);
+                        setMaskAccountMiddleStored(next);
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="field" style={{ marginTop: 12 }}>
+                  <FieldLabel name={t("settings.maskAccountKeep")} tip={t("settings.maskAccountKeepTip")} />
+                  <div className="hint">{t("settings.maskAccountKeepHint")}</div>
+                  <div className="row" style={{ marginTop: 8, maxWidth: 160 }}>
+                    <input
+                      className="input"
+                      type="number"
+                      min={MIN_MASK_KEEP}
+                      max={MAX_MASK_KEEP}
+                      value={maskAccountKeep}
+                      disabled={!maskAccount}
+                      onChange={(e) => {
+                        const next = clampMaskKeep(Number(e.target.value));
+                        setMaskAccountKeep(next);
+                        setMaskAccountKeepStored(next);
+                      }}
+                    />
+                  </div>
+                </div>
+              </Card>
+
               <Card title={t("settings.graceTitle")}>
                 <div className="stack">
                   <div className="field">
@@ -2008,13 +2056,19 @@ export function SettingsView() {
                   <div className="field" id="setting-reveal-grace">
                     <FieldLabel name={t("settings.revealGrace")} tip={t("settings.revealGraceTip")} />
                     <div className="row" style={{ marginTop: 4 }}>
-                      <select className="input" style={{ width: 160 }} value={revealGrace} onChange={(e) => setRevealGrace(e.target.value)}>
-                        <option value="0">{t("settings.everyTime")}</option>
-                        <option value="1">{t("settings.min1")}</option>
-                        <option value="5">{t("settings.min5")}</option>
-                        <option value="15">{t("settings.min15")}</option>
-                        <option value="30">{t("settings.min30")}</option>
-                      </select>
+                      <OptionSelect
+                        title={t("settings.revealGrace")}
+                        style={{ width: 160 }}
+                        value={revealGrace}
+                        onChange={setRevealGrace}
+                        options={[
+                          { value: "0", label: t("settings.everyTime") },
+                          { value: "1", label: t("settings.min1") },
+                          { value: "5", label: t("settings.min5") },
+                          { value: "15", label: t("settings.min15") },
+                          { value: "30", label: t("settings.min30") },
+                        ]}
+                      />
                       <button
                         type="button"
                         className="btn primary sm"
@@ -2039,12 +2093,18 @@ export function SettingsView() {
                   <div className="field" id="setting-clipboard-clear">
                     <label className="field-label">{t("settings.clipClear")}</label>
                     <div className="row">
-                      <select className="input" style={{ width: 140 }} value={clipSec} onChange={(e) => setClipSec(e.target.value)}>
-                        <option value="0">{t("settings.clipNever")}</option>
-                        <option value="10">{t("settings.sec10")}</option>
-                        <option value="20">{t("settings.sec20")}</option>
-                        <option value="60">{t("settings.sec60")}</option>
-                      </select>
+                      <OptionSelect
+                        title={t("settings.clipClear")}
+                        style={{ width: 140 }}
+                        value={clipSec}
+                        onChange={setClipSec}
+                        options={[
+                          { value: "0", label: t("settings.clipNever") },
+                          { value: "10", label: t("settings.sec10") },
+                          { value: "20", label: t("settings.sec20") },
+                          { value: "60", label: t("settings.sec60") },
+                        ]}
+                      />
                       <button
                         type="button"
                         className="btn sm"
@@ -2063,11 +2123,17 @@ export function SettingsView() {
                   <div className="field">
                     <label className="field-label">{t("settings.histLimit")}</label>
                     <div className="row">
-                      <select className="input" style={{ width: 120 }} value={histLimit} onChange={(e) => setHistLimit(e.target.value)}>
-                        <option value="5">{t("settings.histN", { n: 5 })}</option>
-                        <option value="10">{t("settings.histN", { n: 10 })}</option>
-                        <option value="20">{t("settings.histN", { n: 20 })}</option>
-                      </select>
+                      <OptionSelect
+                        title={t("settings.histLimit")}
+                        style={{ width: 120 }}
+                        value={histLimit}
+                        onChange={setHistLimit}
+                        options={[
+                          { value: "5", label: t("settings.histN", { n: 5 }) },
+                          { value: "10", label: t("settings.histN", { n: 10 }) },
+                          { value: "20", label: t("settings.histN", { n: 20 }) },
+                        ]}
+                      />
                       <button
                         type="button"
                         className="btn sm"

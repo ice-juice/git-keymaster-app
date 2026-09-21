@@ -29,6 +29,21 @@ export function moveGroupNames(names: string[], key: string, action: GroupMove):
   return next;
 }
 
+export function renameGroupMeta(
+  groups: GroupMeta[],
+  oldName: string,
+  name: string,
+  color: string | null,
+): GroupMeta[] {
+  return groups.map((g) => (g.name === oldName ? { ...g, name, color } : g));
+}
+
+export function removeGroupMeta(groups: GroupMeta[], name: string): GroupMeta[] {
+  return groups
+    .filter((g) => g.name !== name)
+    .map((g, i) => ({ ...g, sortOrder: i }));
+}
+
 export function applyGroupOrder(groups: GroupMeta[], orderedNames: string[]): GroupMeta[] {
   const byName = new Map(groups.map((g) => [g.name, g]));
   const seen = new Set<string>();

@@ -506,6 +506,25 @@ html[data-platform="mobile"] .group-tab.on .group-tab-count {
   color: var(--text-soft);
   font-weight: 400;
 }
+html[data-platform="mobile"] .m-group-cell-btn .m-group-cell-val,
+html[data-platform="mobile"] .m-group-cell-btn .m-group-cell-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+.option-select-host {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+html[data-platform="mobile"] .group-menu-sheet .group-menu-list,
+html[data-platform="mobile"] .m-note-sheet .group-menu-list {
+  overflow: auto;
+  max-height: min(48vh, 420px);
+  -webkit-overflow-scrolling: touch;
+}
 .m-group-cell-arrow {
   color: var(--text-muted);
 }
@@ -616,8 +635,12 @@ html[data-platform="mobile"] .group-menu-item-pick {
   padding: 0 6px;
 }
 html[data-platform="mobile"] .group-reorder-btn {
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
+}
+html[data-platform="mobile"] .group-row-menu-item {
+  min-height: 44px;
+  font-size: 14px;
 }
 html[data-platform="mobile"] .group-menu-item.on {
   background: var(--accent-soft);
@@ -1699,6 +1722,12 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   line-height: 1.4;
 }
 
+html[data-platform="mobile"] .account-tag-suggest-row .note-tag {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 .m-form-accordion-toggle {
   display: flex;
   align-items: center;
@@ -2309,6 +2338,19 @@ html[data-platform="mobile"] .m-totp-view-btn {
   gap: 0;
   padding: 0;
 }
+html[data-platform="mobile"] .m-account-list .platform-tag-row {
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+html[data-platform="mobile"] .m-account-list .platform-tag-row .note-tag {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+html[data-platform="mobile"] .m-account-list .platform-tag-empty {
+  padding: 16px 16px 12px;
+  text-align: center;
+}
 html[data-platform="mobile"] .m-account-card {
   display: flex;
   flex-direction: column;
@@ -2338,7 +2380,8 @@ html[data-platform="mobile"] .m-account-user-title {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 html[data-platform="mobile"] .m-account-user-copy {
   width: 32px;
@@ -2361,19 +2404,80 @@ html[data-platform="mobile"] .m-account-user-copy.is-copied {
   color: var(--accent);
 }
 html[data-platform="mobile"] .m-account-username {
+  min-width: 0;
+  flex: 1 1 auto;
+  border: 0;
+  padding: 0;
+  background: transparent;
   font-family: var(--mono);
   font-size: 14px;
   font-weight: 700;
   color: var(--text);
   line-height: 1.3;
-}
-html[data-platform="mobile"] .m-account-meta-line {
-  font-size: 11px;
-  color: var(--text-mute);
-  white-space: nowrap;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+html[data-platform="mobile"] .m-account-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  min-width: 0;
+  margin-top: 2px;
   padding-left: 34px;
+}
+html[data-platform="mobile"] .m-account-meta-text {
+  min-width: 0;
+  max-width: 100%;
+  flex: 1 1 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-soft);
+}
+html[data-platform="mobile"] .m-account-meta-note,
+html[data-platform="mobile"] .m-account-meta-dot {
+  color: var(--text-mute);
+}
+html[data-platform="mobile"] .m-account-meta-dot {
+  margin: 0 4px;
+}
+html[data-platform="mobile"] .m-account-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+}
+html[data-platform="mobile"] .platform-brand {
+  padding: 8px;
+  border-radius: 12px;
+}
+html[data-platform="mobile"] .platform-brand-tools {
+  flex-wrap: wrap;
+}
+html[data-platform="mobile"] .platform-brand-tools .btn {
+  flex: 0 0 auto;
+}
+html[data-platform="mobile"] .platform-icon-upload {
+  height: 28px;
+  font-size: 11px;
+}
+html[data-platform="mobile"] .icon-color-pop {
+  grid-template-columns: repeat(6, 28px);
+  gap: 10px;
+  padding: 12px;
+}
+html[data-platform="mobile"] .icon-color-swatch {
+  width: 28px;
+  height: 28px;
 }
 html[data-platform="mobile"] .m-account-ops {
   display: flex;
@@ -3995,8 +4099,85 @@ html[data-platform="mobile"] .pw-gen-row,
 html[data-platform="mobile"] .pw-gen-check {
   min-height: 30px;
 }
+html[data-platform="mobile"] .extra-fields-box.compact,
+html[data-platform="mobile"] .extra-fields-box {
+  gap: 10px;
+  padding: 12px;
+}
+html[data-platform="mobile"] .extra-field-row,
 html[data-platform="mobile"] .extra-field-row.compact {
-  grid-template-columns: 1fr;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+}
+html[data-platform="mobile"] .extra-field-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+html[data-platform="mobile"] .extra-field-toggle {
+  min-height: 44px;
+  padding: 0 4px 0 0;
+  gap: 8px;
+}
+html[data-platform="mobile"] .extra-field-summary {
+  font-size: 13px;
+}
+html[data-platform="mobile"] .extra-field-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+html[data-platform="mobile"] .extra-field-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+html[data-platform="mobile"] .extra-field-actions .btn {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
+  justify-content: center;
+}
+html[data-platform="mobile"] .icon-select-trigger {
+  min-height: 44px;
+}
+html[data-platform="mobile"] .icon-select-item {
+  min-height: 44px;
+}
+html[data-platform="mobile"] .icon-select-list {
+  max-height: min(320px, 50vh);
+}
+html[data-platform="mobile"] .extra-field-add {
+  width: 100%;
+  align-self: stretch;
+  justify-content: center;
+}
+html[data-platform="mobile"] .m-settings-cell:has(.m-settings-stepper) {
+  cursor: default;
+}
+html[data-platform="mobile"] .m-settings-stepper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+html[data-platform="mobile"] .m-settings-stepper-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1;
 }
 html[data-platform="mobile"] .palette-overlay {
   padding: max(12px, var(--km-safe-top)) 10px 16px;

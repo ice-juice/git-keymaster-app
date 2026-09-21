@@ -58,6 +58,10 @@ export async function tryBiometricReauth(): Promise<boolean> {
   }
 }
 
+export function rememberCustomIcon(iconRef: string, dataUrl: string) {
+  if (iconRef.startsWith("custom:") && dataUrl) customCache.set(iconRef, dataUrl);
+}
+
 export async function customIconUrl(iconRef: string | null | undefined): Promise<string | null> {
   if (!iconRef?.startsWith("custom:")) return null;
   const hit = customCache.get(iconRef);

@@ -12,7 +12,15 @@ import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secre
 import { resolvePlatform } from "../../platform/resolve";
 import { resolvePlatformBrand, platformFamily } from "../../lib/accountInput";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
-import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
+import { applyGroupOrder, removeGroupMeta, renameGroupMeta, sortGroups } from "../../ui/groupOrder";
+import type { GroupDialogState } from "../../ui/GroupDialog";
+import { compareAccountsInPlatform, tagsInAccounts } from "../accountList";
+import { maskAccountMiddle } from "../maskAccount";
+import {
+  getMaskAccountKeep,
+  getMaskAccountMiddle,
+  subscribePrefs,
+} from "../../lib/prefs";
 import type { ExtraFieldDraft } from "../../ui/AccountExtraFields";
 import { useApp } from "../../store";
 import { i18n } from "../../lib/i18n";
@@ -48,6 +56,12 @@ export function useAccountsModel() {
   const [builtins, setBuiltins] = useState<BuiltinIconInfo[]>([]);
   const [q, setQ] = useState("");
   const [group, setGroup] = useState("全部");
+  const [selectedTags, setSelectedTags] = useState<Record<string, string | null>>({});
+  const [userShown, setUserShown] = useState<Record<string, boolean>>({});
+  const [maskPref, setMaskPref] = useState(() => ({
+    enabled: getMaskAccountMiddle(),
+    keep: getMaskAccountKeep(),
+  }));
   const [err, setErr] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [reauth, setReauth] = useState<null | ((pw: string) => Promise<void>)>(null);
@@ -69,7 +83,8 @@ export function useAccountsModel() {
   const [pwShown, setPwShown] = useState<Record<string, string>>({});
   const [totpShown, setTotpShown] = useState<Record<string, { code: string; remain: number; period: number }>>({});
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [groupDlg, setGroupDlg] = useState(false);
+  const [groupDlg, setGroupDlg] = useState<GroupDialogState | null>(null);
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{
     id: string;
     platform: string;
@@ -94,6 +109,12 @@ export function useAccountsModel() {
       .getRevealSettings()
       .then((s) => setRevealCfg({ grace: s.revealGraceMinutes, clip: s.clipboardClearSeconds }))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    return subscribePrefs(() => {
+      setMaskPref({ enabled: getMaskAccountMiddle(), keep: getMaskAccountKeep() });
+    });
   }, []);
 
   useEffect(() => {
@@ -184,6 +205,8 @@ export function useAccountsModel() {
     }
   }
 
+  const allTags = useMemo(() => tagsInAccounts(entries), [entries]);
+
   const filtered = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return entries.filter((e) => {
@@ -197,6 +220,17 @@ export function useAccountsModel() {
     });
   }, [entries, q, group]);
 
+  function setPlatformTag(platform: string, tag: string | null) {
+    setSelectedTags((prev) => {
+      if ((prev[platform] ?? null) === tag) return prev;
+      return { ...prev, [platform]: tag };
+    });
+  }
+
+  function clearPlatformTags() {
+    setSelectedTags({});
+  }
+
   const platforms = useMemo(() => {
     const map = new Map<string, AccountEntry[]>();
     for (const e of filtered) {
@@ -206,14 +240,7 @@ export function useAccountsModel() {
       map.set(family, list);
     }
     for (const list of map.values()) {
-      list.sort((a, b) => {
-        if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
-        const ta = a.lastUsedAt || "";
-        const tb = b.lastUsedAt || "";
-        if (ta !== tb) return tb.localeCompare(ta);
-        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-        return a.username.localeCompare(b.username);
-      });
+      list.sort(compareAccountsInPlatform);
     }
     return [...map.values()]
       .map((list) => {
@@ -393,12 +420,63 @@ export function useAccountsModel() {
     }
   }
 
+  function displayUsername(id: string, username: string) {
+    if (userShown[id] || !maskPref.enabled) return username;
+    return maskAccountMiddle(username, maskPref.keep, true);
+  }
+
+  function toggleUserShown(id: string) {
+    setUserShown((m) => {
+      const next = { ...m };
+      if (next[id]) delete next[id];
+      else next[id] = true;
+      return next;
+    });
+  }
+
   async function saveGroup(name: string, color: string | null) {
+    if (groupDlg?.mode === "edit") {
+      const oldName = groupDlg.name;
+      const next = renameGroupMeta(groups, oldName, name, color);
+      const remap = oldName !== name ? { from: oldName, to: name } : null;
+      await api.accountSaveGroups(next, remap);
+      setGroups(next);
+      if (remap) {
+        setEntries((prev) => prev.map((e) => (e.group === oldName ? { ...e, group: name } : e)));
+        if (group === oldName) setGroup(name);
+      }
+      setGroupDlg(null);
+      return;
+    }
     const next = [...groups, { name, color, sortOrder: groups.length }];
     await api.accountSaveGroups(next);
     setGroups(next);
     setGroup(name);
-    setGroupDlg(false);
+    setGroupDlg(null);
+  }
+
+  function requestDeleteGroup(name: string) {
+    if (writesLocked || !groups.some((g) => g.name === name)) return;
+    setPendingDeleteGroup(name);
+  }
+
+  async function confirmDeleteGroup() {
+    if (!pendingDeleteGroup) return;
+    const name = pendingDeleteGroup;
+    setBusy(true);
+    try {
+      const next = removeGroupMeta(groups, name);
+      await api.accountSaveGroups(next, { from: name, to: null });
+      setGroups(next);
+      setEntries((prev) => prev.map((e) => (e.group === name ? { ...e, group: undefined } : e)));
+      if (group === name) setGroup("未分组");
+      setPendingDeleteGroup(null);
+      setGroupDlg(null);
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function reorderGroups(orderedNames: string[]) {
@@ -515,6 +593,12 @@ export function useAccountsModel() {
     setQ,
     group,
     setGroup,
+    allTags,
+    selectedTags,
+    setPlatformTag,
+    clearPlatformTags,
+    userShown,
+    maskPref,
     err,
     setErr,
     collapsed,
@@ -533,6 +617,8 @@ export function useAccountsModel() {
     setGroupDlg,
     pendingDelete,
     setPendingDelete,
+    pendingDeleteGroup,
+    setPendingDeleteGroup,
     editingPlatformModal,
     setEditingPlatformModal,
     busy,
@@ -540,6 +626,8 @@ export function useAccountsModel() {
     tabs,
     expandAll: () => setCollapsed({}),
     collapseAll: () => setCollapsed(Object.fromEntries(platforms.map(([p]) => [p, true]))),
+    displayUsername,
+    toggleUserShown,
     copyUsername,
     revealPw,
     hidePw,
@@ -549,6 +637,8 @@ export function useAccountsModel() {
     revealEditorFields,
     saveEditor,
     saveGroup,
+    requestDeleteGroup,
+    confirmDeleteGroup,
     reorderGroups,
     deleteEditorAccount,
     confirmDeleteEditorAccount,

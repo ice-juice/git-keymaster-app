@@ -1,3 +1,4 @@
+import { resolveBuiltinQuery } from "../shared/iconAliases";
 import { i18n } from "./i18n";
 
 /** 识别账号表单里粘贴的是网址还是平台名，并尽量回填平台 / URL / 图标。 */
@@ -52,15 +53,8 @@ export function detectAccountSource(raw: string, builtins: BuiltinHint[]): Detec
 }
 
 export function suggestIcon(name: string, builtins: BuiltinHint[]): string | undefined {
-  const q = name.trim().toLowerCase();
-  if (!q) return undefined;
-  const stem = q.replace(/\.(com|cn|net|org|io|me|co|cc)$/i, "");
-  const hit = builtins.find((i) => {
-    const id = i.id.toLowerCase();
-    const bName = i.name.toLowerCase();
-    return q === id || q === bName || stem === id || stem === bName;
-  });
-  return hit ? `builtin:${hit.id}` : undefined;
+  const id = resolveBuiltinQuery(name, builtins);
+  return id ? `builtin:${id}` : undefined;
 }
 
 /** 同一平台的归并键：能精准匹配内置站用图标 id，其余用小写平台名。 */

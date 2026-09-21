@@ -12,6 +12,7 @@ import {
   type Candidate,
 } from "../lib/ipc";
 import { PageHead, Card, Badge } from "../ui/common";
+import { OptionSelect } from "../ui/OptionSelect";
 import { writeClipboard } from "../lib/clipboard";
 import { useApp } from "../store";
 
@@ -249,17 +250,15 @@ export function ClonePage({
               {identityOptions.length > 1 && (
                 <div className="field">
                   <label className="field-label">{t("clone.useIdentity")}</label>
-                  <select
-                    className="input"
+                  <OptionSelect
+                    title={t("clone.useIdentity")}
                     value={activeIdentity?.identityId ?? ""}
-                    onChange={(e) => setPickedIdentityId(e.target.value)}
-                  >
-                    {identityOptions.map((c) => (
-                      <option key={c.identityId} value={c.identityId}>
-                        {t("clone.identityOption", { name: c.identityName, alias: c.hostAlias })}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={setPickedIdentityId}
+                    options={identityOptions.map((c) => ({
+                      value: c.identityId,
+                      label: t("clone.identityOption", { name: c.identityName, alias: c.hostAlias }),
+                    }))}
+                  />
                 </div>
               )}
 

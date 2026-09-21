@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, Pencil, Trash2, X, Plus, FolderGit2, Download } from "lucide-react";
 import { api, errMessage, type Identity, type ManagedRepoView } from "../lib/ipc";
 import { PageHead, Card, Empty, Badge } from "../ui/common";
+import { OptionSelect } from "../ui/OptionSelect";
 import { useApp } from "../store";
 import { ClonePage } from "./Clone";
 
@@ -382,14 +383,18 @@ function RemoteEditModal({
           </div>
           <div className="field">
             <label className="field-label">{t("repos.bindIdentity")}</label>
-            <select className="input" value={identityId} onChange={(e) => setIdentityId(e.target.value)}>
-              <option value="">{t("repos.noSwitch")}</option>
-              {identities.map((id) => (
-                <option key={id.id} value={id.id}>
-                  {t("repos.identityOption", { name: id.name, alias: id.hostAlias })}
-                </option>
-              ))}
-            </select>
+            <OptionSelect
+              title={t("repos.bindIdentity")}
+              value={identityId}
+              onChange={setIdentityId}
+              options={[
+                { value: "", label: t("repos.noSwitch") },
+                ...identities.map((id) => ({
+                  value: id.id,
+                  label: t("repos.identityOption", { name: id.name, alias: id.hostAlias }),
+                })),
+              ]}
+            />
           </div>
           <div className="between" style={{ padding: "4px 0" }}>
             <div>

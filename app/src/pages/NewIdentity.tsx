@@ -13,6 +13,7 @@ import {
 } from "../lib/ipc";
 import { useApp } from "../store";
 import { FieldLabel } from "../ui/common";
+import { OptionSelect } from "../ui/OptionSelect";
 import { writeClipboard } from "../lib/clipboard";
 
 const DRAFT_KEY = "gam.newIdentity.draft";
@@ -712,14 +713,19 @@ export function NewIdentity() {
                   {keys.length === 0 ? (
                     <div className="muted">{t("identity.noKeys")}</div>
                   ) : (
-                    <select className="input" value={d.keyId} disabled={locked} onChange={(e) => set({ keyId: e.target.value, pendingPub: "", pendingKeyId: "" })}>
-                      <option value="">{t("identity.pickKeyPh")}</option>
-                      {keys.map((k) => (
-                        <option key={k.id} value={k.id}>
-                          {k.name} · {k.algorithm} · {k.fingerprint.slice(0, 24)}
-                        </option>
-                      ))}
-                    </select>
+                    <OptionSelect
+                      title={t("identity.pickKey")}
+                      value={d.keyId}
+                      disabled={locked}
+                      onChange={(next) => set({ keyId: next, pendingPub: "", pendingKeyId: "" })}
+                      options={[
+                        { value: "", label: t("identity.pickKeyPh") },
+                        ...keys.map((k) => ({
+                          value: k.id,
+                          label: `${k.name} · ${k.algorithm} · ${k.fingerprint.slice(0, 24)}`,
+                        })),
+                      ]}
+                    />
                   )}
                   <div className="hint">{t("identity.pickKeyHint")}</div>
                 </div>

@@ -20,12 +20,23 @@ import {
   Play,
   Cloud,
   NotebookPen,
+  EyeOff,
 } from "lucide-react";
 import { useSettingsModel } from "../shared/hooks/useSettingsModel";
 import { THEME_OPTIONS } from "../lib/theme";
-import { getNotesAutoSave, setNotesAutoSaveStored, UNLOCK_ANIM_STYLES } from "../lib/prefs";
+import {
+  getMaskAccountKeep,
+  getMaskAccountMiddle,
+  getNotesAutoSave,
+  setMaskAccountKeepStored,
+  setMaskAccountMiddleStored,
+  setNotesAutoSaveStored,
+  UNLOCK_ANIM_STYLES,
+} from "../lib/prefs";
+import { clampMaskKeep, MAX_MASK_KEEP, MIN_MASK_KEEP } from "../shared/maskAccount";
 import { writeClipboard } from "../lib/clipboard";
 import { Badge, Card, ErrorDialog, FieldLabel } from "../ui/common";
+import { OptionSelect } from "../ui/OptionSelect";
 import {
   FactoryResetPanel,
   ClipboardWatchField,
@@ -61,6 +72,8 @@ export function SettingsMobile() {
   const m = useSettingsModel();
   const [subSection, setSubSection] = useState<SubSection>(null);
   const [notesAutoSave, setNotesAutoSave] = useState(getNotesAutoSave);
+  const [maskAccount, setMaskAccount] = useState(getMaskAccountMiddle);
+  const [maskAccountKeep, setMaskAccountKeep] = useState(getMaskAccountKeep);
 
   useEffect(() => {
     if (subSection === null) return;
@@ -392,18 +405,18 @@ export function SettingsMobile() {
               <div className="field">
                 <FieldLabel name={t("settings.revealGrace")} tip={t("settings.revealGraceTip")} />
                 <div className="row" style={{ marginTop: 6 }}>
-                  <select
-                    className="input"
-                    style={{ flex: 1 }}
+                  <OptionSelect
+                    title={t("settings.revealGrace")}
                     value={m.revealGrace}
-                    onChange={(e) => m.setRevealGrace(e.target.value)}
-                  >
-                    <option value="0">{t("settings.everyTime")}</option>
-                    <option value="1">{t("settings.min1")}</option>
-                    <option value="5">{t("settings.min5")}</option>
-                    <option value="15">{t("settings.min15")}</option>
-                    <option value="30">{t("settings.min30")}</option>
-                  </select>
+                    onChange={m.setRevealGrace}
+                    options={[
+                      { value: "0", label: t("settings.everyTime") },
+                      { value: "1", label: t("settings.min1") },
+                      { value: "5", label: t("settings.min5") },
+                      { value: "15", label: t("settings.min15") },
+                      { value: "30", label: t("settings.min30") },
+                    ]}
+                  />
                   <button
                     type="button"
                     className="btn primary sm"
@@ -420,17 +433,17 @@ export function SettingsMobile() {
               <div className="field">
                 <FieldLabel name={t("settings.clipClear")} tip={t("settings.clipClearTip")} />
                 <div className="row" style={{ marginTop: 6 }}>
-                  <select
-                    className="input"
-                    style={{ flex: 1 }}
+                  <OptionSelect
+                    title={t("settings.clipClear")}
                     value={m.clipSec}
-                    onChange={(e) => m.setClipSec(e.target.value)}
-                  >
-                    <option value="0">{t("settings.clipNever")}</option>
-                    <option value="10">{t("settings.sec10")}</option>
-                    <option value="20">{t("settings.sec20")}</option>
-                    <option value="60">{t("settings.sec60")}</option>
-                  </select>
+                    onChange={m.setClipSec}
+                    options={[
+                      { value: "0", label: t("settings.clipNever") },
+                      { value: "10", label: t("settings.sec10") },
+                      { value: "20", label: t("settings.sec20") },
+                      { value: "60", label: t("settings.sec60") },
+                    ]}
+                  />
                   <button
                     type="button"
                     className="btn primary sm"
@@ -449,16 +462,16 @@ export function SettingsMobile() {
               <div className="field">
                 <FieldLabel name={t("settings.histLimit")} tip={t("settings.histLimitTip")} />
                 <div className="row" style={{ marginTop: 6 }}>
-                  <select
-                    className="input"
-                    style={{ flex: 1 }}
+                  <OptionSelect
+                    title={t("settings.histLimit")}
                     value={m.histLimit}
-                    onChange={(e) => m.setHistLimit(e.target.value)}
-                  >
-                    <option value="5">{t("settings.histN", { n: 5 })}</option>
-                    <option value="10">{t("settings.histN", { n: 10 })}</option>
-                    <option value="20">{t("settings.histN", { n: 20 })}</option>
-                  </select>
+                    onChange={m.setHistLimit}
+                    options={[
+                      { value: "5", label: t("settings.histN", { n: 5 }) },
+                      { value: "10", label: t("settings.histN", { n: 10 }) },
+                      { value: "20", label: t("settings.histN", { n: 20 }) },
+                    ]}
+                  />
                   <button
                     type="button"
                     className="btn primary sm"
@@ -725,6 +738,57 @@ export function SettingsMobile() {
           <span className="m-settings-cell-value">{t("settings.clipClearValue", { sec: m.clipSec })}</span>
           <ChevronRight size={16} className="m-settings-cell-chevron" />
         </button>
+
+        <button
+          type="button"
+          className="m-settings-cell"
+          title={t("settings.maskAccountTip")}
+          onClick={() => {
+            const next = !maskAccount;
+            setMaskAccount(next);
+            setMaskAccountMiddleStored(next);
+          }}
+        >
+          <div className="m-settings-cell-icon" style={{ background: "rgba(100, 116, 139, 0.12)", color: "#64748b" }}>
+            <EyeOff size={16} />
+          </div>
+          <span className="m-settings-cell-title">{t("settings.maskAccount")}</span>
+          <span className="m-settings-cell-value">{maskAccount ? t("common.on") : t("common.off")}</span>
+        </button>
+
+        <div className="m-settings-cell" title={t("settings.maskAccountKeepTip")}>
+          <div className="m-settings-cell-icon" style={{ background: "rgba(100, 116, 139, 0.12)", color: "#64748b" }}>
+            <EyeOff size={16} />
+          </div>
+          <span className="m-settings-cell-title">{t("settings.maskAccountKeep")}</span>
+          <div className="m-settings-stepper">
+            <button
+              type="button"
+              className="m-settings-stepper-btn"
+              disabled={!maskAccount || maskAccountKeep <= MIN_MASK_KEEP}
+              onClick={() => {
+                const next = clampMaskKeep(maskAccountKeep - 1);
+                setMaskAccountKeep(next);
+                setMaskAccountKeepStored(next);
+              }}
+            >
+              −
+            </button>
+            <span className="m-settings-cell-value">{maskAccountKeep}</span>
+            <button
+              type="button"
+              className="m-settings-stepper-btn"
+              disabled={!maskAccount || maskAccountKeep >= MAX_MASK_KEEP}
+              onClick={() => {
+                const next = clampMaskKeep(maskAccountKeep + 1);
+                setMaskAccountKeep(next);
+                setMaskAccountKeepStored(next);
+              }}
+            >
+              +
+            </button>
+          </div>
+        </div>
 
         <button
           type="button"

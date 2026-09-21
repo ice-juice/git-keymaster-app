@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { FolderPlus } from "lucide-react";
+import { FolderPlus, Pencil } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { errMessage } from "../lib/ipc";
+import { errMessage, type GroupMeta } from "../lib/ipc";
+import { ConfirmDangerDialog } from "./common";
 
 export const GROUP_COLORS = [
   "#6366f1",
@@ -20,22 +21,33 @@ export const GROUP_PRESET_KEYS = [
   { key: "dev" as const, color: "#f59e0b" },
 ];
 
+export type GroupDialogState =
+  | { mode: "create" }
+  | { mode: "edit"; name: string; color?: string | null };
+
 export function GroupDialog({
   existing,
+  initial,
   onCancel,
   onConfirm,
 }: {
   existing: string[];
+  initial?: { name: string; color?: string | null };
   onCancel: () => void;
   onConfirm: (name: string, color: string | null) => Promise<void> | void;
 }) {
   const { t } = useTranslation();
-  const [name, setName] = useState("");
-  const [color, setColor] = useState<string | null>(GROUP_COLORS[0]);
+  const editing = !!initial?.name;
+  const [name, setName] = useState(initial?.name ?? "");
+  const [color, setColor] = useState<string | null>(initial?.color ?? GROUP_COLORS[0]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const taken = new Set(existing.map((n) => n.trim().toLowerCase()));
+  const taken = new Set(
+    existing
+      .filter((n) => !editing || n.trim().toLowerCase() !== initial!.name.trim().toLowerCase())
+      .map((n) => n.trim().toLowerCase()),
+  );
   const presets = GROUP_PRESET_KEYS
     .map((p) => ({ name: t(`group.${p.key}`), color: p.color }))
     .filter((p) => !taken.has(p.name.toLowerCase()));
@@ -60,12 +72,16 @@ export function GroupDialog({
       <div className="card group-dialog">
         <div className="card-head">
           <div className="card-title row" style={{ gap: 8 }}>
-            <FolderPlus size={14} style={{ color: "var(--accent)" }} />
-            {t("group.title")}
+            {editing ? (
+              <Pencil size={14} style={{ color: "var(--accent)" }} />
+            ) : (
+              <FolderPlus size={14} style={{ color: "var(--accent)" }} />
+            )}
+            {editing ? t("group.titleEdit") : t("group.title")}
           </div>
         </div>
         <div className="card-body stack">
-          <div className="muted">{t("group.hint")}</div>
+          <div className="muted">{editing ? t("group.hintEdit") : t("group.hint")}</div>
 
           <div className="field">
             <label className="field-label">{t("group.name")}</label>
@@ -105,7 +121,7 @@ export function GroupDialog({
             </div>
           </div>
 
-          {presets.length > 0 && (
+          {!editing && presets.length > 0 && (
             <div className="field">
               <label className="field-label">{t("group.presets")}</label>
               <div className="choice-row">
@@ -135,11 +151,81 @@ export function GroupDialog({
               {t("common.cancel")}
             </button>
             <button type="button" className="btn primary sm" disabled={busy} onClick={submit}>
-              {busy ? t("group.creating") : t("group.create")}
+              {busy
+                ? editing
+                  ? t("group.saving")
+                  : t("group.creating")
+                : editing
+                  ? t("group.save")
+                  : t("group.create")}
             </button>
           </div>
         </div>
       </div>
     </div>
+  );
+}
+
+export function groupManageHandlers(m: {
+  writesLocked: boolean;
+  groups: GroupMeta[];
+  setGroupDlg: (next: GroupDialogState) => void;
+  requestDeleteGroup: (name: string) => void;
+}) {
+  return {
+    onCreate: () => m.setGroupDlg({ mode: "create" }),
+    onEdit: m.writesLocked
+      ? undefined
+      : (key: string) => {
+          const g = m.groups.find((item) => item.name === key);
+          if (g) m.setGroupDlg({ mode: "edit", name: g.name, color: g.color ?? null });
+        },
+    onDelete: m.writesLocked ? undefined : m.requestDeleteGroup,
+  };
+}
+
+export function GroupManageDialogs({
+  groups,
+  groupDlg,
+  pendingDeleteGroup,
+  busy,
+  onCancel,
+  onConfirm,
+  onCancelDelete,
+  onConfirmDelete,
+  deleteCount,
+}: {
+  groups: GroupMeta[];
+  groupDlg: GroupDialogState | null;
+  pendingDeleteGroup: string | null;
+  busy?: boolean;
+  onCancel: () => void;
+  onConfirm: (name: string, color: string | null) => Promise<void> | void;
+  onCancelDelete: () => void;
+  onConfirmDelete: () => void;
+  deleteCount: number;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {groupDlg && (
+        <GroupDialog
+          existing={groups.map((g) => g.name)}
+          initial={groupDlg.mode === "edit" ? { name: groupDlg.name, color: groupDlg.color } : undefined}
+          onCancel={onCancel}
+          onConfirm={onConfirm}
+        />
+      )}
+      {pendingDeleteGroup && (
+        <ConfirmDangerDialog
+          title={t("group.deleteTitle")}
+          message={t("group.deleteMsg", { name: pendingDeleteGroup })}
+          detail={t("group.deleteDetail", { n: deleteCount })}
+          busy={busy}
+          onCancel={onCancelDelete}
+          onConfirm={onConfirmDelete}
+        />
+      )}
+    </>
   );
 }

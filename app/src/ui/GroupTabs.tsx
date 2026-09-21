@@ -16,6 +16,8 @@ export function GroupTabs({
   onChange,
   onCreate,
   onReorder,
+  onEdit,
+  onDelete,
   createLabel,
   createDisabled,
 }: {
@@ -24,6 +26,8 @@ export function GroupTabs({
   onChange: (key: string) => void;
   onCreate?: () => void;
   onReorder?: (orderedKeys: string[]) => void;
+  onEdit?: (key: string) => void;
+  onDelete?: (key: string) => void;
   createLabel?: string;
   createDisabled?: boolean;
 }) {
@@ -37,6 +41,8 @@ export function GroupTabs({
         onChange={onChange}
         onCreate={onCreate}
         onReorder={onReorder}
+        onEdit={onEdit}
+        onDelete={onDelete}
         createLabel={createLabel}
         createDisabled={createDisabled}
       />
@@ -50,6 +56,8 @@ export function GroupTabs({
       onChange={onChange}
       onCreate={onCreate}
       onReorder={onReorder}
+      onEdit={onEdit}
+      onDelete={onDelete}
       createLabel={createLabel}
       createDisabled={createDisabled}
     />
@@ -62,6 +70,8 @@ function DesktopGroupTabs({
   onChange,
   onCreate,
   onReorder,
+  onEdit,
+  onDelete,
   createLabel,
   createDisabled,
 }: {
@@ -70,6 +80,8 @@ function DesktopGroupTabs({
   onChange: (key: string) => void;
   onCreate?: () => void;
   onReorder?: (orderedKeys: string[]) => void;
+  onEdit?: (key: string) => void;
+  onDelete?: (key: string) => void;
   createLabel?: string;
   createDisabled?: boolean;
 }) {
@@ -143,6 +155,22 @@ function DesktopGroupTabs({
                 setOpen(false);
               }}
               onReorder={onReorder}
+              onEdit={
+                onEdit
+                  ? (key) => {
+                      setOpen(false);
+                      onEdit(key);
+                    }
+                  : undefined
+              }
+              onDelete={
+                onDelete
+                  ? (key) => {
+                      setOpen(false);
+                      onDelete(key);
+                    }
+                  : undefined
+              }
             />
           </GroupMenuSurface>
         </div>
@@ -168,6 +196,8 @@ function MobileGroupTabs({
   onChange,
   onCreate,
   onReorder,
+  onEdit,
+  onDelete,
   createLabel,
   createDisabled,
 }: {
@@ -176,6 +206,8 @@ function MobileGroupTabs({
   onChange: (key: string) => void;
   onCreate?: () => void;
   onReorder?: (orderedKeys: string[]) => void;
+  onEdit?: (key: string) => void;
+  onDelete?: (key: string) => void;
   createLabel?: string;
   createDisabled?: boolean;
 }) {
@@ -256,6 +288,22 @@ function MobileGroupTabs({
               setSheetOpen(false);
             }}
             onReorder={onReorder}
+            onEdit={
+              onEdit
+                ? (key) => {
+                    setSheetOpen(false);
+                    onEdit(key);
+                  }
+                : undefined
+            }
+            onDelete={
+              onDelete
+                ? (key) => {
+                    setSheetOpen(false);
+                    onDelete(key);
+                  }
+                : undefined
+            }
           />
           {onCreate && (
             <button

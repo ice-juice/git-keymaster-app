@@ -33,8 +33,7 @@ import {
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ingestNoteImage, NoteDraftBanner, NotePreview, notePlainStats, NoteTagEditor } from "./Notes.shared";
-import { GroupReorderButtons } from "../ui/GroupReorderButtons";
-import { moveGroupNames } from "../ui/groupOrder";
+import { GroupMenuList } from "../ui/GroupMenu";
 import { NoteMarkdownEditor } from "../ui/NoteMarkdownEditor";
 import { useOverlayBack } from "../shared/mobileBack";
 import type { NotesModel, NotesViewLayout } from "../shared/hooks/useNotesModel";
@@ -644,58 +643,36 @@ export function NoteMobileEditor({
             <div className="m-note-sheet-head">
               <div className="m-note-sheet-title">{t("group.title")}</div>
             </div>
+            <GroupMenuList
+              items={[
+                { key: "", label: t("group.none") },
+                ...m.groups.map((g) => ({
+                  key: g.name,
+                  label: g.name,
+                  color: g.color,
+                  sortable: true,
+                })),
+              ]}
+              value={m.draft.group || ""}
+              onSelect={(key) => {
+                m.updateDraft({ group: key || undefined });
+                setGroupPickerOpen(false);
+              }}
+              onReorder={
+                m.writesLocked
+                  ? undefined
+                  : (names) => {
+                      if (names.length) void m.reorderGroups(names);
+                    }
+              }
+            />
             <div className="m-note-group-options">
-              <button
-                type="button"
-                className={"m-note-group-option is-plain" + (!m.draft.group ? " on" : "")}
-                onClick={() => {
-                  m.updateDraft({ group: undefined });
-                  setGroupPickerOpen(false);
-                }}
-              >
-                <span>{t("group.none")}</span>
-                {!m.draft.group && <Check size={16} />}
-              </button>
-              {m.groups.map((g, idx) => {
-                const showOrder = !m.writesLocked && m.groups.length > 1;
-                return (
-                  <div
-                    key={g.name}
-                    className={"m-note-group-option" + (m.draft.group === g.name ? " on" : "")}
-                  >
-                    <button
-                      type="button"
-                      className="group-menu-item-pick"
-                      onClick={() => {
-                        m.updateDraft({ group: g.name });
-                        setGroupPickerOpen(false);
-                      }}
-                    >
-                      <span className="note-group-menu-main">
-                        {g.color && <span className="group-tab-dot" style={{ background: g.color }} />}
-                        <span>{g.name}</span>
-                      </span>
-                      {m.draft.group === g.name && !showOrder && <Check size={16} />}
-                    </button>
-                    {showOrder ? (
-                      <GroupReorderButtons
-                        canUp={idx > 0}
-                        canDown={idx < m.groups.length - 1}
-                        onMove={(action) => {
-                          const next = moveGroupNames(m.groups.map((item) => item.name), g.name, action);
-                          if (next) void m.reorderGroups(next);
-                        }}
-                      />
-                    ) : null}
-                  </div>
-                );
-              })}
               <button
                 type="button"
                 className="m-note-group-option is-create"
                 onClick={() => {
                   setGroupPickerOpen(false);
-                  m.setGroupDlg(true);
+                  m.setGroupDlg({ mode: "create" });
                 }}
               >
                 <Plus size={16} />

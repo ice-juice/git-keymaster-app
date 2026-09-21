@@ -205,6 +205,29 @@ pub struct GroupMeta {
     pub sort_order: i32,
 }
 
+/// 保存分组表时，把条目上的旧分组名改成新名或清空（未分组）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct GroupRemap {
+    pub from: String,
+    pub to: Option<String>,
+}
+
+pub fn remap_entry_group(current: &mut Option<String>, remap: &GroupRemap) {
+    let from = remap.from.trim();
+    if from.is_empty() {
+        return;
+    }
+    if current.as_deref() == Some(from) {
+        *current = remap
+            .to
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+    }
+}
+
 /// data/totp.enc
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1410,5 +1433,27 @@ mod tests {
         let s: Secrets = serde_json::from_str(r#"{"keyPassphrases":{},"githubPat":null}"#).unwrap();
         assert!(s.gitlab_pat.is_none());
         assert!(s.gitee_pat.is_none());
+    }
+
+    #[test]
+    fn remap_entry_group_renames_and_clears() {
+        let remap = GroupRemap {
+            from: "工作".into(),
+            to: Some("家庭".into()),
+        };
+        let mut group = Some("工作".into());
+        remap_entry_group(&mut group, &remap);
+        assert_eq!(group.as_deref(), Some("家庭"));
+
+        let mut other = Some("云服务".into());
+        remap_entry_group(&mut other, &remap);
+        assert_eq!(other.as_deref(), Some("云服务"));
+
+        let clear = GroupRemap {
+            from: "家庭".into(),
+            to: None,
+        };
+        remap_entry_group(&mut group, &clear);
+        assert_eq!(group, None);
     }
 }

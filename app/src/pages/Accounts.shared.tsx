@@ -3,47 +3,126 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, Copy, Eye, EyeOff, Plus, Clock, ExternalLink, Check, Pencil } from "lucide-react";
 import {
   api,
+  errMessage,
   type BuiltinIconInfo,
   type GroupMeta,
   type TotpEntry,
 } from "../lib/ipc";
-import { copyWithClear } from "../lib/secretsUi";
+import { copyWithClear, rememberCustomIcon } from "../lib/secretsUi";
 import { Empty, Badge, ConfirmDangerDialog, FieldLabel, ErrorDialog } from "../ui/common";
 import { detectAccountSource, resolvePlatformBrand, suggestIcon } from "../lib/accountInput";
 import { ReauthDialog } from "../ui/ReauthDialog";
 import { IconMark } from "../ui/IconMark";
 import { CountdownRing } from "../ui/CountdownRing";
-import { GroupDialog } from "../ui/GroupDialog";
+import { GroupManageDialogs, groupManageHandlers } from "../ui/GroupDialog";
 import { GroupPicker } from "../ui/GroupPicker";
 import { GroupTabs } from "../ui/GroupTabs";
 import { useTranslation } from "react-i18next";
 import { type AccountEditorState, type AccountsModel } from "../shared/hooks/useAccountsModel";
+import { activeAccountTag, tagsInAccounts, toggleAccountTag, visibleAccountsForTag } from "../shared/accountList";
+import { findBuiltinAccount, platformEntryMode } from "../shared/iconAliases";
 import { useOverlayBack } from "../shared/mobileBack";
 import { AccountExtraFields } from "../ui/AccountExtraFields";
+import { AccountTag } from "../ui/AccountTag";
+import { BuiltinIconSelect } from "../ui/BuiltinIconSelect";
+import { IconUploadStack } from "../ui/IconColorPicker";
+import { OptionSelect } from "../ui/OptionSelect";
 import { PasswordGenerateControls } from "../ui/PasswordGenerate";
+import { colorIconRef, parseIconColor, pickPlatformIcon } from "../shared/iconColor";
 
 export function AccountsFilters({ m, hideSearch }: { m: AccountsModel; hideSearch?: boolean }) {
   const { t } = useTranslation();
+  const manage = groupManageHandlers(m);
   return (
-    <div className="group-filter-row">
-      <GroupTabs
-        value={m.group}
-        onChange={m.setGroup}
-        items={m.tabs.map((g) => ({
-          key: g,
-          label: g === "全部" ? t("common.all") : g === "未分组" ? t("common.ungrouped") : g,
-          count: g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length,
-          color: m.groups.find((item) => item.name === g)?.color,
-          sortable: g !== "全部" && g !== "未分组",
-        }))}
-        onCreate={() => m.setGroupDlg(true)}
-        onReorder={m.writesLocked ? undefined : m.reorderGroups}
-        createLabel={t("accounts.newGroup")}
-        createDisabled={m.writesLocked}
-      />
-      {!hideSearch && (
-        <input className="input" style={{ maxWidth: 280 }} placeholder={t("accounts.search")} value={m.q} onChange={(e) => m.setQ(e.target.value)} />
-      )}
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="group-filter-row">
+        <GroupTabs
+          value={m.group}
+          onChange={m.setGroup}
+          items={m.tabs.map((g) => ({
+            key: g,
+            label: g === "全部" ? t("common.all") : g === "未分组" ? t("common.ungrouped") : g,
+            count: g === "全部" ? m.entries.length : m.entries.filter((e) => (e.group || "未分组") === g).length,
+            color: m.groups.find((item) => item.name === g)?.color,
+            sortable: g !== "全部" && g !== "未分组",
+          }))}
+          onCreate={manage.onCreate}
+          onEdit={manage.onEdit}
+          onDelete={manage.onDelete}
+          onReorder={m.writesLocked ? undefined : m.reorderGroups}
+          createLabel={t("accounts.newGroup")}
+          createDisabled={m.writesLocked}
+        />
+        {!hideSearch && (
+          <input className="input" style={{ maxWidth: 280 }} placeholder={t("accounts.search")} value={m.q} onChange={(e) => m.setQ(e.target.value)} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+export function PlatformTagFilter({
+  tags,
+  value,
+  onChange,
+  compact,
+}: {
+  tags: string[];
+  value: string | null;
+  onChange: (tag: string | null) => void;
+  compact?: boolean;
+}) {
+  const { t } = useTranslation();
+  if (tags.length === 0) return null;
+  const selected = activeAccountTag(tags, value);
+  return (
+    <div className={"platform-tag-row" + (compact ? " is-compact" : "")}>
+      <button
+        type="button"
+        className={"note-tag" + (!selected ? " on" : "")}
+        onClick={() => onChange(null)}
+      >
+        {t("accounts.allTags")}
+      </button>
+      {tags.map((tag) => (
+        <AccountTag
+          key={tag}
+          tag={tag}
+          hashed
+          selected={selected === tag}
+          onClick={() => onChange(selected === tag ? null : tag)}
+        />
+      ))}
+    </div>
+  );
+}
+
+export function AccountTagSuggestions({
+  existing,
+  value,
+  onChange,
+}: {
+  existing: string[];
+  value?: string[];
+  onChange: (tags: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  if (existing.length === 0) return null;
+  const selected = new Set((value || []).map((tag) => tag.trim()).filter(Boolean));
+  return (
+    <div className="account-tag-suggest">
+      <div className="account-tag-suggest-label">{t("accounts.existingTags")}</div>
+      <div className="account-tag-suggest-row">
+        {existing.map((tag) => (
+          <AccountTag
+            key={tag}
+            tag={tag}
+            hashed
+            selected={selected.has(tag)}
+            onClick={() => onChange(toggleAccountTag(value, tag))}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -51,12 +130,25 @@ export function AccountsFilters({ m, hideSearch }: { m: AccountsModel; hideSearc
 export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boolean }) {
   const { t } = useTranslation();
   if (m.platforms.length === 0) {
-    return <Empty text={compact ? t("accounts.emptyCompact") : t("accounts.empty")} />;
+    return (
+      <Empty
+        text={
+          m.q
+            ? t("accounts.emptySearch")
+            : compact
+              ? t("accounts.emptyCompact")
+              : t("accounts.empty")
+        }
+      />
+    );
   }
   return (
     <>
       {m.platforms.map(([platform, list]) => {
         const folded = !!m.collapsed[platform];
+        const tags = tagsInAccounts(list);
+        const selected = activeAccountTag(tags, m.selectedTags[platform]);
+        const shown = visibleAccountsForTag(list, selected);
         return (
           <div key={platform} className={"platform-group" + (folded ? " collapsed" : "")}>
             <button
@@ -67,7 +159,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
               <div className="platform-title">
                 <ChevronDown size={15} className={"chevron" + (folded ? " rot" : "")} />
                 <IconMark
-                  icon={list.find((e) => e.icon)?.icon || list[0]?.icon}
+                  icon={pickPlatformIcon(list.map((e) => e.icon))}
                   builtins={m.builtins}
                   label={platform}
                   size={28}
@@ -88,7 +180,11 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                     <ExternalLink size={12} />
                   </span>
                 )}
-                <Badge kind="info">{t("accounts.accountCount", { n: list.length })}</Badge>
+                <Badge kind="info">
+                  {selected
+                    ? t("accounts.accountCountFiltered", { shown: shown.length, n: list.length })
+                    : t("accounts.accountCount", { n: list.length })}
+                </Badge>
               </div>
               <div className="row" style={{ gap: 4 }} onClick={(ev) => ev.stopPropagation()}>
                 <button
@@ -99,7 +195,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                   onClick={() =>
                     m.setEditingPlatformModal({
                       platform,
-                      icon: list.find((e) => e.icon)?.icon ?? undefined,
+                      icon: pickPlatformIcon(list.map((e) => e.icon)),
                     })
                   }
                 >
@@ -112,7 +208,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                     m.setEditor({
                       platform,
                       url: list.find((e) => e.url)?.url,
-                      icon: list.find((e) => e.icon)?.icon ?? undefined,
+                      icon: pickPlatformIcon(list.map((e) => e.icon)),
                       isPlatformLocked: true,
                     })
                   }
@@ -123,7 +219,15 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
             </button>
             {!folded && (
               <div className="platform-body">
-                {list.map((e) => {
+                <PlatformTagFilter
+                  tags={tags}
+                  value={selected}
+                  onChange={(tag) => m.setPlatformTag(platform, tag)}
+                />
+                {shown.length === 0 && selected && (
+                  <div className="platform-tag-empty">{t("accounts.emptyTag")}</div>
+                )}
+                {shown.map((e) => {
                   const linked = e.totpRef ? m.totpShown[e.totpRef] : undefined;
                   const isCopiedUser = m.copiedKey === `user-${e.id}`;
                   const isCopiedPw = m.copiedKey === `pw-${e.id}`;
@@ -134,10 +238,24 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                     <div key={e.id} className="account-item" data-focus-id={e.id}>
                       <div className="account-user-info">
                         <div className="account-user">
-                          <span>{e.username}</span>
+                          <span
+                            className={m.maskPref.enabled && !m.userShown[e.id] ? "account-user-mask" : undefined}
+                            title={m.maskPref.enabled ? (m.userShown[e.id] ? t("accounts.hideUser") : t("accounts.showUser")) : undefined}
+                            role={m.maskPref.enabled ? "button" : undefined}
+                            tabIndex={m.maskPref.enabled ? 0 : undefined}
+                            onClick={() => m.maskPref.enabled && m.toggleUserShown(e.id)}
+                            onKeyDown={(ev) => {
+                              if (m.maskPref.enabled && (ev.key === "Enter" || ev.key === " ")) {
+                                ev.preventDefault();
+                                m.toggleUserShown(e.id);
+                              }
+                            }}
+                          >
+                            {m.displayUsername(e.id, e.username)}
+                          </span>
                           {e.pinned && <Badge kind="warn">{t("accounts.pinned")}</Badge>}
                           {e.tags?.map((tag) => (
-                            <Badge key={tag}>{tag}</Badge>
+                            <AccountTag key={tag} tag={tag} />
                           ))}
                         </div>
                         <div className="account-meta">
@@ -194,6 +312,14 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                         {pwMissing && (
                           <div className="callout danger sm">{t("accounts.pwLost")}</div>
                         )}
+                        <button
+                          type="button"
+                          className={"btn sm " + (isCopiedUser ? "good" : "")}
+                          title={t("accounts.copyUser")}
+                          onClick={() => m.copyUsername(e.id, e.username)}
+                        >
+                          {isCopiedUser ? <Check size={12} /> : <Copy size={12} />} {t("accounts.account")}
+                        </button>
                         <div className="pwd-box">
                           <span className="mono">{m.pwShown[e.id] || "••••••••"}</span>
                           {m.pwShown[e.id] ? (
@@ -234,14 +360,6 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                       <div className="row" style={{ gap: 5 }}>
                         <button
                           type="button"
-                          className={"btn sm " + (isCopiedUser ? "good" : "")}
-                          title={t("accounts.copyUser")}
-                          onClick={() => m.copyUsername(e.id, e.username)}
-                        >
-                          {isCopiedUser ? <Check size={12} /> : <Copy size={12} />} {t("accounts.account")}
-                        </button>
-                        <button
-                          type="button"
                           className="btn ghost sm"
                           title={t("accounts.history")}
                           onClick={() => m.openHistory(e.id)}
@@ -277,6 +395,7 @@ function EditPlatformModal({
   busy,
   onCancel,
   onConfirm,
+  onError,
 }: {
   originalPlatform: string;
   currentIcon?: string;
@@ -284,18 +403,63 @@ function EditPlatformModal({
   busy: boolean;
   onCancel: () => void;
   onConfirm: (newName: string, newIcon?: string) => Promise<void>;
+  onError: (message: string) => void;
 }) {
   const { t } = useTranslation();
   const [name, setName] = useState(originalPlatform);
   const [icon, setIcon] = useState<string | undefined>(currentIcon);
+  const [mode, setMode] = useState<"builtin" | "custom">("builtin");
+  const modeSync = useRef("");
+  useEffect(() => {
+    if (builtins.length === 0) return;
+    const key = `${originalPlatform}\0${currentIcon || ""}`;
+    if (modeSync.current === key) return;
+    modeSync.current = key;
+    setMode(platformEntryMode(builtins, originalPlatform, currentIcon));
+  }, [builtins, originalPlatform, currentIcon]);
+  const pickedBuiltin = findBuiltinAccount(builtins, name, icon);
+
+  function chooseBuiltin() {
+    setMode("builtin");
+    const hit = findBuiltinAccount(builtins, name, icon);
+    if (!hit) {
+      setName("");
+      if (!icon?.startsWith("custom:")) setIcon(undefined);
+      return;
+    }
+    setName(hit.name);
+    if (!icon?.startsWith("custom:")) setIcon(`builtin:${hit.id}`);
+  }
+
+  function chooseCustom() {
+    setMode("custom");
+    if (icon?.startsWith("builtin:")) setIcon(undefined);
+  }
+
+  function chooseListedBuiltin(next: string) {
+    if (!next) {
+      setName("");
+      if (!icon?.startsWith("custom:")) setIcon(undefined);
+      return;
+    }
+    const hit = builtins.find((item) => `builtin:${item.id}` === next);
+    if (!hit) return;
+    setName(hit.name);
+    if (!icon?.startsWith("custom:")) setIcon(next);
+  }
 
   async function pickIcon() {
-    const path = await open({
-      filters: [{ name: t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "ico", "bmp"] }],
-    });
-    if (typeof path !== "string") return;
-    const info = await api.iconUploadCustom(path);
-    setIcon(info.iconRef);
+    try {
+      const path = await open({
+        filters: [{ name: t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "ico", "bmp"] }],
+      });
+      if (typeof path !== "string") return;
+      const info = await api.iconUploadCustom(path);
+      rememberCustomIcon(info.iconRef, info.dataUrl);
+      setIcon(info.iconRef);
+    } catch (e) {
+      onError(errMessage(e) || t("accounts.iconUploadFailed"));
+    }
   }
 
   return (
@@ -306,31 +470,40 @@ function EditPlatformModal({
         </div>
         <div className="card-body stack" style={{ gap: 14 }}>
           <div className="field">
-            <FieldLabel name={t("accounts.platformName")} tip={t("accounts.platformNameTip")} />
-            <input
-              className="input"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t("accounts.platformNamePh")}
-            />
-          </div>
-
-          <div className="field">
-            <label className="field-label">{t("accounts.unifiedIcon")}</label>
-            <div className="row" style={{ gap: 10 }}>
-              <IconMark icon={icon} builtins={builtins} label={name} size={36} />
-              <select
-                className="input"
-                style={{ flex: 1 }}
-                value={icon?.startsWith("builtin:") ? icon : ""}
-                onChange={(e) => setIcon(e.target.value || undefined)}
-              >
-                <option value="">{t("accounts.iconAuto")}</option>
-                {builtins.map((b) => (
-                  <option key={b.id} value={`builtin:${b.id}`}>{b.name}</option>
-                ))}
-              </select>
-              <button type="button" className="btn sm" onClick={pickIcon}>{t("accounts.upload")}</button>
+            <FieldLabel name={t("accounts.platform")} tip={t("accounts.platformTip")} />
+            <div className="choice-row" style={{ marginBottom: 8 }}>
+              <button type="button" className={"choice" + (mode === "builtin" ? " on" : "")} onClick={chooseBuiltin}>
+                {t("accounts.platformBuiltin")}
+              </button>
+              <button type="button" className={"choice" + (mode === "custom" ? " on" : "")} onClick={chooseCustom}>
+                {t("accounts.platformCustom")}
+              </button>
+            </div>
+            <div className="row" style={{ gap: 10, alignItems: "flex-start" }}>
+              <IconUploadStack
+                icon={icon}
+                builtins={builtins}
+                label={name}
+                size={44}
+                onPickColor={(hex) => setIcon(colorIconRef(hex))}
+                onUpload={() => void pickIcon()}
+              />
+              {mode === "builtin" ? (
+                <BuiltinIconSelect
+                  value={pickedBuiltin ? `builtin:${pickedBuiltin.id}` : ""}
+                  builtins={builtins}
+                  autoLabel={t("accounts.platformBuiltinPh")}
+                  onChange={chooseListedBuiltin}
+                />
+              ) : (
+                <input
+                  className="input"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder={t("accounts.platformNamePh")}
+                  style={{ flex: 1 }}
+                />
+              )}
             </div>
           </div>
 
@@ -359,7 +532,8 @@ function EditPlatformModal({
 export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; compact?: boolean; skipEditor?: boolean }) {
   const { t } = useTranslation();
   useOverlayBack(!skipEditor && !!m.editor, () => m.setEditor(null));
-  useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(false));
+  useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(null));
+  useOverlayBack(!!m.pendingDeleteGroup, () => m.setPendingDeleteGroup(null));
   useOverlayBack(!!m.reauth, () => m.reauthCancel.current?.());
   useOverlayBack(!!m.editingPlatformModal, () => m.setEditingPlatformModal(null));
   useOverlayBack(!!m.pendingDelete, () => m.setPendingDelete(null));
@@ -369,13 +543,17 @@ export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; 
 
       {m.reauth && <ReauthDialog onCancel={() => m.reauthCancel.current?.()} onConfirm={(pw) => m.reauth!(pw)} />}
 
-      {m.groupDlg && (
-        <GroupDialog
-          existing={m.groups.map((g) => g.name)}
-          onCancel={() => m.setGroupDlg(false)}
-          onConfirm={m.saveGroup}
-        />
-      )}
+      <GroupManageDialogs
+        groups={m.groups}
+        groupDlg={m.groupDlg}
+        pendingDeleteGroup={m.pendingDeleteGroup}
+        busy={m.busy}
+        onCancel={() => m.setGroupDlg(null)}
+        onConfirm={m.saveGroup}
+        onCancelDelete={() => m.setPendingDeleteGroup(null)}
+        onConfirmDelete={() => void m.confirmDeleteGroup()}
+        deleteCount={m.entries.filter((e) => e.group === m.pendingDeleteGroup).length}
+      />
 
       {m.editingPlatformModal && (
         <EditPlatformModal
@@ -383,6 +561,7 @@ export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; 
           currentIcon={m.editingPlatformModal.icon}
           builtins={m.builtins}
           busy={m.busy}
+          onError={m.setErr}
           onCancel={() => m.setEditingPlatformModal(null)}
           onConfirm={async (newName, newIcon) => {
             await m.updatePlatformBrand(
@@ -404,12 +583,14 @@ export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; 
           existing={m.entries
             .filter((e) => e.id !== m.editor?.id)
             .map((e) => ({ platform: e.platform, icon: e.icon }))}
+          existingTags={m.allTags}
           totps={m.totps}
           busy={m.busy}
           onChange={m.setEditor}
           onRevealFields={() => m.revealEditorFields()}
           onClose={() => m.setEditor(null)}
           onSave={m.saveEditor}
+          onError={m.setErr}
           onDelete={m.editor.id ? () => m.deleteEditorAccount() : undefined}
           onReorderGroups={m.writesLocked ? undefined : m.reorderGroups}
         />
@@ -586,7 +767,7 @@ function PlatformInput({
   }, [open]);
 
   return (
-    <div ref={containerRef} style={{ position: "relative", width: "100%" }}>
+    <div ref={containerRef} style={{ position: "relative", flex: "1 1 auto", minWidth: 0 }}>
       <input
         className="input"
         autoFocus={autoFocus}
@@ -634,6 +815,7 @@ function AccountEditor({
   groups,
   platforms,
   existing,
+  existingTags,
   totps,
   busy,
   onChange,
@@ -642,6 +824,7 @@ function AccountEditor({
   onSave,
   onDelete,
   onReorderGroups,
+  onError,
 }: {
   compact?: boolean;
   value: AccountEditorState;
@@ -649,6 +832,7 @@ function AccountEditor({
   groups: GroupMeta[];
   platforms: string[];
   existing: { platform: string; icon?: string | null }[];
+  existingTags: string[];
   totps: TotpEntry[];
   busy: boolean;
   onChange: (v: AccountEditorState) => void;
@@ -657,9 +841,9 @@ function AccountEditor({
   onSave: () => void;
   onDelete?: () => void;
   onReorderGroups?: (orderedNames: string[]) => void;
+  onError: (message: string) => void;
 }) {
   const { t } = useTranslation();
-  const [showPw, setShowPw] = useState(false);
   const hasExtra = !!(
     value.displayName ||
     value.url ||
@@ -673,12 +857,64 @@ function AccountEditor({
   );
   const [showMore, setShowMore] = useState(hasExtra);
   const [platformMsg, setPlatformMsg] = useState("");
+  const [platformMode, setPlatformMode] = useState<"builtin" | "custom">("builtin");
+  const platformSync = useRef("");
+  useEffect(() => {
+    if (builtins.length === 0) return;
+    const key = value.id || "new";
+    if (platformSync.current === key) return;
+    platformSync.current = key;
+    setPlatformMode(platformEntryMode(builtins, value.platform, value.icon));
+  }, [value, builtins]);
+  const pickedBuiltin = findBuiltinAccount(builtins, value.platform, value.icon);
   const uniquePlatforms = [...new Set(platforms.filter(Boolean))].sort();
+
+  function chooseBuiltinPlatform() {
+    setPlatformMode("builtin");
+    const hit = findBuiltinAccount(builtins, value.platform, value.icon);
+    if (!hit) {
+      onChange({
+        ...value,
+        platform: "",
+        icon: value.icon?.startsWith("custom:") ? value.icon : undefined,
+      });
+      return;
+    }
+    onChange({
+      ...value,
+      platform: hit.name,
+      icon: value.icon?.startsWith("custom:") ? value.icon : `builtin:${hit.id}`,
+    });
+  }
+
+  function chooseCustomPlatform() {
+    setPlatformMode("custom");
+    if (value.icon?.startsWith("builtin:")) onChange({ ...value, icon: undefined });
+  }
+
+  function chooseListedBuiltin(next: string) {
+    if (!next) {
+      onChange({
+        ...value,
+        platform: "",
+        icon: value.icon?.startsWith("custom:") ? value.icon : undefined,
+      });
+      return;
+    }
+    const hit = builtins.find((item) => `builtin:${item.id}` === next);
+    if (!hit) return;
+    onChange({
+      ...value,
+      platform: hit.name,
+      icon: value.icon?.startsWith("custom:") ? value.icon : next,
+    });
+  }
 
   function applyPlatform(raw: string) {
     const d = detectAccountSource(raw, builtins);
     const brand = resolvePlatformBrand(d.platform || raw, d.icon, existing, builtins);
     const keepCustom = value.icon?.startsWith("custom:");
+    const keptColor = parseIconColor(value.icon);
     const hasSibling = existing.some(
       (e) => e.platform.trim().toLowerCase() === (brand.platform || raw).trim().toLowerCase(),
     );
@@ -694,11 +930,17 @@ function AccountEditor({
               ? t("accounts.detectIcon", { name: iconName })
               : t("accounts.detectName"),
     );
+    const matched = findBuiltinAccount(builtins, brand.platform || raw, keepCustom ? undefined : brand.icon);
+    if (matched) setPlatformMode("builtin");
     onChange({
       ...value,
-      platform: brand.platform || raw,
+      platform: matched ? matched.name : (brand.platform || raw),
       url: d.url || value.url,
-      icon: keepCustom ? value.icon : brand.icon || value.icon,
+      icon: keepCustom
+        ? value.icon
+        : matched
+          ? `builtin:${matched.id}`
+          : brand.icon || (keptColor ? colorIconRef(keptColor) : undefined),
     });
     if (d.kind === "url") setShowMore(true);
   }
@@ -719,10 +961,15 @@ function AccountEditor({
   }
 
   async function pickIcon() {
-    const path = await open({ filters: [{ name: t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "ico", "bmp"] }] });
-    if (typeof path !== "string") return;
-    const info = await api.iconUploadCustom(path);
-    onChange({ ...value, icon: info.iconRef });
+    try {
+      const path = await open({ filters: [{ name: t("common.imageFilter"), extensions: ["png", "jpg", "jpeg", "webp", "ico", "bmp"] }] });
+      if (typeof path !== "string") return;
+      const info = await api.iconUploadCustom(path);
+      rememberCustomIcon(info.iconRef, info.dataUrl);
+      onChange({ ...value, icon: info.iconRef });
+    } catch (e) {
+      onError(errMessage(e) || t("accounts.iconUploadFailed"));
+    }
   }
 
   return (
@@ -730,7 +977,7 @@ function AccountEditor({
       <div className={"card dialog-card" + (compact ? " account-editor-mobile" : " account-editor-desktop")}>
         <div className="card-head"><div className="card-title">{value.id ? (compact ? t("accounts.editCompact") : t("accounts.editTitle")) : (compact ? t("accounts.addCompact") : t("accounts.addTitle"))}</div></div>
         <div className="card-body stack">
-          <div className={compact ? "stack" : "grid-sum"}>
+          <div className="totp-advanced stack">
             <div className="field">
               <FieldLabel
                 name={t("accounts.platform")}
@@ -738,39 +985,65 @@ function AccountEditor({
               />
               {value.isPlatformLocked ? (
                 <div>
-                  <div
-                    className="row"
-                    style={{
-                      gap: 10,
-                      padding: "8px 12px",
-                      background: "var(--gray-soft)",
-                      borderRadius: "8px",
-                      border: "1px solid var(--border)",
-                      alignItems: "center",
-                    }}
-                  >
-                    <IconMark icon={value.icon} builtins={builtins} label={value.platform} size={24} />
-                    <span style={{ fontWeight: 600, fontSize: "14px", flex: 1 }}>{value.platform}</span>
-                    <Badge kind="info">{t("accounts.lockedInGroup")}</Badge>
+                  <div className="platform-brand is-locked">
+                    <IconMark icon={value.icon} builtins={builtins} label={value.platform} size={36} />
+                    <div className="platform-brand-main">
+                      <span className="platform-brand-name">{value.platform}</span>
+                      <Badge kind="info">{t("accounts.lockedInGroup")}</Badge>
+                    </div>
                   </div>
                   <div className="hint" style={{ marginTop: 4 }}>
                     {t("accounts.fromGroup")}
                   </div>
                 </div>
               ) : (
-                <>
-                  <PlatformInput
-                    value={value.platform || ""}
+                <div className="platform-brand">
+                  <IconUploadStack
+                    icon={value.icon}
                     builtins={builtins}
-                    existingPlatforms={uniquePlatforms}
-                    existing={existing}
-                    autoFocus={!value.platform}
-                    onChange={(val) => applyPlatform(val)}
+                    label={value.platform}
+                    size={44}
+                    onPickColor={(hex) => onChange({ ...value, icon: colorIconRef(hex) })}
+                    onUpload={() => void pickIcon()}
                   />
-                  {platformMsg && <div className="hint">{platformMsg}</div>}
-                </>
+                  <div className="platform-brand-main">
+                    <div className="choice-row">
+                      <button type="button" className={"choice" + (platformMode === "builtin" ? " on" : "")} onClick={chooseBuiltinPlatform}>
+                        {t("accounts.platformBuiltin")}
+                      </button>
+                      <button type="button" className={"choice" + (platformMode === "custom" ? " on" : "")} onClick={chooseCustomPlatform}>
+                        {t("accounts.platformCustom")}
+                      </button>
+                    </div>
+                    <div className="platform-brand-tools">
+                      {platformMode === "builtin" ? (
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <BuiltinIconSelect
+                            value={pickedBuiltin ? `builtin:${pickedBuiltin.id}` : ""}
+                            builtins={builtins}
+                            autoLabel={t("accounts.platformBuiltinPh")}
+                            onChange={chooseListedBuiltin}
+                          />
+                        </div>
+                      ) : (
+                        <PlatformInput
+                          value={value.platform || ""}
+                          builtins={builtins}
+                          existingPlatforms={uniquePlatforms}
+                          existing={existing}
+                          autoFocus={!value.platform}
+                          onChange={(val) => applyPlatform(val)}
+                        />
+                      )}
+                    </div>
+                    {platformMsg && <div className="hint">{platformMsg}</div>}
+                  </div>
+                </div>
               )}
             </div>
+          </div>
+
+          <div className="totp-advanced stack">
             <div className="field">
               <FieldLabel name={t("accounts.username")} tip={t("accounts.usernameTip")} />
               <input
@@ -784,54 +1057,28 @@ function AccountEditor({
                 onChange={(e) => onChange({ ...value, username: e.target.value })}
               />
             </div>
-          </div>
 
-          <div className="field">
-            <FieldLabel
-              name={value.id ? (value.hasPassword === false ? t("accounts.passwordRefill") : t("accounts.passwordKeep")) : t("accounts.password")}
-              tip={t("accounts.passwordTip")}
-            />
-            <div className={compact ? "stack" : "row"}>
+            <div className="field">
+              <FieldLabel
+                name={value.id ? (value.hasPassword === false ? t("accounts.passwordRefill") : t("accounts.passwordKeep")) : t("accounts.password")}
+                tip={t("accounts.passwordTip")}
+              />
               <input
                 className="input"
-                type={showPw ? "text" : "password"}
+                type="password"
                 autoComplete="new-password"
                 enterKeyHint="done"
                 placeholder={value.id ? (value.hasPassword === false ? t("accounts.passwordRefillPh") : t("accounts.passwordKeepPh")) : t("accounts.passwordPh")}
                 value={value.password || ""}
                 onChange={(e) => onChange({ ...value, password: e.target.value })}
               />
-              <button type="button" className="btn sm" onClick={() => setShowPw((v) => !v)}>
-                {showPw ? t("accounts.hide") : t("accounts.show")}
-              </button>
+              <PasswordGenerateControls
+                compact={compact}
+                password={value.password || ""}
+                onFill={(pw) => onChange({ ...value, password: pw })}
+              />
             </div>
-            <PasswordGenerateControls
-              compact={compact}
-              password={value.password || ""}
-              onFill={(pw) => onChange({ ...value, password: pw })}
-            />
           </div>
-
-          {!value.isPlatformLocked && (
-            <div className="field">
-              <label className="field-label">{t("accounts.icon")}</label>
-              <div className={compact ? "stack" : "row"}>
-                <IconMark icon={value.icon} builtins={builtins} label={value.platform} size={36} />
-                <select
-                  className="input"
-                  value={value.icon?.startsWith("builtin:") ? value.icon : ""}
-                  onChange={(e) => onChange({ ...value, icon: e.target.value || undefined })}
-                >
-                  <option value="">{t("accounts.iconAutoByPlatform")}</option>
-                  {builtins.map((b) => (
-                    <option key={b.id} value={`builtin:${b.id}`}>{b.name}</option>
-                  ))}
-                </select>
-                <button type="button" className="btn sm" onClick={pickIcon}>{t("accounts.upload")}</button>
-              </div>
-              <div className="hint">{t("accounts.iconHint")}</div>
-            </div>
-          )}
 
           <button type="button" className="btn ghost sm" onClick={() => setShowMore((v) => !v)}>
             {showMore ? t("accounts.less") : t("accounts.more")}
@@ -877,6 +1124,11 @@ function AccountEditor({
                   value={(value.tags || []).join(" ")}
                   onChange={(e) => onChange({ ...value, tags: e.target.value.split(/\s+/).filter(Boolean) })}
                 />
+                <AccountTagSuggestions
+                  existing={existingTags}
+                  value={value.tags}
+                  onChange={(tags) => onChange({ ...value, tags })}
+                />
               </div>
               <div className="field">
                 <label className="field-label">{t("accounts.note")}</label>
@@ -906,16 +1158,18 @@ function AccountEditor({
                   name={t("accounts.linkTotp")}
                   tip={t("accounts.linkTotpTip")}
                 />
-                <select
-                  className="input"
+                <OptionSelect
+                  title={t("accounts.linkTotp")}
                   value={value.totpRef || ""}
-                  onChange={(e) => onChange({ ...value, totpRef: e.target.value || undefined })}
-                >
-                  <option value="">{t("accounts.noLink")}</option>
-                  {totps.map((totp) => (
-                    <option key={totp.id} value={totp.id}>{totp.issuer} / {totp.account}</option>
-                  ))}
-                </select>
+                  onChange={(next) => onChange({ ...value, totpRef: next || undefined })}
+                  options={[
+                    { value: "", label: t("accounts.noLink") },
+                    ...totps.map((totp) => ({
+                      value: totp.id,
+                      label: `${totp.issuer} / ${totp.account}`,
+                    })),
+                  ]}
+                />
                 {totps.length === 0 && <div className="hint">{t("accounts.noTotp")}</div>}
               </div>
               <label className="row" style={{ gap: 8 }}>

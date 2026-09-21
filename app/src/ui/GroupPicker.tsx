@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { Check, ChevronRight } from "lucide-react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Check, ChevronDown, ChevronRight } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import type { GroupMeta } from "../lib/ipc";
 import { resolvePlatform } from "../platform/resolve";
@@ -7,6 +8,7 @@ import { GROUP_COLORS } from "./GroupDialog";
 import { GroupMenuList, GroupMenuSurface, type GroupMenuItem } from "./GroupMenu";
 import { GroupReorderButtons } from "./GroupReorderButtons";
 import { moveGroupNames, type GroupMove } from "./groupOrder";
+import { placeAnchoredPop, placeAnchoredPopInitial, type AnchoredPopBox } from "./placeAnchoredPop";
 
 export function resolveGroupName(groups: GroupMeta[], raw?: string | null): string | undefined {
   const trimmed = (raw || "").trim();
@@ -28,6 +30,10 @@ export function appendGroupIfNew(groups: GroupMeta[], raw?: string | null): Grou
   ];
 }
 
+function isInsideRowMenu(target: EventTarget | null) {
+  return target instanceof Element && !!target.closest(".group-row-menu");
+}
+
 export function GroupPicker({
   groups,
   value,
@@ -44,6 +50,9 @@ export function GroupPicker({
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [newInput, setNewInput] = useState("");
+  const [box, setBox] = useState<AnchoredPopBox | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
   const isMobile = resolvePlatform() === "mobile";
 
   const current = (value || "").trim();
@@ -51,6 +60,8 @@ export function GroupPicker({
   const isNew = current.length > 0 && !matched;
   const groupNames = groups.map((g) => g.name);
   const showOrder = !!onReorder && groups.length > 1;
+  const selectedKey = matched?.name || (isNew ? current : "");
+  const displayLabel = matched?.name || (isNew ? current : t("group.none"));
 
   function move(name: string, action: GroupMove) {
     if (!onReorder) return;
@@ -68,13 +79,94 @@ export function GroupPicker({
     })),
   ];
 
+  function placeInitial() {
+    const el = btnRef.current;
+    if (!el) return;
+    setBox(placeAnchoredPopInitial(el.getBoundingClientRect()));
+  }
+
+  function syncPopBox() {
+    const btn = btnRef.current;
+    const pop = popRef.current;
+    if (!btn || !pop) return;
+    const next = placeAnchoredPop(btn.getBoundingClientRect(), pop.getBoundingClientRect().height);
+    setBox((prev) =>
+      prev && prev.top === next.top && prev.left === next.left && prev.width === next.width ? prev : next,
+    );
+  }
+
+  useLayoutEffect(() => {
+    if (!open || isMobile) return;
+    syncPopBox();
+    const pop = popRef.current;
+    if (!pop || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => syncPopBox());
+    ro.observe(pop);
+    return () => ro.disconnect();
+  }, [open, isMobile]);
+
+  useEffect(() => {
+    if (!open || isMobile) return;
+    function onPointer(ev: MouseEvent) {
+      const target = ev.target as Node;
+      if (btnRef.current?.contains(target) || popRef.current?.contains(target)) return;
+      if (isInsideRowMenu(ev.target)) return;
+      setOpen(false);
+    }
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") setOpen(false);
+    }
+    function onScroll(ev: Event) {
+      if (popRef.current?.contains(ev.target as Node)) return;
+      if (isInsideRowMenu(ev.target)) return;
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onScroll);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [open, isMobile]);
+
+  function commitNew() {
+    const name = newInput.trim();
+    if (!name) return;
+    onChange(name);
+    setNewInput("");
+    setOpen(false);
+  }
+
+  const createRow = (
+    <div className="group-picker-create">
+      <input
+        className="input"
+        placeholder={groups.length ? t("group.orNew") : t("group.newPh")}
+        value={newInput}
+        onChange={(e) => setNewInput(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commitNew();
+        }}
+      />
+      {newInput.trim() ? (
+        <button type="button" className="btn primary sm" onClick={commitNew}>
+          {t("common.ok")}
+        </button>
+      ) : null}
+    </div>
+  );
+
   // 1. 内嵌选择模式（如在已有的底部抽屉 / 批量弹窗内）
   if (inline || (isMobile && inline)) {
     return (
       <div className="m-group-inline-picker">
         <div className="m-group-inline-list">
           {items.map((item) => {
-            const on = item.key === (matched?.name || (isNew ? current : ""));
+            const on = item.key === selectedKey;
             const sortIndex = item.sortable ? groupNames.indexOf(item.key) : -1;
             const rowOrder = showOrder && item.sortable && sortIndex >= 0;
             return (
@@ -151,7 +243,7 @@ export function GroupPicker({
               <span className="group-tab-dot" style={{ background: matched.color }} />
             ) : null}
             <span className={"m-group-cell-name" + (!current ? " is-none" : "")}>
-              {matched?.name || (isNew ? current : t("group.none"))}
+              {displayLabel}
             </span>
             {isNew && <span className="m-group-cell-new-badge">{t("common.recommended")}</span>}
           </div>
@@ -161,7 +253,10 @@ export function GroupPicker({
         <GroupMenuSurface open={open} onClose={() => setOpen(false)} title={t("group.openList")}>
           <GroupMenuList
             items={items}
-            value={matched?.name || (isNew ? current : "")}
+            value={selectedKey}
+            forceSearch
+            searchPlaceholder={t("common.listSearch")}
+            emptyLabel={t("common.listSearchEmpty")}
             onSelect={(key) => {
               onChange(key);
               setOpen(false);
@@ -201,67 +296,59 @@ export function GroupPicker({
     );
   }
 
-  // 3. 桌面端模式：平铺 Choice 按钮或紧凑 Choice 栏
+  // 3. 桌面端：精简触发器 + 可搜索固定弹层（含排序菜单）
   return (
-    <div className="group-picker">
-      {showOrder ? (
-        <div className="group-picker-rows">
-          <button
-            type="button"
-            className={"group-picker-row-pick" + (!current ? " on" : "")}
-            onClick={() => onChange("")}
-          >
-            {t("group.none")}
-          </button>
-          {groups.map((g, idx) => (
+    <div className="group-picker group-picker-compact">
+      <button
+        ref={btnRef}
+        type="button"
+        className={"input icon-select-trigger option-select-trigger" + (open ? " is-open" : "")}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        onClick={() => {
+          if (open) {
+            setOpen(false);
+            return;
+          }
+          setNewInput("");
+          placeInitial();
+          setOpen(true);
+        }}
+      >
+        <span className="group-select-main">
+          {matched?.color ? (
+            <span className="group-tab-dot" style={{ background: matched.color }} />
+          ) : null}
+          <span className={"group-select-label" + (!current ? " muted" : "")}>{displayLabel}</span>
+        </span>
+        <ChevronDown size={14} />
+      </button>
+      {open && box
+        ? createPortal(
             <div
-              key={g.name}
-              className={"group-picker-row" + (matched?.name === g.name ? " on" : "")}
+              ref={popRef}
+              className="option-select-pop"
+              role="dialog"
+              aria-label={t("group.openList")}
+              style={{ top: box.top, left: box.left, width: box.width }}
             >
-              <button
-                type="button"
-                className="group-picker-row-pick"
-                onClick={() => onChange(g.name)}
-              >
-                {g.color && <span className="group-tab-dot" style={{ background: g.color }} />}
-                <span className="group-menu-item-label">{g.name}</span>
-              </button>
-              <GroupReorderButtons
-                canUp={idx > 0}
-                canDown={idx < groups.length - 1}
-                onMove={(action) => move(g.name, action)}
+              <GroupMenuList
+                items={items}
+                value={selectedKey}
+                forceSearch
+                searchPlaceholder={t("common.listSearch")}
+                emptyLabel={t("common.listSearchEmpty")}
+                onSelect={(key) => {
+                  onChange(key);
+                  setOpen(false);
+                }}
+                onReorder={onReorder}
               />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="choice-row">
-          <button
-            type="button"
-            className={"choice" + (!current ? " on" : "")}
-            onClick={() => onChange("")}
-          >
-            {t("group.none")}
-          </button>
-          {groups.map((g) => (
-            <button
-              key={g.name}
-              type="button"
-              className={"choice" + (matched?.name === g.name ? " on" : "")}
-              onClick={() => onChange(g.name)}
-            >
-              {g.color && <span className="group-tab-dot" style={{ background: g.color }} />}
-              {g.name}
-            </button>
-          ))}
-        </div>
-      )}
-      <input
-        className="input"
-        placeholder={groups.length ? t("group.orNew") : t("group.newPh")}
-        value={value || ""}
-        onChange={(e) => onChange(e.target.value)}
-      />
+              {createRow}
+            </div>,
+            document.body,
+          )
+        : null}
       {isNew && <div className="hint">{t("group.willCreate", { name: current })}</div>}
     </div>
   );

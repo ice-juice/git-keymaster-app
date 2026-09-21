@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AlertTriangle, Edit3, Trash2, X } from "lucide-react";
 import { errMessage, type Identity, type UpdateIdentityArgs } from "../lib/ipc";
+import { OptionSelect } from "../ui/OptionSelect";
 
 export function EditIdentityModal({
   identity,
@@ -93,17 +94,18 @@ export function EditIdentityModal({
 
               <div className="field">
                 <label className="field-label">{t("overview.platform")}</label>
-                <select
-                  className="input"
+                <OptionSelect
+                  title={t("overview.platform")}
                   value={platform}
-                  onChange={(e) => setPlatform(e.target.value)}
-                >
-                  <option value="github">GitHub</option>
-                  <option value="gitlab">GitLab</option>
-                  <option value="gitee">{t("overview.platGitee")}</option>
-                  <option value="codeup">{t("overview.platCodeup")}</option>
-                  <option value="custom">{t("overview.platCustom")}</option>
-                </select>
+                  onChange={setPlatform}
+                  options={[
+                    { value: "github", label: "GitHub" },
+                    { value: "gitlab", label: "GitLab" },
+                    { value: "gitee", label: t("overview.platGitee") },
+                    { value: "codeup", label: t("overview.platCodeup") },
+                    { value: "custom", label: t("overview.platCustom") },
+                  ]}
+                />
               </div>
             </div>
 

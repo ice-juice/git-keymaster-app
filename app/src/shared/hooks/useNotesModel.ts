@@ -4,7 +4,8 @@ import { api, errMessage, type GroupMeta, type NoteEntry } from "../../lib/ipc";
 import { markdownToPdfBytes } from "../../lib/notePdf";
 import { resolvePlatform } from "../../platform/resolve";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
-import { applyGroupOrder, sortGroups } from "../../ui/groupOrder";
+import { applyGroupOrder, removeGroupMeta, renameGroupMeta, sortGroups } from "../../ui/groupOrder";
+import type { GroupDialogState } from "../../ui/GroupDialog";
 import type { NoteMarkdownEditorHandle } from "../../ui/NoteMarkdownEditor";
 import { showAppToast } from "../../ui/Toast";
 import { i18n } from "../../lib/i18n";
@@ -125,7 +126,8 @@ export function useNotesModel() {
   const [pendingDelete, setPendingDelete] = useState<NoteEntry | null>(null);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  const [groupDlg, setGroupDlg] = useState(false);
+  const [groupDlg, setGroupDlg] = useState<GroupDialogState | null>(null);
+  const [pendingDeleteGroup, setPendingDeleteGroup] = useState<string | null>(null);
   const [offlineDraft, setOfflineDraft] = useState<{ draft: NoteDraftState; savedAt: string } | null>(null);
   const [leaveConfirm, setLeaveConfirm] = useState<null | (() => void)>(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -587,11 +589,50 @@ export function useNotesModel() {
   }
 
   async function saveGroup(name: string, color: string | null) {
+    if (groupDlg?.mode === "edit") {
+      const oldName = groupDlg.name;
+      const next = renameGroupMeta(groups, oldName, name, color);
+      const remap = oldName !== name ? { from: oldName, to: name } : null;
+      await api.noteSaveGroups(next, remap);
+      setGroups(next);
+      if (remap) {
+        setEntries((prev) => prev.map((e) => (e.group === oldName ? { ...e, group: name } : e)));
+        if (group === oldName) setGroup(name);
+        if (draft.group === oldName) updateDraft({ group: name });
+      }
+      setGroupDlg(null);
+      return;
+    }
     const next = [...groups, { name, color, sortOrder: groups.length }];
     await api.noteSaveGroups(next);
     setGroups(next);
     setGroup(name);
-    setGroupDlg(false);
+    setGroupDlg(null);
+  }
+
+  function requestDeleteGroup(name: string) {
+    if (writesLocked || !groups.some((g) => g.name === name)) return;
+    setPendingDeleteGroup(name);
+  }
+
+  async function confirmDeleteGroup() {
+    if (!pendingDeleteGroup) return;
+    const name = pendingDeleteGroup;
+    setBusy(true);
+    try {
+      const next = removeGroupMeta(groups, name);
+      await api.noteSaveGroups(next, { from: name, to: null });
+      setGroups(next);
+      setEntries((prev) => prev.map((e) => (e.group === name ? { ...e, group: undefined } : e)));
+      if (group === name) setGroup("未分组");
+      if (draft.group === name) updateDraft({ group: undefined });
+      setPendingDeleteGroup(null);
+      setGroupDlg(null);
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function reorderGroups(orderedNames: string[]) {
@@ -655,6 +696,8 @@ export function useNotesModel() {
     onEditorFocusLeave,
     pendingDelete,
     setPendingDelete,
+    pendingDeleteGroup,
+    setPendingDeleteGroup,
     err,
     setErr,
     busy,
@@ -679,6 +722,8 @@ export function useNotesModel() {
     insertAtCursor,
     wrapSelection,
     saveGroup,
+    requestDeleteGroup,
+    confirmDeleteGroup,
     reorderGroups,
     persistGroupsIfNeeded,
     restoreOfflineDraft,

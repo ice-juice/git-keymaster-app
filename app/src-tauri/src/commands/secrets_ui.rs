@@ -161,14 +161,14 @@ pub fn icon_list_builtin() -> Vec<BuiltinIconInfo> {
 }
 
 #[tauri::command]
-pub fn icon_upload_custom(state: State<AppState>, file_path: String) -> Result<CustomIconInfo> {
+pub fn icon_upload_custom(app: AppHandle, state: State<AppState>, file_path: String) -> Result<CustomIconInfo> {
     ensure_writes_allowed(&state)?;
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let bytes = std::fs::read(&file_path)?;
+    let bytes = crate::content_file::read_picked_bytes(&app, &file_path)?;
     icons::process_and_store(v, &bytes)
 }
 
