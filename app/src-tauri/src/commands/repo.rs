@@ -3,6 +3,7 @@
 use crate::agent::AgentEnv;
 use crate::commands::{ensure_reveal_authorized, recover_lock, AppState};
 use crate::error::{AppError, Result};
+use crate::git::clone_progress::{parse_git_progress_line, CloneProgressEvent};
 use crate::git::infer::{
     apply_probe_hits, classify_ls_remote, identities_for_probe, infer, Inference, ProbeFailClass,
     ProbeHit,
@@ -19,7 +20,7 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(12);
 
@@ -307,7 +308,11 @@ fn to_view(data: &crate::model::VaultData, rec: &ManagedRepo) -> ManagedRepoView
     let mut needs_alias_fix = false;
     let mut remote_url = rec.remote_url.clone();
     if exists {
-        let live = repo::inspect(std::path::Path::new(&rec.path), &data.identities, &data.clone_history);
+        let live = repo::inspect(
+            std::path::Path::new(&rec.path),
+            &data.identities,
+            &data.clone_history,
+        );
         if live.remote_url.is_some() {
             remote_url = live.remote_url;
         }
@@ -367,9 +372,15 @@ fn set_origin_url(repo_path: &str, url: &str) -> Result<()> {
     }
     let (_o, _e, code) = sys::run("git", &["-C", repo_path, "remote", "get-url", "origin"])?;
     let (args, fail): (Vec<&str>, &str) = if code == 0 {
-        (vec!["-C", repo_path, "remote", "set-url", "origin", url], "更新 origin 失败")
+        (
+            vec!["-C", repo_path, "remote", "set-url", "origin", url],
+            "更新 origin 失败",
+        )
     } else {
-        (vec!["-C", repo_path, "remote", "add", "origin", url], "添加 origin 失败")
+        (
+            vec!["-C", repo_path, "remote", "add", "origin", url],
+            "添加 origin 失败",
+        )
     };
     let (_o, e, code) = sys::run("git", args.as_slice())?;
     if code != 0 {
@@ -380,7 +391,11 @@ fn set_origin_url(repo_path: &str, url: &str) -> Result<()> {
 
 /// 扫描根目录下的仓库并逐个体检（不入库，供预览）。
 #[tauri::command]
-pub fn scan_repos(state: State<AppState>, root: String, max_depth: Option<usize>) -> Result<Vec<repo::RepoInfo>> {
+pub fn scan_repos(
+    state: State<AppState>,
+    root: String,
+    max_depth: Option<usize>,
+) -> Result<Vec<repo::RepoInfo>> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = (state, root, max_depth);
@@ -437,7 +452,9 @@ pub fn scan_and_import_repos(
         store::save_data(v, &data)?;
         crate::util::audit(
             v.root(),
-            &format!("扫描导入仓库 imported={imported} updated={updated} skipped={skipped_no_remote}"),
+            &format!(
+                "扫描导入仓库 imported={imported} updated={updated} skipped={skipped_no_remote}"
+            ),
         );
         let snapshot = data.repos.clone();
         let repos = snapshot.iter().map(|r| to_view(&data, r)).collect();
@@ -514,7 +531,11 @@ pub fn list_managed_repos(state: State<'_, AppState>) -> Result<Vec<ManagedRepoV
 
 /// 从管理列表移除（不删除磁盘目录）。
 #[tauri::command]
-pub async fn remove_managed_repo(app: AppHandle, state: State<'_, AppState>, repo_id: String) -> Result<()> {
+pub async fn remove_managed_repo(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    repo_id: String,
+) -> Result<()> {
     crate::commands::ensure_writes_allowed(&state)?;
     with_vault(&state, |v| {
         let mut data = store::load_data(v)?;
@@ -544,7 +565,11 @@ pub struct SetRepoRemoteArgs {
 
 /// 更换已登记仓库的 origin URL；可选同时绑定身份并改写为别名地址。
 #[tauri::command]
-pub fn set_repo_remote(app: AppHandle, state: State<AppState>, args: SetRepoRemoteArgs) -> Result<ManagedRepoView> {
+pub fn set_repo_remote(
+    app: AppHandle,
+    state: State<AppState>,
+    args: SetRepoRemoteArgs,
+) -> Result<ManagedRepoView> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = (app, state, args);
@@ -632,7 +657,12 @@ pub fn open_repo_dir(path: String) -> Result<()> {
             .spawn()
             .map_err(|e| AppError::Io(format!("打开目录失败：{e}")))?;
     }
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "ios"), not(target_os = "android")))]
+    #[cfg(all(
+        unix,
+        not(target_os = "macos"),
+        not(target_os = "ios"),
+        not(target_os = "android")
+    ))]
     {
         std::process::Command::new("xdg-open")
             .arg(&p)
@@ -644,7 +674,12 @@ pub fn open_repo_dir(path: String) -> Result<()> {
 
 /// 给身份追加一条归属标识（去重、小写化）。
 #[tauri::command]
-pub fn add_owner(app: AppHandle, state: State<AppState>, identity_id: String, owner: String) -> Result<()> {
+pub fn add_owner(
+    app: AppHandle,
+    state: State<AppState>,
+    identity_id: String,
+    owner: String,
+) -> Result<()> {
     crate::commands::ensure_writes_allowed(&state)?;
     with_vault(&state, |v| {
         let mut data = store::load_data(v)?;
@@ -672,7 +707,12 @@ pub fn add_owner(app: AppHandle, state: State<AppState>, identity_id: String, ow
 
 /// 切换某仓库的身份：改 remote 为别名地址 + 设提交身份 + 学习归属。
 #[tauri::command]
-pub fn switch_repo_identity(app: AppHandle, state: State<AppState>, repo_path: String, identity_id: String) -> Result<String> {
+pub fn switch_repo_identity(
+    app: AppHandle,
+    state: State<AppState>,
+    repo_path: String,
+    identity_id: String,
+) -> Result<String> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = (app, state, repo_path, identity_id);
@@ -721,7 +761,10 @@ pub fn switch_repo_identity(app: AppHandle, state: State<AppState>, repo_path: S
             },
         );
         store::save_data(v, &data)?;
-        crate::util::audit(v.root(), &format!("切换仓库身份 {repo_path} → {}", identity.name));
+        crate::util::audit(
+            v.root(),
+            &format!("切换仓库身份 {repo_path} → {}", identity.name),
+        );
         Ok(new_url)
     })?;
     crate::sync::scheduler::kick_publish(app);
@@ -748,7 +791,10 @@ pub fn inspect_clone_target(dest_dir: String, repo_name: String) -> Result<repo:
     if dest_dir.trim().is_empty() {
         return Err(AppError::Invalid("请先选择目标文件夹".into()));
     }
-    Ok(repo::plan_clone_or_init(&PathBuf::from(dest_dir.trim()), repo_name.trim()))
+    Ok(repo::plan_clone_or_init(
+        &PathBuf::from(dest_dir.trim()),
+        repo_name.trim(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -761,27 +807,90 @@ pub struct CloneOrInitArgs {
     pub mode: String,
 }
 
-fn run_git(
+const CLONE_PROGRESS_EVENT: &str = "clone-progress";
+
+fn emit_clone_progress(app: &AppHandle, step: &'static str, percent: Option<u8>) {
+    let _ = app.emit(
+        CLONE_PROGRESS_EVENT,
+        CloneProgressEvent { step, percent },
+    );
+}
+
+/// 边读 stderr 边解析进度。git 用 `\r` 刷新同一行，所以 `\r` / `\n` 都当行尾。
+fn drain_git_progress_stderr(app: &AppHandle, mut pipe: impl Read, sink: &mut Vec<u8>) {
+    let mut chunk = [0u8; 4096];
+    let mut pending = Vec::new();
+    loop {
+        match pipe.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => {
+                sink.extend_from_slice(&chunk[..n]);
+                pending.extend_from_slice(&chunk[..n]);
+                while let Some(pos) = pending.iter().position(|b| *b == b'\n' || *b == b'\r') {
+                    let line: Vec<u8> = pending.drain(..=pos).collect();
+                    let line = String::from_utf8_lossy(&line);
+                    let line = line.trim();
+                    if line.is_empty() {
+                        continue;
+                    }
+                    if let Some(ev) = parse_git_progress_line(line) {
+                        let _ = app.emit(CLONE_PROGRESS_EVENT, &ev);
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    if !pending.is_empty() {
+        let line = String::from_utf8_lossy(&pending);
+        let line = line.trim();
+        if !line.is_empty() {
+            if let Some(ev) = parse_git_progress_line(line) {
+                let _ = app.emit(CLONE_PROGRESS_EVENT, &ev);
+            }
+        }
+    }
+}
+
+fn run_git_clone_progress(
+    app: &AppHandle,
     env: &AgentEnv,
-    args: &[&str],
+    url: &str,
+    target: &str,
     proxy: Option<&crate::app_config::NetworkProxy>,
 ) -> Result<(String, String, i32)> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
-        let _ = (env, args, proxy);
+        let _ = (app, env, url, target, proxy);
         return unsupported_local_git();
     }
     let mut cmd = Command::new("git");
-    cmd.args(args);
+    cmd.args(["clone", "--progress", url, target]);
     configure_git_command(&mut cmd, env, proxy)?;
-    let output = cmd
-        .output()
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
         .map_err(|e| AppError::Io(format!("执行 git 失败：{e}")))?;
-    Ok((
-        String::from_utf8_lossy(&output.stdout).to_string(),
-        String::from_utf8_lossy(&output.stderr).to_string(),
-        output.status.code().unwrap_or(-1),
-    ))
+    let mut stdout_pipe = child.stdout.take();
+    let mut stderr_pipe = child.stderr.take();
+    let out_h = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = stdout_pipe.take() {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    });
+    let mut stderr_bytes = Vec::new();
+    if let Some(pipe) = stderr_pipe.take() {
+        drain_git_progress_stderr(app, pipe, &mut stderr_bytes);
+    }
+    let status = child
+        .wait()
+        .map_err(|e| AppError::Io(format!("等待 git 失败：{e}")))?;
+    let stdout = String::from_utf8_lossy(&out_h.join().unwrap_or_default()).to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).to_string();
+    Ok((stdout, stderr, status.code().unwrap_or(-1)))
 }
 
 fn apply_local_identity(repo_path: &str, name: Option<&str>, email: Option<&str>) -> Result<()> {
@@ -800,8 +909,26 @@ fn apply_local_identity(repo_path: &str, name: Option<&str>, email: Option<&str>
 }
 
 /// 按探测结果把仓库落到本地：空目录 clone，已有项目 init，已有裸仓库补 remote。
+///
+/// 同步命令跑在窗口主线程上。`git clone` 要几分钟，主线程不处理消息，
+/// Windows 会把窗口标成「未响应」并涂成白屏。阻塞工作放到 `spawn_blocking`。
 #[tauri::command]
-pub fn clone_repo(app: AppHandle, state: State<AppState>, args: CloneOrInitArgs) -> Result<CloneResult> {
+pub async fn clone_repo(app: AppHandle, args: CloneOrInitArgs) -> Result<CloneResult> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = (app, args);
+        return unsupported_local_git();
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        tauri::async_runtime::spawn_blocking(move || clone_repo_work(app, args))
+            .await
+            .map_err(|e| AppError::Other(format!("克隆任务中断：{e}")))?
+    }
+}
+
+fn clone_repo_work(app: AppHandle, args: CloneOrInitArgs) -> Result<CloneResult> {
+    let state = app.state::<AppState>();
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         let _ = (app, state, args);
@@ -842,66 +969,87 @@ pub fn clone_repo(app: AppHandle, state: State<AppState>, args: CloneOrInitArgs)
         crate::net::effective(&cfg)
     };
 
-    let r = with_vault(&state, |v| {
-        let mut data = store::load_data(v)?;
+    // 读身份、装密钥后立刻放开保险库锁。git clone 可能要几分钟，
+    // 锁一直拿着会让自动锁定的巡检把这段等待误判成休眠。
+    let identity = with_vault(&state, |v| {
+        let data = store::load_data(v)?;
         let identity = data
             .identities
             .iter()
             .find(|i| i.id == args.identity_id)
             .cloned()
             .ok_or_else(|| AppError::Invalid("身份不存在".into()))?;
-        let used_url = crate::git::url::rewrite_to_alias(&identity.host_alias, &parsed.repo_path);
-        let target_str = plan.target_path.clone();
-
         if let Some(key_id) = &identity.key_id {
             let _ = crate::agent::load_key(v, &env, key_id);
         }
+        Ok(identity)
+    })?;
+    let used_url = crate::git::url::rewrite_to_alias(&identity.host_alias, &parsed.repo_path);
+    let target_str = plan.target_path.clone();
 
-        match mode {
-            "clone" => {
-                if let Some(parent) = PathBuf::from(&target_str).parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                let (_o, e, code) = run_git(&env, &["clone", &used_url, &target_str], proxy.as_ref())?;
-                if code != 0 {
-                    return Err(AppError::Other(format!("git clone 失败：{}", e.trim())));
-                }
-                apply_local_identity(
-                    &target_str,
-                    identity.git_user_name.as_deref(),
-                    identity.email.as_deref(),
-                )?;
+    match mode {
+        "clone" => {
+            emit_clone_progress(&app, "connecting", None);
+            if let Some(parent) = PathBuf::from(&target_str).parent() {
+                std::fs::create_dir_all(parent)?;
             }
-            "init" => {
-                std::fs::create_dir_all(&target_str)?;
-                let (_o, e, code) = sys::run("git", &["-C", &target_str, "init"])?;
-                if code != 0 {
-                    return Err(AppError::Other(format!("git init 失败：{}", e.trim())));
-                }
-                let (_o, e, code) = sys::run("git", &["-C", &target_str, "remote", "add", "origin", &used_url])?;
-                if code != 0 {
-                    return Err(AppError::Other(format!("绑定远程失败：{}", e.trim())));
-                }
-                apply_local_identity(
-                    &target_str,
-                    identity.git_user_name.as_deref(),
-                    identity.email.as_deref(),
-                )?;
+            let (_o, e, code) =
+                run_git_clone_progress(&app, &env, &used_url, &target_str, proxy.as_ref())?;
+            if code != 0 {
+                return Err(AppError::Other(format!("git clone 失败：{}", e.trim())));
             }
-            "addRemote" => {
-                let (_o, e, code) = sys::run("git", &["-C", &target_str, "remote", "add", "origin", &used_url])?;
-                if code != 0 {
-                    return Err(AppError::Other(format!("绑定远程失败：{}", e.trim())));
-                }
-                apply_local_identity(
-                    &target_str,
-                    identity.git_user_name.as_deref(),
-                    identity.email.as_deref(),
-                )?;
-            }
-            other => return Err(AppError::Invalid(format!("未知操作：{other}"))),
+            emit_clone_progress(&app, "writingIdentity", None);
+            apply_local_identity(
+                &target_str,
+                identity.git_user_name.as_deref(),
+                identity.email.as_deref(),
+            )?;
         }
+        "init" => {
+            emit_clone_progress(&app, "initRepo", None);
+            std::fs::create_dir_all(&target_str)?;
+            let (_o, e, code) = sys::run("git", &["-C", &target_str, "init"])?;
+            if code != 0 {
+                return Err(AppError::Other(format!("git init 失败：{}", e.trim())));
+            }
+            emit_clone_progress(&app, "addRemote", None);
+            let (_o, e, code) = sys::run(
+                "git",
+                &["-C", &target_str, "remote", "add", "origin", &used_url],
+            )?;
+            if code != 0 {
+                return Err(AppError::Other(format!("绑定远程失败：{}", e.trim())));
+            }
+            emit_clone_progress(&app, "writingIdentity", None);
+            apply_local_identity(
+                &target_str,
+                identity.git_user_name.as_deref(),
+                identity.email.as_deref(),
+            )?;
+        }
+        "addRemote" => {
+            emit_clone_progress(&app, "addRemote", None);
+            let (_o, e, code) = sys::run(
+                "git",
+                &["-C", &target_str, "remote", "add", "origin", &used_url],
+            )?;
+            if code != 0 {
+                return Err(AppError::Other(format!("绑定远程失败：{}", e.trim())));
+            }
+            emit_clone_progress(&app, "writingIdentity", None);
+            apply_local_identity(
+                &target_str,
+                identity.git_user_name.as_deref(),
+                identity.email.as_deref(),
+            )?;
+        }
+        other => return Err(AppError::Invalid(format!("未知操作：{other}"))),
+    }
 
+    emit_clone_progress(&app, "saving", None);
+
+    let result = with_vault(&state, |v| {
+        let mut data = store::load_data(v)?;
         data.clone_history
             .insert(parsed.owner.to_lowercase(), identity.id.clone());
         repo::upsert_managed_repo(
@@ -931,7 +1079,7 @@ pub fn clone_repo(app: AppHandle, state: State<AppState>, args: CloneOrInitArgs)
         })
     })?;
     crate::sync::scheduler::kick_publish(app);
-    Ok(r)
+    Ok(result)
 }
 
 #[derive(Serialize)]
@@ -1016,7 +1164,10 @@ pub fn reveal_git_pat(
 
 /// 查询是否已保存某平台 PAT（不回传令牌本身）。
 #[tauri::command(async)]
-pub fn git_pat_status(state: State<'_, AppState>, provider: GitProvider) -> Result<GithubPatStatus> {
+pub fn git_pat_status(
+    state: State<'_, AppState>,
+    provider: GitProvider,
+) -> Result<GithubPatStatus> {
     with_vault(&state, |v| {
         let secrets = store::load_secrets(v)?;
         Ok(GithubPatStatus {
@@ -1079,7 +1230,10 @@ pub async fn test_git_pat(state: State<'_, AppState>, provider: GitProvider) -> 
 
 /// 拉取 PAT 账号所属组织（供批量导入归属标识）。
 #[tauri::command(async)]
-pub async fn list_git_orgs(state: State<'_, AppState>, provider: GitProvider) -> Result<Vec<String>> {
+pub async fn list_git_orgs(
+    state: State<'_, AppState>,
+    provider: GitProvider,
+) -> Result<Vec<String>> {
     let proxy = crate::net::effective(&recover_lock(&state.config));
     let token = with_vault(&state, |v| {
         let secrets = store::load_secrets(v)?;

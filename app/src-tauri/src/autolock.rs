@@ -59,6 +59,12 @@ pub fn wall_jump_means_sleep(elapsed_wall: Duration, tick: Duration) -> bool {
     elapsed_wall > tick + SLEEP_JUMP_SLACK
 }
 
+/// 保险库锁被别的命令占着时，巡检线程会在锁上干等。
+/// 这段等待会让下一次挂钟差看起来像休眠，不能据此锁定。
+pub fn sleep_detected(vault_busy: bool, elapsed_wall: Duration, tick: Duration) -> bool {
+    !vault_busy && wall_jump_means_sleep(elapsed_wall, tick)
+}
+
 /// 工作站当前是否处于锁屏/安全桌面。`None` 表示本平台无法判断。
 pub fn workstation_locked() -> Option<bool> {
     #[cfg(windows)]
@@ -66,7 +72,9 @@ pub fn workstation_locked() -> Option<bool> {
         use windows_sys::Win32::System::StationsAndDesktops::{CloseDesktop, OpenInputDesktop};
         // 锁屏时输入桌面是 Winlogon 的安全桌面，普通权限打不开。
         // SAFETY: 仅查询句柄；拿到就立刻关闭，不做任何桌面切换。
-        let handle = unsafe { OpenInputDesktop(0, 0, 0x0001 /* DESKTOP_READOBJECTS */) };
+        let handle = unsafe {
+            OpenInputDesktop(0, 0, 0x0001 /* DESKTOP_READOBJECTS */)
+        };
         if handle.is_null() {
             return Some(true);
         }
@@ -90,16 +98,22 @@ pub fn start(app: AppHandle) {
             std::thread::sleep(TICK);
 
             let now_wall = SystemTime::now();
-            let elapsed_wall = now_wall
-                .duration_since(last_wall)
-                .unwrap_or_else(|_| TICK);
-            last_wall = now_wall;
+            let elapsed_wall = now_wall.duration_since(last_wall).unwrap_or_else(|_| TICK);
 
             let state = app.state::<AppState>();
+            // git clone 会占着保险库一两分钟。这里若阻塞，下一次挂钟差会被当成休眠。
+            let vault_guard = match state.vault.try_lock() {
+                Ok(guard) => guard,
+                Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => {
+                    last_wall = now_wall;
+                    continue;
+                }
+            };
+            last_wall = now_wall;
             // 已经锁着就什么都不用做，但锁屏标记要在解锁后复位。
-            let unlocked = recover_lock(&state.vault)
-                .as_ref()
-                .is_some_and(|v| v.is_unlocked());
+            let unlocked = vault_guard.as_ref().is_some_and(|v| v.is_unlocked());
+            drop(vault_guard);
             if !unlocked {
                 LOCKED_BY_SCREEN.store(false, Ordering::SeqCst);
                 was_unlocked = false;
@@ -119,7 +133,7 @@ pub fn start(app: AppHandle) {
 
             let idle = recover_lock(&state.last_activity).elapsed();
 
-            let reason = if lock_on_sleep && wall_jump_means_sleep(elapsed_wall, TICK) {
+            let reason = if lock_on_sleep && sleep_detected(false, elapsed_wall, TICK) {
                 Some(LockReason::Sleep)
             } else if lock_on_sleep && workstation_locked() == Some(true) {
                 if LOCKED_BY_SCREEN.swap(true, Ordering::SeqCst) {
@@ -171,6 +185,14 @@ mod tests {
     #[test]
     fn long_wall_jump_is_sleep() {
         assert!(wall_jump_means_sleep(Duration::from_secs(3600), TICK));
+    }
+
+    #[test]
+    fn vault_wait_is_not_sleep() {
+        let waited = Duration::from_secs(130);
+        assert!(wall_jump_means_sleep(waited, TICK));
+        assert!(!sleep_detected(true, waited, TICK));
+        assert!(sleep_detected(false, waited, TICK));
     }
 
     /// 只要求「不 panic 且语义自洽」：CI 跑在无交互会话里，返回值不可预设。

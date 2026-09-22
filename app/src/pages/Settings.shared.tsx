@@ -48,6 +48,8 @@ import {
 } from "../lib/prefs";
 import { clampMaskKeep, MAX_MASK_KEEP, MIN_MASK_KEEP } from "../shared/maskAccount";
 import { PageHead, Card, FieldLabel, Badge, ErrorDialog } from "../ui/common";
+import { UpdateNotesDialog } from "../ui/UpdateNotesDialog";
+import { appUpdateNotes } from "../shared/updateNotes";
 import { PatGuideDialog } from "../ui/PatGuideDialog";
 import { ReauthDialog } from "../ui/ReauthDialog";
 import { LanguageCard } from "../ui/LanguageCard";
@@ -640,50 +642,6 @@ function formatWhen(iso: string | null | undefined, neverLabel: string): string 
   return d.toLocaleString();
 }
 
-function UpdateNotes({ notes }: { notes: string }) {
-  const blocks = notes
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line, i, arr) => line.trim() !== "" || (i > 0 && arr[i - 1].trim() !== ""));
-
-  return (
-    <div className="update-notes">
-      {blocks.map((line, i) => {
-        const heading = line.match(/^#{2,3}\s+(.+)/);
-        if (heading) {
-          return (
-            <div key={i} className="update-notes-h">
-              {heading[1]}
-            </div>
-          );
-        }
-        const item = line.match(/^[-*]\s+(.+)/);
-        if (item) {
-          return (
-            <div key={i} className="update-notes-li">
-              {renderInline(item[1])}
-            </div>
-          );
-        }
-        return (
-          <div key={i} className="update-notes-p">
-            {renderInline(line)}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function renderInline(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    const bold = part.match(/^\*\*([^*]+)\*\*$/);
-    if (bold) return <strong key={i}>{bold[1]}</strong>;
-    return <span key={i}>{part}</span>;
-  });
-}
-
 const EMPTY_PROXY: NetworkProxy = {
   enabled: false,
   scheme: "http",
@@ -774,7 +732,7 @@ export function NetworkProxyCard() {
     try {
       const r = await api.testNetworkProxy({ ...payload(), enabled: true });
       setTest(r);
-      setMsg(r.httpsOk ? t("proxy.httpsPass", { ms: r.httpsMs }) : t("proxy.httpsFail"));
+      setMsg("");
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -899,9 +857,37 @@ export function NetworkProxyCard() {
         </div>
 
         {test && (
-          <div className={"callout " + (test.httpsOk ? "good" : "warn")}>
-            <div>{test.httpsOk ? t("proxy.httpsOk", { ms: test.httpsMs }) : test.httpsError}</div>
-            {test.sshNote && <div>{test.sshNote}</div>}
+          <div className={"callout " + (test.egressOk ? "good" : "warn")}>
+            <div className="stack proxy-probe">
+              {!test.proxyOk && <div>{test.proxyError}</div>}
+              {test.proxyOk && !test.egressOk && <div>{test.egressError}</div>}
+              {test.egressOk && (
+                <>
+                  <div className="kv">
+                    <span className="muted">{t("proxy.ip")}</span>
+                    <span>{test.egressIp}</span>
+                  </div>
+                  <div className="kv">
+                    <span className="muted">{t("proxy.location")}</span>
+                    <span>{test.egressLocation || "—"}</span>
+                  </div>
+                  <div className="kv">
+                    <span className="muted">{t("proxy.timezone")}</span>
+                    <span>{test.egressTimezone || "—"}</span>
+                  </div>
+                  <div className="kv">
+                    <span className="muted">{t("proxy.elapsed")}</span>
+                    <span>{t("proxy.elapsedValue", { ms: test.egressMs ?? 0 })}</span>
+                  </div>
+                </>
+              )}
+              {test.proxyOk && (
+                <div>
+                  {test.httpsOk ? t("proxy.httpsOk", { ms: test.httpsMs }) : test.httpsError}
+                </div>
+              )}
+              {test.sshNote && <div>{test.sshNote}</div>}
+            </div>
           </div>
         )}
 
@@ -937,6 +923,7 @@ export function AboutUpdateCard() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
+  const [notesOpen, setNotesOpen] = useState(false);
 
   async function loadPrefs() {
     const [src, last, auto] = await Promise.all([
@@ -1027,6 +1014,7 @@ export function AboutUpdateCard() {
       setResult(r);
       setVersion(r.currentVersion);
       setLastCheck(await api.getLastUpdateCheck());
+      setNotesOpen(!!r.available && !!appUpdateNotes(r.notes));
       setMsg(r.available ? t("update.found", { version: r.latestVersion }) : t("update.latest"));
     } catch (e) {
       setErr(errMessage(e));
@@ -1066,6 +1054,7 @@ export function AboutUpdateCard() {
 
   const showInstall = !!result?.available && result.selfUpdateSupported;
   const showManualOnly = !!result?.available && !result.selfUpdateSupported;
+  const notesText = appUpdateNotes(result?.notes);
 
   return (
     <div className="stack-lg">
@@ -1098,7 +1087,6 @@ export function AboutUpdateCard() {
                 <strong>{t("update.newVersion", { version: result.latestVersion })}</strong>
                 {result.pubDate ? ` · ${formatWhen(result.pubDate, t("update.never"))}` : ""}
               </div>
-              {result.notes && <UpdateNotes notes={result.notes} />}
               {showManualOnly && (
                 <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
                   {t("update.manualOnly")}
@@ -1108,6 +1096,11 @@ export function AboutUpdateCard() {
                 {showInstall && (
                   <button type="button" className="btn primary sm" disabled={installing} onClick={install}>
                     {installing ? t("update.installing") : t("update.install")}
+                  </button>
+                )}
+                {notesText && (
+                  <button type="button" className="btn sm" onClick={() => setNotesOpen(true)}>
+                    {t("update.openNotes")}
                   </button>
                 )}
                 <button type="button" className="btn sm" disabled={busy} onClick={skip}>
@@ -1124,6 +1117,13 @@ export function AboutUpdateCard() {
                 )}
               </div>
             </div>
+          )}
+          {notesOpen && result?.notes && (
+            <UpdateNotesDialog
+              version={result.latestVersion}
+              notes={result.notes}
+              onClose={() => setNotesOpen(false)}
+            />
           )}
         </div>
       </Card>

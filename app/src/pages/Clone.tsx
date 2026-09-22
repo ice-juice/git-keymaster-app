@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { FolderGit2, X, AlertTriangle } from "lucide-react";
 import {
@@ -9,8 +10,11 @@ import {
   type Inference,
   type ClonePlan,
   type CloneResult,
+  type CloneProgress,
   type Candidate,
+  type Identity,
 } from "../lib/ipc";
+import { previewCloneUrl, resolveActiveIdentity, selectableIdentities, showIdentityPicker } from "../shared/cloneIdentity";
 import { PageHead, Card, Badge } from "../ui/common";
 import { OptionSelect } from "../ui/OptionSelect";
 import { writeClipboard } from "../lib/clipboard";
@@ -21,6 +25,17 @@ const CONF_KEYS: Record<string, string> = {
   veryHigh: "clone.veryHigh",
   mediumHigh: "clone.mediumHigh",
   low: "clone.low",
+};
+
+const PROGRESS_STEP_KEYS: Record<string, string> = {
+  connecting: "clone.progressConnecting",
+  receiving: "clone.progressReceiving",
+  resolving: "clone.progressResolving",
+  checkingOut: "clone.progressCheckingOut",
+  writingIdentity: "clone.progressWritingIdentity",
+  initRepo: "clone.progressInitRepo",
+  addRemote: "clone.progressAddRemote",
+  saving: "clone.progressSaving",
 };
 
 function guessRepoName(url: string): string {
@@ -61,8 +76,11 @@ export function ClonePage({
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [cloneBusy, setCloneBusy] = useState(false);
+  const [cloneErr, setCloneErr] = useState("");
+  const [cloneProgress, setCloneProgress] = useState<CloneProgress | null>(null);
   const [probeBusy, setProbeBusy] = useState(false);
   const [pickedIdentityId, setPickedIdentityId] = useState("");
+  const [identities, setIdentities] = useState<Identity[]>([]);
   const [pending, setPending] = useState<{
     destDir: string;
     plan: ClonePlan;
@@ -73,12 +91,14 @@ export function ClonePage({
 
   const identityOptions = useMemo(() => {
     if (!inf) return [];
-    if (inf.candidates.length > 0) return inf.candidates;
-    return inf.recommended ? [inf.recommended] : [];
-  }, [inf]);
+    return selectableIdentities(inf, identities, t("clone.manualBasis"));
+  }, [inf, identities, t]);
 
-  const activeIdentity =
-    identityOptions.find((c) => c.identityId === pickedIdentityId) ?? inf?.recommended ?? identityOptions[0] ?? null;
+  const activeIdentity = inf
+    ? resolveActiveIdentity(identityOptions, pickedIdentityId, inf.recommended)
+    : null;
+  const cloneUrl = inf ? previewCloneUrl(inf, activeIdentity) : null;
+  const pickingAlias = !!inf && showIdentityPicker(inf, identityOptions);
 
   async function resolve(nextUrl = url) {
     setErr("");
@@ -117,6 +137,27 @@ export function ClonePage({
   }
 
   useEffect(() => {
+    api.listIdentities().then(setIdentities).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!cloneBusy) return;
+    let unlisten: (() => void) | undefined;
+    listen<CloneProgress>("clone-progress", (ev) => {
+      setCloneProgress(ev.payload);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        /* 非 Tauri */
+      });
+    return () => {
+      unlisten?.();
+    };
+  }, [cloneBusy]);
+
+  useEffect(() => {
     const q = searchParams.get("url")?.trim();
     if (!q) return;
     setUrl(q);
@@ -141,11 +182,13 @@ export function ClonePage({
 
       const repoName = guessRepoName(inf.rewrittenUrl || url);
       const plan = await api.inspectCloneTarget(selected, repoName);
+      setCloneErr("");
+      setCloneProgress(null);
       setPending({
         destDir: selected,
         plan,
         identity: activeIdentity,
-        cloneUrl: inf.rewrittenUrl || url.trim(),
+        cloneUrl: cloneUrl || url.trim(),
       });
     } catch (e) {
       setErr(errMessage(e));
@@ -158,20 +201,23 @@ export function ClonePage({
       setPending(null);
       return;
     }
+    const job = pending;
     setCloneBusy(true);
-    setErr("");
+    setCloneErr("");
+    setCloneProgress({ step: "connecting", percent: null });
     try {
       const result = await api.cloneRepo({
-        url: pending.cloneUrl,
-        destDir: pending.destDir,
-        identityId: pending.identity.identityId,
-        mode: pending.plan.suggestedMode,
+        url: job.cloneUrl,
+        destDir: job.destDir,
+        identityId: job.identity.identityId,
+        mode: job.plan.suggestedMode,
       });
       setLastClone(result);
       setMsg(t("clone.done", { dest: result.dest }));
       setPending(null);
+      setCloneProgress(null);
     } catch (e) {
-      setErr(errMessage(e));
+      setCloneErr(errMessage(e));
     } finally {
       setCloneBusy(false);
     }
@@ -200,13 +246,13 @@ export function ClonePage({
 
           {inf && (
             <div className="stack">
-              {inf.rewrittenUrl && (
+              {cloneUrl && (
                 <div className="callout good between">
-                  <span className="mono grow">{inf.rewrittenUrl}</span>
+                  <span className="mono grow">{cloneUrl}</span>
                   <button
                     type="button"
                     className="btn sm"
-                    onClick={() => writeClipboard(inf.rewrittenUrl!)}
+                    onClick={() => writeClipboard(cloneUrl)}
                   >
                     {t("common.copy")}
                   </button>
@@ -247,11 +293,11 @@ export function ClonePage({
                 </button>
               </div>
 
-              {identityOptions.length > 1 && (
+              {pickingAlias && (
                 <div className="field">
-                  <label className="field-label">{t("clone.useIdentity")}</label>
+                  <label className="field-label">{inf.recommended ? t("clone.useIdentity") : t("clone.pickAlias")}</label>
                   <OptionSelect
-                    title={t("clone.useIdentity")}
+                    title={inf.recommended ? t("clone.useIdentity") : t("clone.pickAlias")}
                     value={activeIdentity?.identityId ?? ""}
                     onChange={setPickedIdentityId}
                     options={identityOptions.map((c) => ({
@@ -300,7 +346,13 @@ export function ClonePage({
         <CloneConfirmModal
           pending={pending}
           busy={cloneBusy}
-          onCancel={() => setPending(null)}
+          error={cloneErr}
+          progress={cloneProgress}
+          onCancel={() => {
+            setPending(null);
+            setCloneErr("");
+            setCloneProgress(null);
+          }}
           onConfirm={confirmClone}
         />
       )}
@@ -308,19 +360,34 @@ export function ClonePage({
   );
 }
 
+function progressStepLabel(step: string, t: (key: string) => string): string {
+  const key = PROGRESS_STEP_KEYS[step];
+  if (!key) return t("clone.running");
+  const translated = t(key);
+  return translated === key ? t("clone.running") : translated;
+}
+
 function CloneConfirmModal({
   pending,
   busy,
+  error,
+  progress,
   onCancel,
   onConfirm,
 }: {
   pending: { destDir: string; plan: ClonePlan; identity: Candidate; cloneUrl: string };
   busy: boolean;
+  error: string;
+  progress: CloneProgress | null;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const { t } = useTranslation();
   const blocked = !pending.plan.canProceed;
+  const percent =
+    progress?.percent != null && Number.isFinite(progress.percent)
+      ? Math.max(0, Math.min(100, Math.round(progress.percent)))
+      : null;
   return (
     <div className="wizard-overlay" style={{ zIndex: 60 }}>
       <div
@@ -343,6 +410,24 @@ function CloneConfirmModal({
 
         <div className="card-body stack" style={{ gap: 8, padding: "12px 14px" }}>
           <div className={blocked ? "callout warn sm" : "callout info sm"}>{pending.plan.message}</div>
+          {error && <div className="callout danger">{error}</div>}
+          {busy && (
+            <div className="clone-progress">
+              <div className="clone-progress-meta">
+                <span>{progressStepLabel(progress?.step ?? "connecting", t)}</span>
+                {percent != null && <span className="mono">{percent}%</span>}
+              </div>
+              <div
+                className={percent == null ? "clone-progress-bar indeterminate" : "clone-progress-bar"}
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={percent ?? undefined}
+              >
+                <span style={percent != null ? { width: `${percent}%` } : undefined} />
+              </div>
+            </div>
+          )}
           <div className="muted sm">{t("clone.autoAdd")}</div>
           <div className="grid-sum">
             <div>
@@ -379,7 +464,14 @@ function CloneConfirmModal({
             {blocked ? t("common.close") : t("clone.otherDir")}
           </button>
           {!blocked && (
-            <button type="button" className="btn primary sm" disabled={busy} onClick={onConfirm}>
+            <button
+              type="button"
+              className="btn primary sm"
+              disabled={busy}
+              onClick={() => {
+                void onConfirm();
+              }}
+            >
               {busy ? t("clone.running") : pending.plan.suggestedMode === "init" ? t("clone.confirmInit") : t("clone.confirmClone")}
             </button>
           )}

@@ -53,7 +53,7 @@ export function InitMobile() {
       : t("init.mobileCreate");
 
   return (
-    <div className="m-init-shell">
+    <div className="m-init-shell" aria-busy={m.transition ? true : undefined}>
       {/* 顶部精简导航栏 */}
       <header className="m-init-topbar">
         <AppLogo size={24} />
@@ -477,7 +477,8 @@ export function InitMobile() {
               <button
                 type="button"
                 className="btn primary"
-                onClick={() => m.refresh()}
+                disabled={m.busy}
+                onClick={() => m.enterApp()}
                 style={{ width: "100%", minHeight: 46, fontSize: 15 }}
               >
                 {t("init.enterApp")}
@@ -564,7 +565,8 @@ export function InitMobile() {
               <button
                 type="button"
                 className="btn primary"
-                onClick={() => m.refresh()}
+                disabled={m.busy}
+                onClick={() => m.enterApp()}
                 style={{ width: "100%", minHeight: 46, fontSize: 15 }}
               >
                 {t("init.pageStart")}
@@ -655,6 +657,18 @@ export function InitMobile() {
             )}
           </div>
         </footer>
+      )}
+
+      {m.transition && (
+        <div className="m-init-transition" role="status" aria-live="polite">
+          <div className="m-init-transition-card">
+            <div className="m-init-transition-title">{m.transition}</div>
+            <div className="m-init-transition-bar" aria-hidden="true">
+              <span />
+            </div>
+            <div className="m-init-transition-hint">{t("init.transitionHint")}</div>
+          </div>
+        </div>
       )}
 
       {/* S3 小白引导弹窗 */}

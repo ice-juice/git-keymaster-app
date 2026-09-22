@@ -67,6 +67,9 @@ qrcode = { version = "0.14", default-features = false, features = ["image"] }
 tauri = { version = "2.11.3", features = ["tray-icon", "image-png"] }
 arboard = "3"
 tauri-plugin-updater = "2"
+# 插件自带 reqwest 0.13，默认没开 socks。同版本再打开 socks，Cargo 会合并进插件，
+# 检查更新和下载安装包才能走 SOCKS5。版本必须和插件锁定的 reqwest 0.13 一致。
+updater-reqwest = { package = "reqwest", version = "0.13", default-features = false, features = ["socks"] }
 
 # 屏幕扫码只在 Windows / macOS 上编：
 # - Linux 上 xcap 强制拉 pipewire 0.10 / libspa，和 Ubuntu 22.04 的头文件对不上；
@@ -142,3 +145,6 @@ objc2-ui-kit = { version = "0.3.2", default-features = false, features = [
 
 [dev-dependencies]
 minisign = "0.7"
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# 只给单测用阻塞客户端，确认更新器用的 reqwest 0.13 会对 SOCKS 发握手而不是 HTTP CONNECT。
+updater-reqwest = { package = "reqwest", version = "0.13", default-features = false, features = ["blocking"] }

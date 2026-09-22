@@ -10,6 +10,8 @@ import {
 } from "../lib/ipc";
 import { isAndroid, isIOS } from "../lib/platform";
 import { Card, ErrorDialog, FieldLabel } from "../ui/common";
+import { UpdateNotesDialog } from "../ui/UpdateNotesDialog";
+import { appUpdateNotes } from "../shared/updateNotes";
 import { NetworkProxyCard } from "./Settings.shared";
 
 const DEFAULT_UPDATE_REPO = "ice-juice/git-keymaster-app";
@@ -38,6 +40,7 @@ export function MobileAboutUpdateCard() {
   const [installing, setInstalling] = useState(false);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
+  const [notesOpen, setNotesOpen] = useState(false);
   const [result, setResult] = useState<UpdateCheckResult | null>(null);
 
   async function loadPrefs() {
@@ -129,6 +132,7 @@ export function MobileAboutUpdateCard() {
       setResult(r);
       setVersion(r.currentVersion);
       setLastCheck(await api.getLastUpdateCheck());
+      setNotesOpen(!!r.available && !!appUpdateNotes(r.notes));
       setMsg(r.available ? t("update.found", { version: r.latestVersion }) : t("update.latest"));
     } catch (e) {
       setErr(errMessage(e));
@@ -168,6 +172,7 @@ export function MobileAboutUpdateCard() {
   }
 
   const canSideload = !!result?.available && !!result.sideloadUpdateSupported && android && !ios;
+  const notesText = appUpdateNotes(result?.notes);
 
   return (
     <div className="stack-lg">
@@ -202,16 +207,16 @@ export function MobileAboutUpdateCard() {
                 <strong>{t("update.newVersion", { version: result.latestVersion })}</strong>
                 {result.pubDate ? ` · ${formatWhen(result.pubDate, t("update.never"))}` : ""}
               </div>
-              {result.notes && (
-                <div className="muted" style={{ marginTop: 8, fontSize: 12, whiteSpace: "pre-wrap" }}>
-                  {result.notes}
-                </div>
-              )}
               {ios && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{t("update.iosStoreSoon")}</div>}
               <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
                 {canSideload && (
                   <button type="button" className="btn primary sm" disabled={installing} onClick={install}>
                     {installing ? t("update.installing") : t("update.install")}
+                  </button>
+                )}
+                {notesText && (
+                  <button type="button" className="btn sm" onClick={() => setNotesOpen(true)}>
+                    {t("update.openNotes")}
                   </button>
                 )}
                 <button type="button" className="btn sm" disabled={busy} onClick={skip}>
@@ -228,6 +233,13 @@ export function MobileAboutUpdateCard() {
                 )}
               </div>
             </div>
+          )}
+          {notesOpen && result?.notes && (
+            <UpdateNotesDialog
+              version={result.latestVersion}
+              notes={result.notes}
+              onClose={() => setNotesOpen(false)}
+            />
           )}
         </div>
       </Card>

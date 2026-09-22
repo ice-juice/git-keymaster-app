@@ -1,5 +1,6 @@
 //! 仓库管理与地址智能识别（M5）。
 
+pub mod clone_progress;
 pub mod gitee;
 pub mod github;
 pub mod gitlab;

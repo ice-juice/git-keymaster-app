@@ -57,7 +57,9 @@ pub fn proxy_url(p: &NetworkProxy) -> Result<Url> {
     } else {
         host.to_string()
     };
-    let mut url = Url::parse(&format!("{scheme}://{host_for_url}:{}/", p.port))
+    // SOCKS5 用 socks5h：把域名交给代理解析。本机解析 GitHub 容易被污染，更新会在连上代理前就失败。
+    let wire_scheme = if scheme == "socks5" { "socks5h" } else { scheme.as_str() };
+    let mut url = Url::parse(&format!("{wire_scheme}://{host_for_url}:{}/", p.port))
         .map_err(|e| AppError::Invalid(format!("代理地址无效：{e}")))?;
     if let Some(user) = p.username.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
         url.set_username(user)
@@ -95,6 +97,8 @@ pub fn apply_updater(
     builder: tauri_plugin_updater::UpdaterBuilder,
     p: &NetworkProxy,
 ) -> Result<tauri_plugin_updater::UpdaterBuilder> {
+    // 引用与插件相同的 reqwest 0.13，避免 socks 依赖被当成未使用删掉。
+    let _ = updater_reqwest::Client::builder;
     Ok(builder.proxy(proxy_url(p)?))
 }
 
@@ -115,7 +119,7 @@ pub fn apply_git_command(cmd: &mut Command, p: &NetworkProxy) -> Result<()> {
     }
     if p.apply_to_ssh {
         if let Some(line) = proxy_command_line(p)? {
-            merge_git_ssh_proxy(cmd, &format!(" -o ProxyCommand=\"{line}\""));
+            merge_git_ssh_proxy(cmd, &git_ssh_proxy_suffix(&line));
         }
     }
     Ok(())
@@ -161,16 +165,196 @@ pub fn ssh_helper_status() -> SshProxyHelper {
     }
 }
 
-/// 经代理 GET https://github.com，成功返回毫秒。
-pub fn test_github_https(p: &NetworkProxy) -> Result<u128> {
+const EGRESS_GEO_URLS: &[&str] = &[
+    "https://ipwho.is/",
+    "https://ipinfo.io/json",
+    "https://api.ip.sb/geoip",
+];
+const EGRESS_IP_URLS: &[&str] = &[
+    "https://api.ipify.org",
+    "https://checkip.amazonaws.com",
+    "https://icanhazip.com",
+];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressPlace {
+    pub ip: String,
+    pub location: Option<String>,
+    pub timezone: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressInfo {
+    pub ip: String,
+    pub location: Option<String>,
+    pub timezone: Option<String>,
+    pub ms: u128,
+}
+
+/// 只确认代理主机端口能连上，不代表协议或外网可用。
+pub fn probe_proxy_tcp(p: &NetworkProxy) -> Result<u128> {
+    use std::net::ToSocketAddrs;
+    let host = p.host.trim();
+    let endpoint = if host.contains(':') && !host.starts_with('[') {
+        format!("[{host}]:{}", p.port)
+    } else {
+        format!("{host}:{}", p.port)
+    };
+    let addrs = endpoint
+        .to_socket_addrs()
+        .map_err(|e| AppError::Other(format!("无法解析代理主机：{e}")))?;
+    let start = Instant::now();
+    let mut last = None;
+    let mut tried = false;
+    for addr in addrs {
+        tried = true;
+        match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)) {
+            Ok(stream) => {
+                drop(stream);
+                return Ok(start.elapsed().as_millis());
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    if !tried {
+        return Err(AppError::Other(format!("无法解析代理主机 {endpoint}")));
+    }
+    Err(AppError::Other(format!(
+        "无法连接代理 {endpoint}：{}",
+        last.map(|e| e.to_string()).unwrap_or_else(|| "连接失败".into())
+    )))
+}
+
+pub fn proxied_blocking_client(p: &NetworkProxy) -> Result<reqwest::blocking::Client> {
     let mut builder = reqwest::blocking::Client::builder()
         .user_agent(crate::identity::USER_AGENT)
         .timeout(std::time::Duration::from_secs(12))
         .redirect(reqwest::redirect::Policy::limited(4));
     builder = apply_reqwest_blocking(builder, p)?;
-    let client = builder
+    builder
         .build()
-        .map_err(|e| AppError::Other(format!("HTTP 客户端构建失败：{e}")))?;
+        .map_err(|e| AppError::Other(format!("HTTP 客户端构建失败：{e}")))
+}
+
+/// 经代理查询出口 IP、位置和时区。优先用带地理信息的接口。
+pub fn fetch_egress_ip(client: &reqwest::blocking::Client) -> Result<EgressInfo> {
+    let start = Instant::now();
+    let mut last = "经代理访问外网失败".to_string();
+    let mut ip_only: Option<EgressPlace> = None;
+    for url in EGRESS_GEO_URLS.iter().chain(EGRESS_IP_URLS.iter()) {
+        match client
+            .get(*url)
+            .header("Accept", "application/json, text/plain")
+            .timeout(std::time::Duration::from_secs(8))
+            .send()
+        {
+            Ok(resp) if resp.status().is_success() => {
+                let text = resp.text().unwrap_or_default();
+                if let Some(place) = parse_egress_place(&text) {
+                    if place.location.is_some() || place.timezone.is_some() {
+                        return Ok(EgressInfo {
+                            ip: place.ip,
+                            location: place.location,
+                            timezone: place.timezone,
+                            ms: start.elapsed().as_millis(),
+                        });
+                    }
+                    ip_only.get_or_insert(place);
+                } else {
+                    last = format!("外网响应不是 IP 信息（{url}）");
+                }
+            }
+            Ok(resp) => last = format!("查询出口 IP 返回 HTTP {}（{url}）", resp.status()),
+            Err(e) => last = redact(&format!("经代理访问外网失败：{e}")),
+        }
+    }
+    if let Some(place) = ip_only {
+        return Ok(EgressInfo {
+            ip: place.ip,
+            location: place.location,
+            timezone: place.timezone,
+            ms: start.elapsed().as_millis(),
+        });
+    }
+    Err(AppError::Other(last))
+}
+
+pub fn parse_egress_place(body: &str) -> Option<EgressPlace> {
+    let trimmed = body.trim();
+    if trimmed.starts_with('{') {
+        let value: serde_json::Value = serde_json::from_str(trimmed).ok()?;
+        if value.get("success").and_then(|v| v.as_bool()) == Some(false) {
+            return None;
+        }
+        let ip = parse_egress_ip(json_str(&value, &["ip"])?.as_str())?;
+        return Some(EgressPlace {
+            ip,
+            location: egress_location(&value),
+            timezone: egress_timezone(&value),
+        });
+    }
+    Some(EgressPlace {
+        ip: parse_egress_ip(trimmed)?,
+        location: None,
+        timezone: None,
+    })
+}
+
+fn egress_location(value: &serde_json::Value) -> Option<String> {
+    let country = json_str(value, &["country_code", "countryCode"]).or_else(|| {
+        json_str(value, &["country"]).filter(|s| s.chars().count() == 2)
+    });
+    let region = json_str(value, &["region", "region_name", "regionName"]);
+    let city = json_str(value, &["city"]);
+    let parts: Vec<String> = [country, region, city]
+        .into_iter()
+        .flatten()
+        .map(|s| s.to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" / "))
+    }
+}
+
+fn egress_timezone(value: &serde_json::Value) -> Option<String> {
+    let zone = value.get("timezone").or_else(|| value.get("time_zone"))?;
+    let text = zone
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| json_str(zone, &["id", "name"]));
+    text.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+}
+
+fn json_str(value: &serde_json::Value, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(text) = value.get(*key).and_then(|v| v.as_str()) {
+            let text = text.trim();
+            if !text.is_empty() && text != "null" {
+                return Some(text.to_string());
+            }
+        }
+    }
+    None
+}
+
+pub fn parse_egress_ip(body: &str) -> Option<String> {
+    let token = body.split_whitespace().next()?.trim();
+    let ip: std::net::IpAddr = token.parse().ok()?;
+    if ip.is_unspecified() {
+        return None;
+    }
+    Some(ip.to_string())
+}
+
+/// 经代理 GET https://github.com，成功返回毫秒。
+pub fn test_github_https(p: &NetworkProxy) -> Result<u128> {
+    test_github_with_client(&proxied_blocking_client(p)?)
+}
+
+pub fn test_github_with_client(client: &reqwest::blocking::Client) -> Result<u128> {
     let start = Instant::now();
     let resp = client
         .get("https://github.com")
@@ -224,6 +408,14 @@ fn format_proxy_command(helper_path: &Path, kind: &str, p: &NetworkProxy) -> Str
     }
 }
 
+/// `GIT_SSH_COMMAND` 由 shell 再解析一次。`line` 在路径含空格时已经带了双引号，
+/// 外面若再套双引号，`Program Files` 会被拆成独立参数，ssh 把它当成主机名，
+/// 于是报 `hostname contains invalid characters`，克隆看起来像没有结果。
+fn git_ssh_proxy_suffix(line: &str) -> String {
+    let escaped = line.replace('\'', r#"'\''"#);
+    format!(" -o ProxyCommand='{escaped}'")
+}
+
 /// `run_git` 先写好 `GIT_SSH_COMMAND` 再调用本函数时，把 ProxyCommand 接到现有值后面。
 pub fn merge_proxy_into_git_ssh(existing: &str, p: &NetworkProxy) -> Result<String> {
     if !p.apply_to_ssh {
@@ -235,7 +427,7 @@ pub fn merge_proxy_into_git_ssh(existing: &str, p: &NetworkProxy) -> Result<Stri
     if existing.contains("ProxyCommand=") {
         return Ok(existing.to_string());
     }
-    Ok(format!("{existing} -o ProxyCommand=\"{line}\""))
+    Ok(format!("{existing}{}", git_ssh_proxy_suffix(&line)))
 }
 
 fn merge_git_ssh_proxy(cmd: &mut Command, extra: &str) {
@@ -346,7 +538,7 @@ mod tests {
         p.username = Some("u r".into());
         p.password = Some("p@ss".into());
         let u = proxy_url(&p).unwrap();
-        assert_eq!(u.scheme(), "socks5");
+        assert_eq!(u.scheme(), "socks5h");
         assert_eq!(u.username(), "u%20r");
         assert_eq!(u.password(), Some("p%40ss"));
         assert!(!u.as_str().contains("p@ss"));
@@ -423,9 +615,24 @@ mod tests {
             return;
         }
         let out = merge_proxy_into_git_ssh("\"ssh\" -o BatchMode=yes", &p).unwrap();
-        assert!(out.contains("ProxyCommand="));
+        assert!(out.contains("ProxyCommand='"));
+        assert!(!out.contains("ProxyCommand=\""));
         let again = merge_proxy_into_git_ssh(&out, &p).unwrap();
         assert_eq!(again.matches("ProxyCommand=").count(), 1);
+    }
+
+    #[test]
+    fn proxy_suffix_keeps_spaced_path_in_one_shell_word() {
+        let line = format_proxy_command(
+            Path::new("C:/Program Files/Git/mingw64/bin/connect.exe"),
+            "connect",
+            &sample("socks5"),
+        );
+        let suffix = git_ssh_proxy_suffix(&line);
+        assert_eq!(
+            suffix,
+            " -o ProxyCommand='\"C:/Program Files/Git/mingw64/bin/connect.exe\" -S 127.0.0.1:7890 %h %p'"
+        );
     }
 
     #[test]
@@ -436,11 +643,109 @@ mod tests {
     }
 
     #[test]
+    fn parse_egress_place_reads_geo_json() {
+        let ipwho = r#"{"success":true,"ip":"38.80.191.155","country_code":"US","region":"California","city":"Los Angeles","timezone":{"id":"America/Los_Angeles"}}"#;
+        let place = parse_egress_place(ipwho).unwrap();
+        assert_eq!(place.ip, "38.80.191.155");
+        assert_eq!(place.location.as_deref(), Some("us / california / los angeles"));
+        assert_eq!(place.timezone.as_deref(), Some("America/Los_Angeles"));
+
+        let ipinfo = r#"{"ip":"38.80.191.155","city":"Los Angeles","region":"California","country":"US","timezone":"America/Los_Angeles"}"#;
+        let place = parse_egress_place(ipinfo).unwrap();
+        assert_eq!(place.location.as_deref(), Some("us / california / los angeles"));
+        assert_eq!(place.timezone.as_deref(), Some("America/Los_Angeles"));
+        assert!(parse_egress_place(r#"{"success":false}"#).is_none());
+    }
+
+    #[test]
+    fn parse_egress_ip_accepts_plain_v4_and_v6() {
+        assert_eq!(parse_egress_ip("203.0.113.8\n").as_deref(), Some("203.0.113.8"));
+        assert_eq!(parse_egress_ip("  2001:db8::1  ").as_deref(), Some("2001:db8::1"));
+        assert!(parse_egress_ip("<html>not an ip</html>").is_none());
+        assert!(parse_egress_ip("0.0.0.0").is_none());
+        assert!(parse_egress_ip("").is_none());
+    }
+
+    #[test]
+    fn probe_proxy_tcp_reaches_local_listener() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let mut p = sample("http");
+        p.port = port;
+        let ms = probe_proxy_tcp(&p).unwrap();
+        assert!(ms < 3_000);
+        drop(listener);
+    }
+
+    #[test]
     fn ssh_auth_blocks_proxycommand() {
         let mut p = sample("http");
         p.username = Some("u".into());
         p.password = Some("p".into());
         assert!(ssh_auth_unsupported(&p));
         assert!(proxy_command_line(&p).unwrap().is_none());
+    }
+
+    /// 在本机端口上收下代理客户端的第一包字节。用来区分 SOCKS 握手和 HTTP。
+    fn proxy_preface(proxy_template: &str) -> Vec<u8> {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::time::{Duration, Instant};
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        // 插件的 reqwest 用 rustls-no-provider，建客户端前要装上和更新器一样的 ring。
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let proxy = proxy_template.replace("{port}", &port.to_string());
+        let proxy = updater_reqwest::Proxy::all(&proxy).unwrap();
+        let client = updater_reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .proxy(proxy)
+            .build()
+            .unwrap();
+        let worker = std::thread::spawn(move || {
+            let _ = client.get("http://example.com/").send();
+        });
+        let start = Instant::now();
+        let mut sock = loop {
+            match listener.accept() {
+                Ok((sock, _)) => break sock,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if start.elapsed() > Duration::from_secs(3) {
+                        panic!("更新客户端没有连上代理");
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("accept: {e}"),
+            }
+        };
+        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut buf = [0u8; 24];
+        let n = sock.read(&mut buf).unwrap_or(0);
+        let _ = worker.join();
+        buf[..n].to_vec()
+    }
+
+    #[test]
+    fn updater_socks_proxy_sends_socks_greeting() {
+        let bytes = proxy_preface("socks5h://127.0.0.1:{port}");
+        assert_eq!(
+            bytes.first().copied(),
+            Some(0x05),
+            "SOCKS5 应先发版本字节，实际 {}",
+            String::from_utf8_lossy(&bytes)
+        );
+    }
+
+    #[test]
+    fn updater_http_proxy_sends_http() {
+        let bytes = proxy_preface("http://127.0.0.1:{port}");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.starts_with("GET ") || text.starts_with("CONNECT "),
+            "HTTP 代理应收到 HTTP 请求，实际 {text}"
+        );
     }
 }

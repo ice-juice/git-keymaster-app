@@ -10,6 +10,15 @@ use tauri::State;
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProxyTestResult {
+    pub proxy_ok: bool,
+    pub proxy_ms: Option<u128>,
+    pub proxy_error: Option<String>,
+    pub egress_ok: bool,
+    pub egress_ip: Option<String>,
+    pub egress_location: Option<String>,
+    pub egress_timezone: Option<String>,
+    pub egress_ms: Option<u128>,
+    pub egress_error: Option<String>,
     pub https_ok: bool,
     pub https_ms: Option<u128>,
     pub https_error: Option<String>,
@@ -82,22 +91,68 @@ pub fn test_network_proxy(proxy: NetworkProxy) -> Result<ProxyTestResult> {
         ));
     }
 
-    match net::test_github_https(&proxy) {
-        Ok(ms) => Ok(ProxyTestResult {
-            https_ok: true,
-            https_ms: Some(ms),
-            https_error: None,
-            ssh_helper_found: helper.found,
-            ssh_helper_name: helper.name,
-            ssh_note,
-        }),
-        Err(e) => Ok(ProxyTestResult {
-            https_ok: false,
-            https_ms: None,
-            https_error: Some(e.to_string()),
-            ssh_helper_found: helper.found,
-            ssh_helper_name: helper.name,
-            ssh_note,
-        }),
-    }
+    let (proxy_ok, proxy_ms, proxy_error) = match net::probe_proxy_tcp(&proxy) {
+        Ok(ms) => (true, Some(ms), None),
+        Err(e) => (false, None, Some(e.to_string())),
+    };
+    let (
+        egress_ok,
+        egress_ip,
+        egress_location,
+        egress_timezone,
+        egress_ms,
+        egress_error,
+        https_ok,
+        https_ms,
+        https_error,
+    ) = if proxy_ok {
+        let client = net::proxied_blocking_client(&proxy)?;
+        let (egress_ok, egress_ip, egress_location, egress_timezone, egress_ms, egress_error) =
+            match net::fetch_egress_ip(&client) {
+                Ok(info) => (
+                    true,
+                    Some(info.ip),
+                    info.location,
+                    info.timezone,
+                    Some(info.ms),
+                    None,
+                ),
+                Err(e) => (false, None, None, None, None, Some(e.to_string())),
+            };
+        let (https_ok, https_ms, https_error) = match net::test_github_with_client(&client) {
+            Ok(ms) => (true, Some(ms), None),
+            Err(e) => (false, None, Some(e.to_string())),
+        };
+        (
+            egress_ok,
+            egress_ip,
+            egress_location,
+            egress_timezone,
+            egress_ms,
+            egress_error,
+            https_ok,
+            https_ms,
+            https_error,
+        )
+    } else {
+        (false, None, None, None, None, None, false, None, None)
+    };
+
+    Ok(ProxyTestResult {
+        proxy_ok,
+        proxy_ms,
+        proxy_error,
+        egress_ok,
+        egress_ip,
+        egress_location,
+        egress_timezone,
+        egress_ms,
+        egress_error,
+        https_ok,
+        https_ms,
+        https_error,
+        ssh_helper_found: helper.found,
+        ssh_helper_name: helper.name,
+        ssh_note,
+    })
 }

@@ -146,8 +146,10 @@ dependencies = [
  "qrcode",
  "rand_core 0.6.4",
  "reqwest 0.12.28",
+ "reqwest 0.13.4",
  "rfd 0.15.4",
  "rqrr",
+ "rustls",
  "security-framework",
  "semver",
  "serde",
@@ -4518,6 +4520,7 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",

@@ -220,6 +220,9 @@ export interface Candidate {
 }
 export interface Inference {
   rewrittenUrl: string | null;
+  repoPath: string;
+  host: string | null;
+  isAlias: boolean;
   recommended: Candidate | null;
   candidates: Candidate[];
   needsProbe: boolean;
@@ -297,6 +300,10 @@ export interface CloneResult {
   usedUrl: string;
   identityName: string;
   mode: string;
+}
+export interface CloneProgress {
+  step: string;
+  percent: number | null;
 }
 export interface CloneOrInitArgs {
   url: string;
@@ -445,6 +452,15 @@ export interface NetworkProxy {
 }
 
 export interface ProxyTestResult {
+  proxyOk: boolean;
+  proxyMs: number | null;
+  proxyError: string | null;
+  egressOk: boolean;
+  egressIp: string | null;
+  egressLocation: string | null;
+  egressTimezone: string | null;
+  egressMs: number | null;
+  egressError: string | null;
   httpsOk: boolean;
   httpsMs: number | null;
   httpsError: string | null;

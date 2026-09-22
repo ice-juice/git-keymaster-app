@@ -68,25 +68,6 @@ function AccountMobileCard({
               {shownUser}
             </button>
           </div>
-          {(e.displayName || e.note || e.pinned || (e.tags && e.tags.length > 0)) && (
-            <div className="m-account-meta">
-              {(e.displayName || e.note) && (
-                <span className="m-account-meta-text" title={[e.displayName, e.note].filter(Boolean).join(" · ")}>
-                  {e.displayName && <span className="m-account-meta-name">{e.displayName}</span>}
-                  {e.displayName && e.note && <span className="m-account-meta-dot">·</span>}
-                  {e.note && <span className="m-account-meta-note">{e.note}</span>}
-                </span>
-              )}
-              {(e.pinned || (e.tags && e.tags.length > 0)) && (
-                <span className="m-account-badges">
-                  {e.pinned && <Badge kind="warn">{t("accounts.pinned")}</Badge>}
-                  {e.tags?.map((tag) => (
-                    <AccountTag key={tag} tag={tag} />
-                  ))}
-                </span>
-              )}
-            </div>
-          )}
         </div>
         <div className="m-account-ops">
           <button
@@ -103,6 +84,26 @@ function AccountMobileCard({
           </button>
         </div>
       </div>
+
+      {(e.displayName || e.note || e.pinned || (e.tags && e.tags.length > 0)) && (
+        <div className="m-account-meta">
+          {(e.displayName || e.note) && (
+            <span className="m-account-meta-text" title={[e.displayName, e.note].filter(Boolean).join(" · ")}>
+              {e.displayName && <span className="m-account-meta-name">{e.displayName}</span>}
+              {e.displayName && e.note && <span className="m-account-meta-dot">·</span>}
+              {e.note && <span className="m-account-meta-note">{e.note}</span>}
+            </span>
+          )}
+          {(e.pinned || (e.tags && e.tags.length > 0)) && (
+            <span className="m-account-badges">
+              {e.pinned && <Badge kind="warn">{t("accounts.pinned")}</Badge>}
+              {e.tags?.map((tag) => (
+                <AccountTag key={tag} tag={tag} />
+              ))}
+            </span>
+          )}
+        </div>
+      )}
 
       {pwMissing && (
         <div className="callout danger sm" style={{ margin: 0 }}>

@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api, errMessage, type UpdateCheckResult, type UpdateProgress } from "../lib/ipc";
+import { UpdateNotesDialog } from "./UpdateNotesDialog";
+import { appUpdateNotes } from "../shared/updateNotes";
 
 export function UpdateToast() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const [notice, setNotice] = useState<UpdateCheckResult | null>(null);
+  const [notesOpen, setNotesOpen] = useState(false);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -56,6 +57,7 @@ export function UpdateToast() {
     try {
       await api.skipUpdateVersion(ver);
       setNotice(null);
+      setNotesOpen(false);
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -69,7 +71,9 @@ export function UpdateToast() {
       ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
       : null;
 
-  if (!notice && !progress) return null;
+  const notesText = appUpdateNotes(notice?.notes);
+
+  if (!notice && !progress && !notesOpen) return null;
 
   return (
     <div className="update-toast" role="status">
@@ -108,22 +112,24 @@ export function UpdateToast() {
                 {t("update.manual")}
               </button>
             )}
-            <button
-              type="button"
-              className="btn ghost sm"
-              onClick={() => {
-                setNotice(null);
-                navigate("/settings");
-              }}
-            >
-              {t("update.viewNotes")}
-            </button>
+            {notesText && (
+              <button type="button" className="btn ghost sm" onClick={() => setNotesOpen(true)}>
+                {t("update.viewNotes")}
+              </button>
+            )}
             <button type="button" className="btn ghost sm" disabled={busy} onClick={skip}>
               {t("update.skipShort")}
             </button>
           </div>
         </>
       ) : null}
+      {notesOpen && notice?.notes && (
+        <UpdateNotesDialog
+          version={notice.latestVersion}
+          notes={notice.notes}
+          onClose={() => setNotesOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -12,6 +12,8 @@ import {
   Trash2,
   User,
   Check,
+  Eye,
+  EyeOff,
   FileText,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -47,6 +49,7 @@ export function AccountMobileEditor({
   const [platformMsg, setPlatformMsg] = useState("");
   const [platformMode, setPlatformMode] = useState<"builtin" | "custom">("builtin");
   const [suggestOpen, setSuggestOpen] = useState(false);
+  const [pwVisible, setPwVisible] = useState(false);
   const platformSync = useRef("");
   const suggestRef = useRef<HTMLDivElement>(null);
 
@@ -92,6 +95,10 @@ export function AccountMobileEditor({
       icon: existingRecords.find((e) => e.platform === name)?.icon || suggestIcon(name, m.builtins),
     }));
   }, [value?.platform, existingPlatforms, existingRecords, m.builtins]);
+
+  useEffect(() => {
+    setPwVisible(false);
+  }, [value?.id]);
 
   useEffect(() => {
     if (!value || m.builtins.length === 0) return;
@@ -357,15 +364,7 @@ export function AccountMobileEditor({
           </div>
         </section>
 
-        {/* 卡片 2: 账号（用户名） */}
         <section className="m-form-card">
-          <div className="m-form-card-title">
-            <div className="row" style={{ gap: 6 }}>
-              <User size={15} style={{ color: "var(--accent)" }} />
-              <span>{t("accounts.username")}</span>
-            </div>
-          </div>
-
           <div className="m-field">
             <label className="m-field-label">
               <span className="row" style={{ gap: 4 }}>
@@ -384,39 +383,49 @@ export function AccountMobileEditor({
               onChange={(e) => m.setEditor({ ...value, username: e.target.value })}
             />
           </div>
-        </section>
-
-        {/* 卡片 3: 密码凭据 */}
-        <section className="m-form-card">
-          <div className="m-form-card-title">
-            <div className="row" style={{ gap: 6 }}>
-              <Lock size={15} style={{ color: "var(--accent)" }} />
-              <span>
-                {isEditing
-                  ? (value.hasPassword === false ? t("accounts.passwordRefill") : t("accounts.passwordKeep"))
-                  : t("accounts.password")}
-              </span>
-            </div>
-          </div>
 
           <div className="m-field">
-            <input
-              className="input mono"
-              type="password"
-              autoComplete="new-password"
-              enterKeyHint="done"
-              placeholder={
-                isEditing
-                  ? (value.hasPassword === false ? t("accounts.passwordRefillPh") : t("accounts.passwordKeepPh"))
-                  : t("accounts.passwordPh")
-              }
-              value={value.password || ""}
-              onChange={(e) => m.setEditor({ ...value, password: e.target.value })}
-            />
+            <label className="m-field-label">
+              <span className="row" style={{ gap: 4 }}>
+                <Lock size={13} />
+                <span>
+                  {isEditing
+                    ? (value.hasPassword === false ? t("accounts.passwordRefill") : t("accounts.passwordKeep"))
+                    : t("accounts.password")}
+                </span>
+              </span>
+            </label>
+            <div className="m-secret-input">
+              <input
+                className="input mono"
+                type={pwVisible ? "text" : "password"}
+                autoComplete="new-password"
+                enterKeyHint="done"
+                placeholder={
+                  isEditing
+                    ? (value.hasPassword === false ? t("accounts.passwordRefillPh") : t("accounts.passwordKeepPh"))
+                    : t("accounts.passwordPh")
+                }
+                value={value.password || ""}
+                onChange={(e) => m.setEditor({ ...value, password: e.target.value })}
+              />
+              <button
+                type="button"
+                className="m-secret-toggle"
+                aria-label={pwVisible ? t("accounts.hidePw") : t("accounts.showPw")}
+                title={pwVisible ? t("accounts.hidePw") : t("accounts.showPw")}
+                onClick={() => setPwVisible((v) => !v)}
+              >
+                {pwVisible ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
             <PasswordGenerateControls
               compact
               password={value.password || ""}
-              onFill={(pw) => m.setEditor({ ...value, password: pw })}
+              onFill={(pw) => {
+                setPwVisible(true);
+                m.setEditor({ ...value, password: pw });
+              }}
             />
             <div className="m-field-hint">{t("accounts.passwordTip")}</div>
           </div>

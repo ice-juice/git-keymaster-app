@@ -88,6 +88,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
   const [createdPw, setCreatedPw] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [transition, setTransition] = useState<string | null>(null);
   const [s3, setS3] = useState<S3Config>(emptyS3);
   const [showSecret, setShowSecret] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -110,10 +111,26 @@ export function useInitModel(variant: "desktop" | "mobile") {
     setErr("");
   }
 
+  function beginWait(label: string) {
+    setBusy(true);
+    if (compact) setTransition(label);
+    return Date.now();
+  }
+
+  async function endWait(started: number) {
+    if (compact) {
+      const remain = 650 - (Date.now() - started);
+      if (remain > 0) await new Promise((resolve) => setTimeout(resolve, remain));
+    }
+    setBusy(false);
+    setTransition(null);
+  }
+
   async function chooseMode(next: Mode) {
     resetErr();
     setMode(next);
     if (compact) {
+      const started = beginWait(t(next === "create" ? "init.transitionCreate" : "init.transitionRestore"));
       try {
         const ws = await api.defaultWorkspacePath();
         setPath(ws);
@@ -124,6 +141,8 @@ export function useInitModel(variant: "desktop" | "mobile") {
         }
       } catch (e) {
         setErr(errMessage(e));
+      } finally {
+        await endWait(started);
       }
       setStep(1);
       return;
@@ -192,7 +211,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
     resetErr();
     if (pw.length < 8) return setErr(t("init.pwMin"));
     if (pw !== pw2) return setErr(t("init.pwMismatch"));
-    setBusy(true);
+    const started = beginWait(t("init.transitionCreating"));
     try {
       if (createdPath && samePath(path, createdPath)) {
         if (pw !== createdPw) {
@@ -218,7 +237,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
       }
       setErr(errMessage(e));
     } finally {
-      setBusy(false);
+      await endWait(started);
     }
   }
 
@@ -325,7 +344,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
   async function doPreview() {
     resetErr();
     if (!restoreKey.trim()) return setErr(t("init.needRestoreKey"));
-    setBusy(true);
+    const started = beginWait(t("init.transitionVerify"));
     setPreview(null);
     try {
       const r = await api.previewCloudRestore(s3, restoreKey);
@@ -336,7 +355,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
     } catch (e) {
       setErr(errMessage(e));
     } finally {
-      setBusy(false);
+      await endWait(started);
     }
   }
 
@@ -345,7 +364,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
     if (pw.length < 8) return setErr(t("init.pwMin"));
     if (pw !== pw2) return setErr(t("init.pwMismatch"));
     if (!preview?.hasManifest) return setErr(t("init.needPreview"));
-    setBusy(true);
+    const started = beginWait(t("init.transitionRestoring"));
     try {
       const ws = await ensureWorkspacePath();
       if (!ws) return;
@@ -361,7 +380,17 @@ export function useInitModel(variant: "desktop" | "mobile") {
     } catch (e) {
       setErr(errMessage(e));
     } finally {
-      setBusy(false);
+      await endWait(started);
+    }
+  }
+
+  async function enterApp() {
+    const started = beginWait(t("init.transitionEnter"));
+    try {
+      await refresh();
+    } catch (e) {
+      setErr(errMessage(e));
+      await endWait(started);
     }
   }
 
@@ -452,6 +481,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
     createdPw,
     err,
     busy,
+    transition,
     s3,
     showSecret,
     testResult,
@@ -500,6 +530,7 @@ export function useInitModel(variant: "desktop" | "mobile") {
     goRestoreCloud,
     doPreview,
     doRestore,
+    enterApp,
     goBack,
     jumpTo,
     pasteRestoreKey,

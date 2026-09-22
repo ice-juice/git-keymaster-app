@@ -37,6 +37,12 @@ pub struct Candidate {
 pub struct Inference {
     /// 改写后的别名地址（有推荐项时）。
     pub rewritten_url: Option<String>,
+    /// 仓库路径（`owner/repo`），供界面按用户所选身份拼别名地址。
+    pub repo_path: String,
+    /// 地址里的主机；裸 `owner/repo` 时为空。
+    pub host: Option<String>,
+    /// 主机是否像 SSH 别名（无点、非 IP）。
+    pub is_alias: bool,
     pub recommended: Option<Candidate>,
     pub candidates: Vec<Candidate>,
     /// 是否需要联网/实测兜底（本地无高置信结论）。
@@ -139,6 +145,9 @@ fn finalize(parsed: &ParsedRepo, recommended: Option<Candidate>, candidates: Vec
     let needs_probe = recommended.is_none();
     Inference {
         rewritten_url,
+        repo_path: parsed.repo_path.clone(),
+        host: parsed.host.clone(),
+        is_alias: parsed.is_alias,
         recommended,
         candidates,
         needs_probe,
@@ -492,6 +501,9 @@ mod tests {
         assert!(inf.recommended.is_none());
         assert!(inf.needs_probe);
         assert!(inf.rewritten_url.is_none());
+        assert_eq!(inf.repo_path, "unknownorg/repo");
+        assert_eq!(inf.host.as_deref(), Some("github.com"));
+        assert!(!inf.is_alias);
     }
 
     #[test]
