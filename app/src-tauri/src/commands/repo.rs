@@ -927,13 +927,9 @@ pub async fn clone_repo(app: AppHandle, args: CloneOrInitArgs) -> Result<CloneRe
     }
 }
 
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 fn clone_repo_work(app: AppHandle, args: CloneOrInitArgs) -> Result<CloneResult> {
     let state = app.state::<AppState>();
-    #[cfg(any(target_os = "android", target_os = "ios"))]
-    {
-        let _ = (app, state, args);
-        return unsupported_local_git();
-    }
     crate::commands::ensure_writes_allowed(&state)?;
     let parsed = parse_repo_url(&args.url)?;
     let dest = PathBuf::from(args.dest_dir.trim());
