@@ -4,6 +4,7 @@
   },
   "common": {
     "loading": "Loading…",
+    "statusLoadFailed": "Could not read the local vault status. Retry. This is not a new setup.",
     "save": "Save",
     "cancel": "Cancel",
     "close": "Close",
@@ -121,7 +122,8 @@
   "startup": {
     "syncing": "Syncing",
     "syncingNote": "Syncing from the cloud. You can browse, but cannot edit yet.",
-    "syncingNoteDesktop": "Syncing from the cloud. You can browse, but cannot change identities, keys, or repos yet."
+    "syncingNoteDesktop": "Syncing from the cloud. You can browse, but cannot change identities, keys, or repos yet.",
+    "syncFailed": "Cloud sync failed. You can keep using local data and retry from the Sync page."
   },
   "unlock": {
     "title": "Unlock workspace",
@@ -896,6 +898,8 @@
     "blobUpload": "Uploading",
     "blobDownload": "Downloading",
     "intervalOff": "Off",
+    "interval1": "1 minute",
+    "interval5": "5 minutes",
     "interval15": "15 minutes",
     "interval30": "30 minutes (recommended)",
     "interval60": "1 hour",

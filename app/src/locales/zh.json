@@ -4,6 +4,7 @@
   },
   "common": {
     "loading": "加载中…",
+    "statusLoadFailed": "没能读到本机保险库状态，请重试。这不是重新初始化。",
     "save": "保存",
     "cancel": "取消",
     "close": "关闭",
@@ -121,7 +122,8 @@
   "startup": {
     "syncing": "同步中",
     "syncingNote": "正在从云端同步，可浏览，暂不可修改。",
-    "syncingNoteDesktop": "正在从云端同步，可浏览，暂不可修改身份、密钥和仓库。"
+    "syncingNoteDesktop": "正在从云端同步，可浏览，暂不可修改身份、密钥和仓库。",
+    "syncFailed": "云端同步失败，不影响本地使用，可在同步页重试。"
   },
   "unlock": {
     "title": "解锁工作空间",
@@ -896,6 +898,8 @@
     "blobUpload": "上传",
     "blobDownload": "下载",
     "intervalOff": "关闭",
+    "interval1": "1 分钟",
+    "interval5": "5 分钟",
     "interval15": "15 分钟",
     "interval30": "30 分钟 (推荐)",
     "interval60": "1 小时",
