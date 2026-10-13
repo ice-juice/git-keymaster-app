@@ -326,7 +326,7 @@ mod tests {
         let win_fallback = resolve_config_base(None, Some(r"C:\Users\dev"), None, HostKind::Windows);
         assert_eq!(
             win_fallback,
-            PathBuf::from(r"C:\Users\dev\AppData\Roaming")
+            PathBuf::from(r"C:\Users\dev").join("AppData").join("Roaming")
         );
     }
 
