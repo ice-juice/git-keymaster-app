@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, errMessage, type GroupMeta, type NoteEntry } from "../../lib/ipc";
 import { markdownToPdfBytes } from "../../lib/notePdf";
@@ -7,6 +8,7 @@ import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { applyGroupOrder, removeGroupMeta, renameGroupMeta, sortGroups } from "../../ui/groupOrder";
 import type { GroupDialogState } from "../../ui/GroupDialog";
 import type { NoteMarkdownEditorHandle } from "../../ui/NoteMarkdownEditor";
+import { planInsertAtSelection, planToggleWrap, type PlannedEdit } from "../../ui/markdownCommands";
 import { showAppToast } from "../../ui/Toast";
 import { i18n } from "../../lib/i18n";
 import { useApp } from "../../store";
@@ -132,6 +134,7 @@ export function useNotesModel() {
   const [leaveConfirm, setLeaveConfirm] = useState<null | (() => void)>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const editorRef = useRef<NoteMarkdownEditorHandle | null>(null);
+  const [editorEpoch, setEditorEpoch] = useState(0);
   const savedRef = useRef({ title: "", markdown: "", group: undefined as string | undefined, tags: [] as string[], pinned: false });
   const draftTimer = useRef<number | null>(null);
   const dirtyRef = useRef(false);
@@ -224,20 +227,9 @@ export function useNotesModel() {
   }
 
   function updateDraft(patch: Partial<NoteDraftState>) {
-    setDraft((prev) => {
-      const next = { ...prev, ...patch };
-      draftRef.current = next;
-      return next;
-    });
-  }
-
-  function liveDraft(): NoteDraftState {
-    const current = draftRef.current;
-    const markdown = editorRef.current?.getMarkdown();
-    if (markdown === undefined || markdown === current.markdown) return current;
-    const next = { ...current, markdown };
+    const next = { ...draftRef.current, ...patch };
     draftRef.current = next;
-    return next;
+    setDraft(next);
   }
 
   useEffect(() => {
@@ -252,7 +244,7 @@ export function useNotesModel() {
 
   const saveCurrentNote = useCallback(async () => {
     if (writesLocked || savingRef.current) return;
-    const snapshot = liveDraft();
+    const snapshot = draftRef.current;
     const gen = ++saveGenRef.current;
     savingRef.current = true;
     setSaving(true);
@@ -274,7 +266,7 @@ export function useNotesModel() {
         markdown: snapshot.markdown,
       });
       if (gen !== saveGenRef.current) return;
-      const latest = liveDraft();
+      const latest = draftRef.current;
       const next = {
         ...latest,
         id: saved.id,
@@ -314,6 +306,7 @@ export function useNotesModel() {
     if (id === activeId && (id !== null || !detailOpen)) return;
     const go = async () => {
       saveGenRef.current += 1;
+      setEditorEpoch((n) => n + 1);
       setOfflineDraft(null);
       setLeaveConfirm(null);
       if (!id) {
@@ -364,6 +357,7 @@ export function useNotesModel() {
   function createNote() {
     const open = () => {
       saveGenRef.current += 1;
+      setEditorEpoch((n) => n + 1);
       setLeaveConfirm(null);
       const d = emptyDraft();
       setActiveId(null);
@@ -387,8 +381,19 @@ export function useNotesModel() {
     if (!offlineDraft) return;
     draftRef.current = offlineDraft.draft;
     setDraft(offlineDraft.draft);
-    editorRef.current?.setMarkdown(offlineDraft.draft.markdown);
     setOfflineDraft(null);
+  }
+
+  function applyEditorPlan(plan: (state: EditorState) => PlannedEdit) {
+    if (editorRef.current?.applyEdit(plan)) return;
+    const markdown = draftRef.current.markdown;
+    const state = EditorState.create({
+      doc: markdown,
+      selection: EditorSelection.single(markdown.length),
+    });
+    const edit = plan(state);
+    const next = state.update({ changes: edit.changes, selection: edit.selection }).state.doc.toString();
+    updateDraft({ markdown: next });
   }
 
   function discardOfflineDraft() {
@@ -397,19 +402,11 @@ export function useNotesModel() {
   }
 
   function insertAtCursor(text: string, cursorOffset?: number) {
-    if (editorRef.current) {
-      editorRef.current.insertAtCursor(text, cursorOffset);
-      return;
-    }
-    updateDraft({ markdown: `${draft.markdown}${draft.markdown.endsWith("\n") || !draft.markdown ? "" : "\n"}${text}` });
+    applyEditorPlan((state) => planInsertAtSelection(state, text, cursorOffset));
   }
 
   function wrapSelection(before: string, after = before) {
-    if (editorRef.current) {
-      editorRef.current.wrapSelection(before, after);
-      return;
-    }
-    updateDraft({ markdown: `${before}${draft.markdown}${after}` });
+    applyEditorPlan((state) => planToggleWrap(state, before, after));
   }
 
   async function persistGroupsIfNeeded(nextGroup?: string) {
@@ -710,6 +707,7 @@ export function useNotesModel() {
     setLeaveConfirm,
     detailOpen,
     editorRef,
+    editorEpoch,
     load,
     selectNote,
     createNote,
