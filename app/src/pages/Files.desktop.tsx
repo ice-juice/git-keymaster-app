@@ -1,6 +1,6 @@
-import { LayoutGrid, List, Plus, ShieldCheck } from "lucide-react";
+import { LayoutGrid, List, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { PageHead } from "../ui/common";
+import { PageHead, SecurityNote } from "../ui/common";
 import { formatBytes, useFilesModel } from "../shared/hooks/useFilesModel";
 import { FileCard, FilesDialogs, FilesEmpty, FilesFilters, FilesTable } from "./Files.shared";
 import { useItemFocus } from "../shared/hooks/useItemFocus";
@@ -18,6 +18,19 @@ export function FilesDesktop() {
       <PageHead
         title={t("pages.filesTitle")}
         desc={t("pages.filesDesc")}
+        note={
+          <SecurityNote>
+            <span>
+              <strong>{t("files.usageTitle")}</strong>
+              {t("files.usageBanner", { count: m.totalCount, size: formatBytes(m.usageBytes) })}
+            </span>
+            <div className="security-banner-pills">
+              <span className="sec-pill purple">{t("files.pillLimit")}</span>
+              <span className="sec-pill purple">{t("files.pillAead")}</span>
+              {m.revealCfg.grace > 0 && <span className="sec-pill cyan">{t("files.pillGrace", { n: m.revealCfg.grace })}</span>}
+            </div>
+          </SecurityNote>
+        }
         actions={
           <>
             <div className="view-switcher">
@@ -34,21 +47,6 @@ export function FilesDesktop() {
           </>
         }
       />
-
-      <div className="security-banner">
-        <div className="security-banner-text">
-          <ShieldCheck size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
-          <span>
-            <strong>{t("files.usageTitle")}</strong>
-            {t("files.usageBanner", { count: m.totalCount, size: formatBytes(m.usageBytes) })}
-          </span>
-        </div>
-        <div className="security-banner-pills">
-          <span className="sec-pill purple">{t("files.pillLimit")}</span>
-          <span className="sec-pill purple">{t("files.pillAead")}</span>
-          {m.revealCfg.grace > 0 && <span className="sec-pill cyan">{t("files.pillGrace", { n: m.revealCfg.grace })}</span>}
-        </div>
-      </div>
 
       <FilesFilters m={m} />
 

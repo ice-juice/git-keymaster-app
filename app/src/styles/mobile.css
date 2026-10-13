@@ -530,6 +530,9 @@ html[data-platform="mobile"] .m-note-sheet .group-menu-list {
   max-height: min(48vh, 420px);
   -webkit-overflow-scrolling: touch;
 }
+html[data-platform="mobile"] .group-menu-sheet {
+  overflow: hidden;
+}
 .m-group-cell-arrow {
   color: var(--text-muted);
 }
@@ -1710,6 +1713,28 @@ html[data-platform="mobile"] .account-editor-mobile .card-foot .btn {
   padding: 0 4px;
 }
 
+.m-subpage-nav-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.m-subpage-nav-delete {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--red-soft);
+  color: var(--red);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.m-subpage-nav-delete:disabled {
+  opacity: 0.45;
+}
 .m-subpage-nav-save {
   display: inline-flex;
   align-items: center;
@@ -2589,7 +2614,7 @@ html[data-platform="mobile"] .m-account-user-copy.is-copied {
 }
 html[data-platform="mobile"] .m-account-username {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   border: 0;
   padding: 0;
   background: transparent;

@@ -1026,6 +1026,8 @@ export interface RevealSettings {
   revealGraceMinutes: number;
   clipboardClearSeconds: number;
   accountHistoryLimit: number;
+  revealGraceActive?: boolean;
+  revealGraceRemainingSecs?: number;
 }
 
 export type ScreenCaptureCapability = "exclude" | "overlay" | "unsupported";

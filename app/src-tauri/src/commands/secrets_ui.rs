@@ -100,15 +100,34 @@ pub struct RevealSettings {
     pub reveal_grace_minutes: u32,
     pub clipboard_clear_seconds: u32,
     pub account_history_limit: u32,
+    /// 当前会话是否还在免密查看窗口内。
+    pub reveal_grace_active: bool,
+    /// 免密窗口剩余秒数。不在窗口内为 0。
+    pub reveal_grace_remaining_secs: u64,
+}
+
+fn reveal_grace_remaining_secs(state: &AppState) -> u64 {
+    let until = *recover_lock(&state.reveal_grace);
+    let Some(until) = until else {
+        return 0;
+    };
+    let now = std::time::Instant::now();
+    if now >= until {
+        return 0;
+    }
+    until.saturating_duration_since(now).as_secs()
 }
 
 #[tauri::command]
 pub fn get_reveal_settings(state: State<AppState>) -> RevealSettings {
     let cfg = recover_lock(&state.config);
+    let remaining = reveal_grace_remaining_secs(&state);
     RevealSettings {
         reveal_grace_minutes: cfg.reveal_grace_minutes,
         clipboard_clear_seconds: cfg.clipboard_clear_seconds,
         account_history_limit: cfg.account_history_limit,
+        reveal_grace_active: remaining > 0,
+        reveal_grace_remaining_secs: remaining,
     }
 }
 

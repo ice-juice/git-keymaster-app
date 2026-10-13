@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { Camera, ChevronDown, ImagePlus, Plus, Scan, ShieldCheck } from "lucide-react";
+import { Camera, ChevronDown, ImagePlus, Plus, Scan } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { PageHead, Empty } from "../ui/common";
+import { PageHead, Empty, SecurityNote } from "../ui/common";
 import { can } from "../platform/capabilities";
 import { useTotpModel, type TotpModel } from "../shared/hooks/useTotpModel";
 import { TotpDialogs, TotpEntries, TotpFilters, TotpViewSwitcher } from "./Totp.shared";
@@ -123,6 +123,19 @@ export function TotpDesktop() {
       <PageHead
         title={t("pages.totpTitle")}
         desc={t("pages.totpDesc")}
+        note={
+          <SecurityNote>
+            <span>
+              <strong>{t("totp.maskTitle")}</strong>
+              {t("totp.maskBody")}
+              {m.revealCfg.clip > 0 ? t("totp.maskClear", { n: m.revealCfg.clip }) : ""}。
+            </span>
+            <div className="security-banner-pills">
+              {m.revealCfg.grace > 0 && <span className="sec-pill cyan">{t("totp.pillGrace", { n: m.revealCfg.grace })}</span>}
+              <span className="sec-pill purple">{t("totp.pillE2ee")}</span>
+            </div>
+          </SecurityNote>
+        }
         actions={
           <>
             <TotpViewSwitcher view={m.view} setViewMode={m.setViewMode} />
@@ -130,21 +143,6 @@ export function TotpDesktop() {
           </>
         }
       />
-
-      <div className="security-banner">
-        <div className="security-banner-text">
-          <ShieldCheck size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
-          <span>
-            <strong>{t("totp.maskTitle")}</strong>
-            {t("totp.maskBody")}
-            {m.revealCfg.clip > 0 ? t("totp.maskClear", { n: m.revealCfg.clip }) : ""}。
-          </span>
-        </div>
-        <div className="security-banner-pills">
-          {m.revealCfg.grace > 0 && <span className="sec-pill cyan">{t("totp.pillGrace", { n: m.revealCfg.grace })}</span>}
-          <span className="sec-pill purple">{t("totp.pillE2ee")}</span>
-        </div>
-      </div>
 
       <TotpFilters m={m} />
       {m.filtered.length === 0 ? (

@@ -1,6 +1,6 @@
-import { Plus, ChevronsDown, ChevronsUp, ShieldCheck } from "lucide-react";
+import { Plus, ChevronsDown, ChevronsUp } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { PageHead } from "../ui/common";
+import { PageHead, SecurityNote } from "../ui/common";
 import { useAccountsModel } from "../shared/hooks/useAccountsModel";
 import { AccountsDialogs, AccountsFilters, AccountsList } from "./Accounts.shared";
 import { useItemFocus } from "../shared/hooks/useItemFocus";
@@ -21,6 +21,19 @@ export function AccountsDesktop() {
       <PageHead
         title={t("pages.accountsTitle")}
         desc={t("pages.accountsDesc")}
+        note={
+          <SecurityNote>
+            <span>
+              <strong>{t("accounts.maskTitle")}</strong>
+              {t("accounts.maskBody")}
+              {m.revealCfg.clip > 0 ? t("accounts.maskClear", { n: m.revealCfg.clip }) : ""}。
+            </span>
+            <div className="security-banner-pills">
+              {m.revealCfg.grace > 0 && <span className="sec-pill cyan">{t("accounts.pillGrace", { n: m.revealCfg.grace })}</span>}
+              <span className="sec-pill purple">{t("accounts.pillE2ee")}</span>
+            </div>
+          </SecurityNote>
+        }
         actions={
           <>
             <button
@@ -38,21 +51,6 @@ export function AccountsDesktop() {
           </>
         }
       />
-
-      <div className="security-banner">
-        <div className="security-banner-text">
-          <ShieldCheck size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
-          <span>
-            <strong>{t("accounts.maskTitle")}</strong>
-            {t("accounts.maskBody")}
-            {m.revealCfg.clip > 0 ? t("accounts.maskClear", { n: m.revealCfg.clip }) : ""}。
-          </span>
-        </div>
-        <div className="security-banner-pills">
-          {m.revealCfg.grace > 0 && <span className="sec-pill cyan">{t("accounts.pillGrace", { n: m.revealCfg.grace })}</span>}
-          <span className="sec-pill purple">{t("accounts.pillE2ee")}</span>
-        </div>
-      </div>
 
       <AccountsFilters m={m} />
       <AccountsList m={m} />

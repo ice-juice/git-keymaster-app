@@ -1,10 +1,36 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Minus, Copy, Square, X, Sun, Moon, Palette } from "lucide-react";
+import { Minus, Copy, Square, X, Sun, Moon, Palette, ShieldCheck, ShieldOff, Lock, Unlock } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { api, type RevealSettings } from "../lib/ipc";
 import { AppLogo } from "./AppLogo";
 import { useApp } from "../store";
 import { useAppName } from "../lib/config";
+
+function TitleState({
+  className,
+  label,
+  tip,
+  icon,
+}: {
+  className: string;
+  label: string;
+  tip: string;
+  icon: ReactNode;
+}) {
+  const tipId = useId();
+  return (
+    <div className={"tb-state " + className} tabIndex={0} aria-describedby={tipId} data-tauri-drag-region>
+      <span className="tb-state-icon" aria-hidden>
+        {icon}
+      </span>
+      <span>{label}</span>
+      <div className="tb-tip" id={tipId} role="tooltip">
+        {tip}
+      </div>
+    </div>
+  );
+}
 
 const appWindow = (() => {
   try {
@@ -43,6 +69,28 @@ export function TitleBar() {
   }, []);
 
   const unlocked = !!status?.unlocked;
+  const [reveal, setReveal] = useState<RevealSettings | null>(null);
+
+  useEffect(() => {
+    if (!unlocked) {
+      setReveal(null);
+      return;
+    }
+    let cancelled = false;
+    const pull = () => {
+      void api.getRevealSettings().then((next) => {
+        if (!cancelled) setReveal(next);
+      }).catch(() => {});
+    };
+    pull();
+    const timer = window.setInterval(pull, 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [unlocked]);
+
+  const graceFresh = (reveal?.revealGraceRemainingSecs ?? 0) > 0;
 
   return (
     <div className="titlebar">
@@ -74,11 +122,26 @@ export function TitleBar() {
           <span>{themeLabel}</span>
         </button>
 
+        {status?.initialized && unlocked && (
+          <TitleState
+            className={"tb-grace" + (graceFresh ? " is-fresh" : " is-stale")}
+            label={graceFresh ? t("titlebar.graceFresh") : t("titlebar.graceStale")}
+            tip={
+              graceFresh
+                ? t("titlebar.graceFreshTip", { n: reveal?.revealGraceRemainingSecs ?? 0 })
+                : t("titlebar.graceStaleTip")
+            }
+            icon={graceFresh ? <Unlock size={12} /> : <Lock size={12} />}
+          />
+        )}
+
         {status?.initialized && (
-          <div className={"tb-status" + (unlocked ? " on" : "")} data-tauri-drag-region>
-            <span className="led" />
-            {unlocked ? t("titlebar.unlocked") : t("titlebar.locked")}
-          </div>
+          <TitleState
+            className={"tb-status" + (unlocked ? " on" : "")}
+            label={unlocked ? t("titlebar.unlocked") : t("titlebar.locked")}
+            tip={unlocked ? t("titlebar.unlockedTip") : t("titlebar.lockedTip")}
+            icon={unlocked ? <ShieldCheck size={12} /> : <ShieldOff size={12} />}
+          />
         )}
 
         {/* 窗口控制按钮 */}

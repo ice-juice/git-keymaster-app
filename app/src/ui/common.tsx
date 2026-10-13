@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
-import { CircleHelp, Trash2, AlertTriangle } from "lucide-react";
+import { ChevronDown, CircleHelp, ShieldCheck, Trash2, AlertTriangle } from "lucide-react";
 import { useIsCompact } from "../lib/platform";
 
 function placeTooltip(icon: HTMLElement, pop: HTMLElement) {
@@ -78,18 +78,69 @@ export function FieldLabel({ name, tip }: { name: string; tip: string }) {
   );
 }
 
-export function PageHead({ title, desc, actions }: { title: string; desc?: string; actions?: ReactNode }) {
+export function PageHead({
+  title,
+  desc,
+  actions,
+  note,
+}: {
+  title: string;
+  desc?: string;
+  actions?: ReactNode;
+  note?: ReactNode;
+}) {
   const compact = useIsCompact();
   if (compact && !actions) return null;
   return (
     <div className={"page-head" + (compact ? " is-compact" : "")}>
       {!compact && (
-        <div>
-          <div className="title-lg">{title}</div>
+        <div className="page-head-main">
+          <div className="page-head-title-row">
+            <div className="title-lg">{title}</div>
+            {note}
+          </div>
           {desc && <div className="muted">{desc}</div>}
         </div>
       )}
       {actions && <div className={compact ? "page-head-actions" : "row"}>{actions}</div>}
+    </div>
+  );
+}
+
+export function SecurityNote({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointer(ev: PointerEvent) {
+      if (rootRef.current && ev.target instanceof Node && !rootRef.current.contains(ev.target)) setOpen(false);
+    }
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === "Escape") setOpen(false);
+    }
+    window.addEventListener("pointerdown", onPointer);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className={"security-note" + (open ? " is-open" : "")} ref={rootRef}>
+      <button
+        type="button"
+        className="security-note-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <ShieldCheck size={13} aria-hidden />
+        <span>{t("common.securityNote")}</span>
+        <ChevronDown size={13} aria-hidden />
+      </button>
+      {open && <div className="security-note-pop">{children}</div>}
     </div>
   );
 }
