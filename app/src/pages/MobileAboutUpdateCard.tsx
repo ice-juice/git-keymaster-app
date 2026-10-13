@@ -60,7 +60,7 @@ export function MobileAboutUpdateCard() {
   useEffect(() => {
     getVersion()
       .then(setVersion)
-      .catch(() => setVersion("1.9.3"));
+      .catch(() => setVersion("1.10.0"));
     loadPrefs().catch((e) => setErr(errMessage(e)));
   }, []);
 
