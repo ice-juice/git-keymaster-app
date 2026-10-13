@@ -85,7 +85,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
             onHide={() => m.hideCode(e.id)}
             onCopy={() => m.copyCode(e.id)}
             onSecret={() => m.openSecret(e.id)}
-            onEdit={() => m.setEditor({ ...e })}
+            onEdit={() => void m.openExistingEditor(e)}
             onDelete={() => m.deleteEntry(e)}
             locked={m.writesLocked}
           />
@@ -193,7 +193,7 @@ export function TotpEntries({ m, forceList }: { m: TotpModel; forceList?: boolea
                 className="btn sm"
                 disabled={m.writesLocked}
                 title={t("totp.edit")}
-                onClick={() => m.setEditor({ ...e })}
+                onClick={() => void m.openExistingEditor(e)}
               >
                 {t("common.edit")}
               </button>

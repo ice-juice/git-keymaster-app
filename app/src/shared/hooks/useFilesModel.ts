@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, entryAttachments, errMessage, type FileAttachment, type FileEntry, type GroupMeta } from "../../lib/ipc";
 import { isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
+import { existingRecordNeedsEditAuth } from "../../lib/editAuth";
 import { resolvePlatform } from "../../platform/resolve";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { applyGroupOrder, removeGroupMeta, renameGroupMeta, sortGroups } from "../../ui/groupOrder";
@@ -221,6 +222,18 @@ export function useFilesModel() {
 
   const tabs = useMemo(() => ["全部", ...groups.map((g) => g.name), "未分组"], [groups]);
   const totalCount = entries.length;
+
+  async function openExistingEditor(partial: FileEditState) {
+    if (existingRecordNeedsEditAuth(partial.id)) {
+      const ok = await withAuth(async (p) => {
+        await api.confirmEditAuth(p);
+        return true;
+      });
+      if (ok !== true) return;
+    }
+    setEditor(partial);
+    setErr("");
+  }
 
   function openEditorForPick(partial: FileEditState) {
     setEditor(partial);
@@ -487,6 +500,7 @@ export function useFilesModel() {
     setSort,
     editor,
     setEditor,
+    openExistingEditor,
     pendingDelete,
     setPendingDelete,
     exportingId,

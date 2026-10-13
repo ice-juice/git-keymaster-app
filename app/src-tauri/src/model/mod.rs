@@ -194,6 +194,9 @@ pub struct AccountEntry {
     /// 仅列表展示：自定义字段键名（不含值）。读盘时忽略，由账号列表现算后发给前端。
     #[serde(default, skip_deserializing)]
     pub extra_field_keys: Vec<String>,
+    /// 附件图片的内容哈希，按添加顺序保存。图片本体在加密 blob 里。
+    #[serde(default)]
+    pub image_hashes: Vec<String>,
 }
 
 /// 分组元数据。
@@ -703,6 +706,19 @@ pub fn merge_note_data(local: NoteData, remote: NoteData) -> NoteData {
     }
 }
 
+/// 当前元数据仍引用的 blob 哈希（文件内容 + 备忘录正文/图片 + 账号附件图）。
+pub fn collect_blob_hashes_all(files: &FileData, notes: &NoteData, accounts: &AccountData) -> HashSet<String> {
+    let mut set = collect_blob_hashes(files, notes);
+    for entry in &accounts.entries {
+        for hash in &entry.image_hashes {
+            if !hash.is_empty() {
+                set.insert(hash.clone());
+            }
+        }
+    }
+    set
+}
+
 /// 当前元数据仍引用的 blob 哈希（文件内容 + 备忘录正文/图片）。
 pub fn collect_blob_hashes(files: &FileData, notes: &NoteData) -> HashSet<String> {
     let mut set = collect_note_body_hashes(notes);
@@ -1080,6 +1096,7 @@ mod tests {
             updated_at: "t".into(),
             has_password: true,
             extra_field_keys: vec!["recovery".into()],
+            image_hashes: vec![],
         };
         let json = serde_json::to_value(&e).unwrap();
         assert_eq!(json.get("hasPassword").and_then(|v| v.as_bool()), Some(true));
@@ -1234,6 +1251,7 @@ mod tests {
                 updated_at: "t".into(),
                 has_password: false,
                 extra_field_keys: vec![],
+                image_hashes: vec![],
             }],
             ..AccountData::default()
         };

@@ -30,6 +30,7 @@ import { AccountTagSuggestions } from "./Accounts.shared";
 import { AccountTag } from "../ui/AccountTag";
 import { useOverlayBack } from "../shared/mobileBack";
 import { AccountExtraFields } from "../ui/AccountExtraFields";
+import { AccountImages } from "../ui/AccountImages";
 import { BuiltinIconSelect } from "../ui/BuiltinIconSelect";
 import { IconUploadStack } from "../ui/IconColorPicker";
 import { PasswordGenerateControls } from "../ui/PasswordGenerate";
@@ -261,15 +262,29 @@ export function AccountMobileEditor({
           {isEditing ? t("accounts.editTitle") : t("accounts.addTitle")}
         </h1>
 
-        <button
-          type="button"
-          className="m-subpage-nav-save"
-          disabled={!canSave}
-          onClick={() => void m.saveEditor()}
-        >
-          <Check size={15} />
-          <span>{m.busy ? t("accounts.saving") : t("common.save")}</span>
-        </button>
+        <div className="m-subpage-nav-actions">
+          {isEditing ? (
+            <button
+              type="button"
+              className="m-subpage-nav-delete"
+              aria-label={t("common.delete")}
+              title={t("common.delete")}
+              disabled={m.writesLocked || m.busy}
+              onClick={() => m.deleteEditorAccount()}
+            >
+              <Trash2 size={16} />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="m-subpage-nav-save"
+            disabled={!canSave}
+            onClick={() => void m.saveEditor()}
+          >
+            <Check size={15} />
+            <span>{m.busy ? t("accounts.saving") : t("common.save")}</span>
+          </button>
+        </div>
       </header>
 
       {/* 2. 表单主体滚动区 */}
@@ -554,25 +569,14 @@ export function AccountMobileEditor({
               <div className="m-switch-thumb" />
             </div>
           </div>
-        </section>
 
-        {/* 卡片 5: 危险操作 (仅编辑时展示) */}
-        {isEditing && (
-          <section className="m-form-card" style={{ marginTop: 4 }}>
-            <button
-              type="button"
-              className="m-danger-btn"
-              disabled={m.writesLocked || m.busy}
-              onClick={() => {
-                onClose();
-                m.deleteEditorAccount();
-              }}
-            >
-              <Trash2 size={16} />
-              <span>{t("common.delete")}</span>
-            </button>
-          </section>
-        )}
+          <AccountImages
+            hashes={value.imageHashes || []}
+            disabled={m.writesLocked || m.busy}
+            onChange={(imageHashes) => m.setEditor({ ...value, imageHashes })}
+            onError={m.setErr}
+          />
+        </section>
       </main>
     </div>
   );

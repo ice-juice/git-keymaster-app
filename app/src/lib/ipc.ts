@@ -697,6 +697,8 @@ export const api = {
 
   accountList: () => invoke<{ entries: AccountEntry[]; groups: GroupMeta[] }>("account_list"),
   accountAdd: (args: AccountUpsertArgs) => invoke<AccountEntry>("account_add", { args }),
+  accountImageAdd: (args: { path?: string; bytes?: number[] }) =>
+    invoke<NoteAssetAddResult>("account_image_add", { path: args.path ?? null, bytes: args.bytes ?? null }),
   accountUpdate: (args: AccountUpsertArgs) => invoke<AccountEntry>("account_update", { args }),
   accountDelete: (id: string) => invoke<void>("account_delete", { id }),
   accountSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
@@ -753,6 +755,8 @@ export const api = {
   clipboardRead: () => invoke<string>("clipboard_read"),
   clipboardClear: () => invoke<void>("clipboard_clear"),
   getRevealSettings: () => invoke<RevealSettings>("get_reveal_settings"),
+  confirmEditAuth: (password?: string) =>
+    invoke<void>("confirm_edit_auth", { password: password ?? null }),
   setRevealGraceMinutes: (minutes: number) => invoke<number>("set_reveal_grace_minutes", { minutes }),
   setClipboardClearSeconds: (seconds: number) =>
     invoke<number>("set_clipboard_clear_seconds", { seconds }),
@@ -956,6 +960,7 @@ export interface AccountEntry {
   updatedAt: string;
   hasPassword?: boolean;
   extraFieldKeys?: string[];
+  imageHashes?: string[];
 }
 
 export interface AccountReveal {
@@ -1087,4 +1092,5 @@ export interface AccountUpsertArgs {
   sortOrder?: number;
   totpRef?: string;
   extraFields?: Record<string, string>;
+  imageHashes?: string[];
 }

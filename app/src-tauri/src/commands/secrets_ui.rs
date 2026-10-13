@@ -2,7 +2,7 @@
 
 use crate::app_config;
 use crate::clipboard;
-use crate::commands::{ensure_writes_allowed, recover_lock, AppState};
+use crate::commands::{ensure_reveal_authorized, ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::icons::{self, BuiltinIconInfo, CustomIconInfo};
 use crate::store;
@@ -110,6 +110,12 @@ pub fn get_reveal_settings(state: State<AppState>) -> RevealSettings {
         clipboard_clear_seconds: cfg.clipboard_clear_seconds,
         account_history_limit: cfg.account_history_limit,
     }
+}
+
+/// 打开已有条目编辑前的确认。与查看密码相同：免密窗口内直接通过，否则要求密码。
+#[tauri::command]
+pub fn confirm_edit_auth(state: State<AppState>, password: Option<String>) -> Result<()> {
+    ensure_reveal_authorized(&state, password.as_deref())
 }
 
 #[tauri::command]

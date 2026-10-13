@@ -91,6 +91,7 @@ function DesktopGroupTabs({
 }) {
   const { t } = useTranslation();
   const trackRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
   const itemRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const [overflows, setOverflows] = useState(false);
   const [open, setOpen] = useState(false);
@@ -138,7 +139,7 @@ function DesktopGroupTabs({
       </div>
 
       {(overflows || items.length > 2) && (
-        <div className="group-tabs-more-wrap">
+        <div className="group-tabs-more-wrap" ref={moreRef}>
           <button
             type="button"
             className={"group-tabs-more" + (open ? " is-open" : "")}
@@ -150,7 +151,12 @@ function DesktopGroupTabs({
             <span>{t("group.more")}</span>
             <ChevronDown size={14} />
           </button>
-          <GroupMenuSurface open={open} onClose={() => setOpen(false)} title={t("group.openList")}>
+          <GroupMenuSurface
+            open={open}
+            onClose={() => setOpen(false)}
+            title={t("group.openList")}
+            anchorRef={moreRef}
+          >
             <GroupMenuList
               items={items}
               value={value}

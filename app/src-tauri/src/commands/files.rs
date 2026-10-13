@@ -4,7 +4,7 @@ use crate::app_config;
 use crate::commands::{ensure_reveal_authorized, ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::model::{
-    collect_blob_hashes, file_usage_bytes, FileAttachment, FileEntry, GroupMeta, GroupRemap,
+    collect_blob_hashes_all, file_usage_bytes, FileAttachment, FileEntry, GroupMeta, GroupRemap,
 };
 use crate::store;
 use crate::store::blob::{self, DEFAULT_CHUNK_SIZE};
@@ -231,7 +231,8 @@ fn ingest_added(
 fn gc_after_files_change(v: &crate::vault::Vault) -> Result<()> {
     let files = store::load_files(v)?;
     let notes = store::load_notes(v)?;
-    let refs = collect_blob_hashes(&files, &notes);
+    let accounts = store::load_accounts(v)?;
+    let refs = collect_blob_hashes_all(&files, &notes, &accounts);
     blob::gc_unreferenced_blobs(v, &refs)?;
     Ok(())
 }

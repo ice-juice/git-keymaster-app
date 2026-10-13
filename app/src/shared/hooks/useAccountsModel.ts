@@ -9,6 +9,7 @@ import {
   type TotpEntry,
 } from "../../lib/ipc";
 import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
+import { existingRecordNeedsEditAuth } from "../../lib/editAuth";
 import { resolvePlatform } from "../../platform/resolve";
 import { resolvePlatformBrand, platformFamily } from "../../lib/accountInput";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
@@ -68,6 +69,7 @@ export function useAccountsModel() {
   const reauthCancel = useRef<(() => void) | null>(null);
   const [revealCfg, setRevealCfg] = useState({ grace: 5, clip: 20 });
   const [editor, setEditorRaw] = useState<AccountEditorState | null>(null);
+  const [imageViewer, setImageViewer] = useState<{ hashes: string[]; index: number } | null>(null);
 
   const setEditor = useCallback(
     (next: AccountEditorState | null | ((prev: AccountEditorState | null) => AccountEditorState | null)) => {
@@ -255,6 +257,25 @@ export function useAccountsModel() {
       .sort((a, b) => a[0].localeCompare(b[0]));
   }, [filtered, builtins]);
 
+  async function openAccountEditor(entry: AccountEditorState) {
+    if (existingRecordNeedsEditAuth(entry.id)) {
+      const ok = await withAuth(async (p) => {
+        await api.confirmEditAuth(p);
+        return true;
+      });
+      if (ok !== true) return;
+    }
+    setEditor(entry);
+  }
+
+  async function openAccountImages(entry: AccountEntry) {
+    const hashes = (entry.imageHashes || []).filter(Boolean);
+    if (!hashes.length) return;
+    const revealed = await withAuth((p) => api.accountRevealPassword(entry.id, p));
+    if (!revealed) return;
+    setImageViewer({ hashes, index: 0 });
+  }
+
   async function revealPw(id: string) {
     const revealed = await withAuth((p) => api.accountRevealPassword(id, p));
     if (revealed) {
@@ -408,6 +429,7 @@ export function useAccountsModel() {
         pinned: editor.pinned,
         totpRef: editor.totpRef || undefined,
         extraFields,
+        imageHashes: editor.imageHashes ?? [],
       };
       if (editor.id) await api.accountUpdate(args);
       else await api.accountAdd(args);
@@ -608,6 +630,10 @@ export function useAccountsModel() {
     revealCfg,
     editor,
     setEditor,
+    imageViewer,
+    setImageViewer,
+    openAccountEditor,
+    openAccountImages,
     historyFor,
     setHistoryFor,
     pwShown,

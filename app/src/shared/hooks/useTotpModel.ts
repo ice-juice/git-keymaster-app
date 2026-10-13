@@ -10,6 +10,7 @@ import {
   type TotpImportResult,
 } from "../../lib/ipc";
 import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
+import { existingRecordNeedsEditAuth } from "../../lib/editAuth";
 import { resolvePlatform } from "../../platform/resolve";
 import { detectTotpInput } from "../../lib/totpInput";
 import { i18n } from "../../lib/i18n";
@@ -207,6 +208,19 @@ export function useTotpModel() {
       uri: sec.otpauthUri,
       qr: sec.qrPngBase64,
     });
+  }
+
+  async function openExistingEditor(entry: TotpEntry) {
+    if (!existingRecordNeedsEditAuth(entry.id)) {
+      setEditor({ ...entry });
+      return;
+    }
+    const ok = await withAuth(async (p) => {
+      await api.confirmEditAuth(p);
+      return true;
+    });
+    if (ok !== true) return;
+    setEditor({ ...entry });
   }
 
   async function saveEditor() {
@@ -585,6 +599,7 @@ export function useTotpModel() {
     revealCfg,
     editor,
     setEditor,
+    openExistingEditor,
     secretDlg,
     setSecretDlg,
     batchImport,

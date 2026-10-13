@@ -12,6 +12,7 @@ import {
   Plus,
   Check,
   Edit3,
+  Images,
   MoreHorizontal,
   Trash2,
 } from "lucide-react";
@@ -69,6 +70,17 @@ function AccountMobileCard({
             >
               {shownUser}
             </button>
+            {(e.imageHashes?.length ?? 0) > 0 ? (
+              <button
+                type="button"
+                className="account-view-images"
+                title={t("accounts.imagesView")}
+                aria-label={t("accounts.imagesView")}
+                onClick={() => void m.openAccountImages(e)}
+              >
+                <Images size={14} />
+              </button>
+            ) : null}
           </div>
         </div>
         <div className="m-account-ops">
@@ -77,7 +89,7 @@ function AccountMobileCard({
             className="m-account-op-btn"
             disabled={m.writesLocked}
             title={t("common.edit")}
-            onClick={() => m.setEditor({ ...e })}
+            onClick={() => void m.openAccountEditor({ ...e })}
           >
             <Edit3 size={14} />
           </button>

@@ -3,13 +3,14 @@
 use crate::app_config;
 use crate::commands::{ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
-use crate::model::{collect_blob_hashes, GroupMeta, GroupRemap, NoteEntry};
+use crate::model::{collect_blob_hashes_all, GroupMeta, GroupRemap, NoteEntry};
 use crate::store;
 use crate::store::blob::{self, DEFAULT_CHUNK_SIZE};
 use crate::util;
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
-use image::{ExtendedColorType, ImageFormat};
+use image::imageops::FilterType;
+use image::{DynamicImage, ExtendedColorType, ImageFormat};
 use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
@@ -53,7 +54,8 @@ fn reject_oversize(size: u64, limit: u64) -> Result<()> {
 fn gc_after_notes_change(v: &crate::vault::Vault) -> Result<()> {
     let files = store::load_files(v)?;
     let notes = store::load_notes(v)?;
-    let refs = collect_blob_hashes(&files, &notes);
+    let accounts = store::load_accounts(v)?;
+    let refs = collect_blob_hashes_all(&files, &notes, &accounts);
     blob::gc_unreferenced_blobs(v, &refs)?;
     Ok(())
 }
@@ -159,6 +161,65 @@ fn sniff_image_mime(bytes: &[u8]) -> &'static str {
         Some(ImageFormat::Bmp) => "image/bmp",
         _ => "application/octet-stream",
     }
+}
+
+/// 账号附件：普通尺寸保持像素不变，只在无损 WebP 更小时替换；超大图先收到 4096 边长再取更小的编码。
+pub fn optimize_account_image(bytes: &[u8]) -> Result<Vec<u8>> {
+    const MAX_EDGE: u32 = 4096;
+    if matches!(sniff_image_format(bytes), Some(ImageFormat::Gif) | None) {
+        return Ok(bytes.to_vec());
+    }
+    let img = image::load_from_memory(bytes)
+        .map_err(|e| AppError::Invalid(format!("图片解码失败: {e}")))?;
+    let (width, height) = (img.width(), img.height());
+    if width == 0 || height == 0 {
+        return Err(AppError::Invalid("图片尺寸无效".into()));
+    }
+    let longest = width.max(height);
+    let fitted = if longest > MAX_EDGE {
+        let (nw, nh) = if width >= height {
+            let nh = ((height as u64 * MAX_EDGE as u64) / width as u64).max(1) as u32;
+            (MAX_EDGE, nh)
+        } else {
+            let nw = ((width as u64 * MAX_EDGE as u64) / height as u64).max(1) as u32;
+            (nw, MAX_EDGE)
+        };
+        img.resize(nw, nh, FilterType::Lanczos3)
+    } else {
+        img
+    };
+    let webp = encode_lossless_webp(&fitted)?;
+    if longest <= MAX_EDGE {
+        return Ok(if webp.len() < bytes.len() { webp } else { bytes.to_vec() });
+    }
+    if webp.len() <= bytes.len() {
+        return Ok(webp);
+    }
+    let jpeg = encode_jpeg_hq(&fitted)?;
+    Ok(if jpeg.len() < webp.len() { jpeg } else { webp })
+}
+
+fn encode_lossless_webp(img: &DynamicImage) -> Result<Vec<u8>> {
+    let rgba = img.to_rgba8();
+    let mut out = Vec::new();
+    let enc = image::codecs::webp::WebPEncoder::new_lossless(&mut out);
+    enc.encode(
+        rgba.as_raw(),
+        rgba.width(),
+        rgba.height(),
+        ExtendedColorType::Rgba8,
+    )
+    .map_err(|_| AppError::Invalid("WebP 编码失败".into()))?;
+    Ok(out)
+}
+
+fn encode_jpeg_hq(img: &DynamicImage) -> Result<Vec<u8>> {
+    let rgb = img.to_rgb8();
+    let mut out = Vec::new();
+    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 92);
+    enc.encode(rgb.as_raw(), rgb.width(), rgb.height(), ExtendedColorType::Rgb8)
+        .map_err(|_| AppError::Invalid("JPEG 编码失败".into()))?;
+    Ok(out)
 }
 
 /// PNG / BMP → 无损 WebP；JPEG / GIF / 已是 WebP 保持原样。
@@ -581,5 +642,27 @@ mod tests {
         let out = optimize_note_image(&png).unwrap();
         assert_ne!(out, png);
         assert_eq!(sniff_image_format(&out), Some(ImageFormat::WebP));
+    }
+
+    #[test]
+    fn account_image_keeps_pixels_when_small_and_caps_huge_edge() {
+        let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+            .unwrap();
+        let out = optimize_account_image(&png).unwrap();
+        let decoded = image::load_from_memory(&out).unwrap();
+        assert_eq!((decoded.width(), decoded.height()), (8, 8));
+
+        let wide = image::RgbaImage::from_pixel(5000, 2, image::Rgba([1, 2, 3, 255]));
+        let mut wide_png = Vec::new();
+        image::DynamicImage::ImageRgba8(wide)
+            .write_to(&mut Cursor::new(&mut wide_png), ImageFormat::Png)
+            .unwrap();
+        let fitted = optimize_account_image(&wide_png).unwrap();
+        let decoded = image::load_from_memory(&fitted).unwrap();
+        assert!(decoded.width() <= 4096);
+        assert!(decoded.width() > 0 && decoded.height() > 0);
     }
 }

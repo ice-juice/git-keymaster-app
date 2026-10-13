@@ -84,7 +84,8 @@ pub fn run() {
         .plugin(screen_protect::init())
         .plugin(biometric::init())
         .plugin(mobile::update::init())
-        .plugin(mobile::nav::init());
+        .plugin(mobile::nav::init())
+        .plugin(mobile::bgsync::init());
 
     // 官方 updater 只编进桌面三 OS。安卓侧载走 mobile::update，禁止把插件加进 APK。
     // 必须用 target_os，不能用 Tauri 的 `desktop`：交叉编译到 Android 时

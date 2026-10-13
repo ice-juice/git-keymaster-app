@@ -1,12 +1,17 @@
 //! 隐私账号 CRUD、密码 reveal 与历史版本。
 
 use crate::app_config;
+use crate::commands::notes::{optimize_account_image, NoteAssetAddResult};
 use crate::commands::{ensure_reveal_authorized, ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::icons;
-use crate::model::{AccountEntry, AccountSecret, GroupMeta, GroupRemap, PasswordHistoryItem};
+use crate::model::{
+    collect_blob_hashes_all, AccountEntry, AccountSecret, GroupMeta, GroupRemap, PasswordHistoryItem,
+};
 use crate::store;
+use crate::store::blob::{self, DEFAULT_CHUNK_SIZE};
 use crate::util;
+use std::io::Cursor;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tauri::{AppHandle, State};
@@ -40,6 +45,9 @@ pub struct AccountUpsertArgs {
     pub totp_ref: Option<String>,
     #[serde(default)]
     pub extra_fields: Option<HashMap<String, String>>,
+    /// `None` 表示不改附件；`Some` 则整表替换。
+    #[serde(default)]
+    pub image_hashes: Option<Vec<String>>,
 }
 
 #[derive(Serialize)]
@@ -142,6 +150,7 @@ pub fn account_add(app: AppHandle, state: State<AppState>, args: AccountUpsertAr
         updated_at: now,
         has_password: true,
         extra_field_keys: vec![],
+        image_hashes: sanitize_image_hashes(args.image_hashes.unwrap_or_default()),
     };
     let extra_fields = sanitize_extra_fields(args.extra_fields);
     let extra_field_keys = extra_field_keys_of(&extra_fields);
@@ -158,6 +167,7 @@ pub fn account_add(app: AppHandle, state: State<AppState>, args: AccountUpsertAr
     data.entries.push(entry.clone());
     store::save_secrets(v, &secrets)?;
     store::save_accounts(v, &data)?;
+    gc_account_blobs(v)?;
     util::audit(v.root(), &format!("新增隐私账号 id={}", entry.id));
     drop(vault);
     publish(app);
@@ -216,6 +226,9 @@ pub fn account_update(app: AppHandle, state: State<AppState>, args: AccountUpser
         entry.sort_order = s;
     }
     entry.totp_ref = empty_none(args.totp_ref);
+    if let Some(hashes) = args.image_hashes {
+        entry.image_hashes = sanitize_image_hashes(hashes);
+    }
     entry.updated_at = now();
 
     if let Some(new_pw) = args.password.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -260,6 +273,7 @@ pub fn account_update(app: AppHandle, state: State<AppState>, args: AccountUpser
         .unwrap_or_default();
     store::save_secrets(v, &secrets)?;
     store::save_accounts(v, &data)?;
+    gc_account_blobs(v)?;
     util::audit(v.root(), &format!("更新隐私账号 id={id}"));
     drop(vault);
     publish(app);
@@ -285,6 +299,7 @@ pub fn account_delete(app: AppHandle, state: State<AppState>, id: String) -> Res
     secrets.account_secrets.remove(&id);
     store::save_secrets(v, &secrets)?;
     store::save_accounts(v, &data)?;
+    gc_account_blobs(v)?;
     util::audit(v.root(), &format!("删除隐私账号 id={id}"));
     drop(vault);
     publish(app);
@@ -499,6 +514,77 @@ fn extra_field_keys_of(fields: &HashMap<String, String>) -> Vec<String> {
     keys
 }
 
+const MAX_ACCOUNT_IMAGES: usize = 12;
+
+fn sanitize_image_hashes(hashes: Vec<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for hash in hashes {
+        let hash = hash.trim().to_ascii_lowercase();
+        if !blob::is_sha256_hex(&hash) || out.iter().any(|item| item == &hash) {
+            continue;
+        }
+        out.push(hash);
+        if out.len() >= MAX_ACCOUNT_IMAGES {
+            break;
+        }
+    }
+    out
+}
+
+fn gc_account_blobs(v: &crate::vault::Vault) -> Result<()> {
+    let files = store::load_files(v)?;
+    let notes = store::load_notes(v)?;
+    let accounts = store::load_accounts(v)?;
+    let refs = collect_blob_hashes_all(&files, &notes, &accounts);
+    blob::gc_unreferenced_blobs(v, &refs)?;
+    Ok(())
+}
+
+fn attachment_limit(state: &AppState) -> u64 {
+    let cfg = recover_lock(&state.config);
+    app_config::attachment_per_file_limit_bytes(cfg.attachment_per_file_limit_mb)
+}
+
+fn reject_oversize(size: u64, limit: u64) -> Result<()> {
+    if size > limit {
+        let mb = (limit / (1024 * 1024)).max(1);
+        return Err(AppError::Invalid(format!("单个文件不能超过 {mb} MB")));
+    }
+    Ok(())
+}
+
+/// 上传账号附件图：先高清压缩，再写入加密 blob。账号保存时才把哈希挂到条目上。
+#[tauri::command(async)]
+pub fn account_image_add(
+    state: State<'_, AppState>,
+    path: Option<String>,
+    bytes: Option<Vec<u8>>,
+) -> Result<NoteAssetAddResult> {
+    ensure_writes_allowed(&state)?;
+    let raw = if let Some(p) = path.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let src = std::path::PathBuf::from(p);
+        if !src.is_file() {
+            return Err(AppError::Invalid("找不到所选图片".into()));
+        }
+        std::fs::read(&src)?
+    } else if let Some(b) = bytes {
+        b
+    } else {
+        return Err(AppError::Invalid("请选择要上传的图片".into()));
+    };
+    let limit = attachment_limit(&state);
+    reject_oversize(raw.len() as u64, limit)?;
+    let optimized = optimize_account_image(&raw)?;
+    reject_oversize(optimized.len() as u64, limit)?;
+    let vault = recover_lock(&state.vault);
+    let v = vault.as_ref().ok_or(AppError::Locked)?;
+    if !v.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let blob = blob::write_blob_limited(v, Cursor::new(optimized), DEFAULT_CHUNK_SIZE, limit)?;
+    Ok(NoteAssetAddResult { hash: blob.sha256 })
+}
+
 fn nonempty_icon(s: Option<String>) -> Option<String> {
     empty_none(s)
 }
@@ -587,7 +673,20 @@ mod tests {
             updated_at: "t".into(),
             has_password: true,
             extra_field_keys: vec![],
+            image_hashes: vec![],
         }
+    }
+
+    #[test]
+    fn image_hashes_keep_unique_sha256_only() {
+        let good = "ab".repeat(32);
+        let cleaned = sanitize_image_hashes(vec![
+            "nope".into(),
+            good.to_uppercase(),
+            good.clone(),
+            "zz".into(),
+        ]);
+        assert_eq!(cleaned, vec![good]);
     }
 
     #[test]

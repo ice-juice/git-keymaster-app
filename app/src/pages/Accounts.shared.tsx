@@ -1,6 +1,6 @@
 ﻿import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, Copy, Eye, EyeOff, Plus, Clock, ExternalLink, Check, Pencil } from "lucide-react";
+import { ChevronDown, Copy, Eye, EyeOff, Plus, Clock, ExternalLink, Check, Pencil, Images } from "lucide-react";
 import {
   api,
   errMessage,
@@ -23,6 +23,7 @@ import { activeAccountTag, appendAccountTags, tagsForPlatform, tagsInAccounts, t
 import { findBuiltinAccount, platformEntryMode } from "../shared/iconAliases";
 import { useOverlayBack } from "../shared/mobileBack";
 import { AccountExtraFields } from "../ui/AccountExtraFields";
+import { AccountImageGallery, AccountImages } from "../ui/AccountImages";
 import { AccountTag } from "../ui/AccountTag";
 import { BuiltinIconSelect } from "../ui/BuiltinIconSelect";
 import { IconUploadStack } from "../ui/IconColorPicker";
@@ -341,6 +342,17 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                           >
                             {m.displayUsername(e.id, e.username)}
                           </span>
+                          {(e.imageHashes?.length ?? 0) > 0 ? (
+                            <button
+                              type="button"
+                              className="account-view-images"
+                              title={t("accounts.imagesView")}
+                              aria-label={t("accounts.imagesView")}
+                              onClick={() => void m.openAccountImages(e)}
+                            >
+                              <Images size={14} />
+                            </button>
+                          ) : null}
                           {e.pinned && <Badge kind="warn">{t("accounts.pinned")}</Badge>}
                           {e.tags?.map((tag) => (
                             <AccountTag key={tag} tag={tag} />
@@ -459,7 +471,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                           className="btn sm"
                           disabled={m.writesLocked}
                           title={t("accounts.edit")}
-                          onClick={() => m.setEditor({ ...e })}
+                          onClick={() => void m.openAccountEditor({ ...e })}
                         >
                           {t("common.edit")}
                         </button>
@@ -625,11 +637,20 @@ export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; 
   useOverlayBack(!!m.reauth, () => m.reauthCancel.current?.());
   useOverlayBack(!!m.editingPlatformModal, () => m.setEditingPlatformModal(null));
   useOverlayBack(!!m.pendingDelete, () => m.setPendingDelete(null));
+  useOverlayBack(!!m.imageViewer, () => m.setImageViewer(null));
   return (
     <>
       <ErrorDialog message={m.err} onClose={() => m.setErr("")} />
 
       {m.reauth && <ReauthDialog onCancel={() => m.reauthCancel.current?.()} onConfirm={(pw) => m.reauth!(pw)} />}
+
+      {m.imageViewer ? (
+        <AccountImageGallery
+          hashes={m.imageViewer.hashes}
+          startIndex={m.imageViewer.index}
+          onClose={() => m.setImageViewer(null)}
+        />
+      ) : null}
 
       <GroupManageDialogs
         groups={m.groups}
@@ -661,7 +682,7 @@ export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; 
         />
       )}
 
-      {!skipEditor && m.editor && !m.pendingDelete && (
+      {!skipEditor && m.editor && (
         <AccountEditor
           compact={compact}
           value={m.editor}
@@ -1262,15 +1283,19 @@ function AccountEditor({
             </div>
           )}
 
+          <AccountImages
+            hashes={value.imageHashes || []}
+            disabled={busy}
+            onChange={(imageHashes) => onChange({ ...value, imageHashes })}
+            onError={onError}
+          />
         </div>
-        <div className="card-foot">
-          {onDelete ? (
-            <button type="button" className="btn danger sm" onClick={onDelete}>{t("common.delete")}</button>
-          ) : (
-            <span />
-          )}
+        <div className="card-foot account-editor-foot">
           <div className="row">
             <button type="button" className="btn ghost sm" onClick={onClose}>{t("common.cancel")}</button>
+            {onDelete ? (
+              <button type="button" className="btn danger sm" disabled={busy} onClick={onDelete}>{t("common.delete")}</button>
+            ) : null}
             <button type="button" className="btn primary sm" disabled={busy} onClick={onSave}>{t("common.save")}</button>
           </div>
         </div>

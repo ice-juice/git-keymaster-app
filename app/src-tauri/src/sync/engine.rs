@@ -9,7 +9,8 @@
 
 use crate::error::{AppError, Result};
 use crate::model::{
-    collect_blob_hashes, collect_note_body_hashes, AccountData, FileData, NoteData, Secrets,
+    collect_blob_hashes, collect_blob_hashes_all, collect_note_body_hashes, AccountData, FileData, NoteData,
+    Secrets,
     TotpData, VaultData,
 };
 use crate::store::blob;
@@ -78,10 +79,11 @@ pub fn resolve_blob_scope(
 pub(crate) fn blob_hashes_for_scope(
     files: &FileData,
     notes: &NoteData,
+    accounts: &AccountData,
     scope: BlobSyncScope,
 ) -> HashSet<String> {
     match scope {
-        BlobSyncScope::All => collect_blob_hashes(files, notes),
+        BlobSyncScope::All => collect_blob_hashes_all(files, notes, accounts),
         BlobSyncScope::NoteBodiesOnly => collect_note_body_hashes(notes),
         BlobSyncScope::None => HashSet::new(),
     }
@@ -774,9 +776,9 @@ pub fn push_to_cloud_with(
         );
     }
 
-    let needed_blobs = blob_hashes_for_scope(&file_data, &note_data, blob_scope);
+    let needed_blobs = blob_hashes_for_scope(&file_data, &note_data, &account_data, blob_scope);
     let mut live_blobs = if blob_scope == BlobSyncScope::All {
-        collect_blob_hashes(&file_data, &note_data)
+        collect_blob_hashes_all(&file_data, &note_data, &account_data)
     } else {
         needed_blobs.clone()
     };
@@ -1005,6 +1007,7 @@ fn pull_from_cloud_inner(
         &manifest,
         &merged_files,
         &merged_notes,
+        &merged_acc,
         blob_scope,
         progress,
     )?;
@@ -1060,7 +1063,9 @@ fn pull_from_cloud_inner(
 
     Ok((
         SyncResult {
-            synced_at: manifest.updated_at,
+            // 本次拉取完成的时刻。云端清单 updated_at 只在真正推送时前进，
+            // 不能拿它当「这台设备刚刚同步过」的时间。
+            synced_at: iso_now(),
             objects_transferred: transferred_count,
             identity_count: current_data.identities.len(),
             key_count: current_data.keys.len(),
@@ -1333,7 +1338,9 @@ fn retain_push_snapshot(
     crate::sys::portableize_vault_data(&mut snap_data);
     let file_data = store::load_files(vault).unwrap_or_default();
     let note_data = store::load_notes(vault).unwrap_or_default();
-    let blob_hashes: Vec<String> = collect_blob_hashes(&file_data, &note_data).into_iter().collect();
+    let account_data = store::load_accounts(vault).unwrap_or_default();
+    let blob_hashes: Vec<String> =
+        collect_blob_hashes_all(&file_data, &note_data, &account_data).into_iter().collect();
     let mut note_bodies = HashMap::new();
     for e in &note_data.entries {
         if let Ok(bytes) = blob::read_blob_bytes(vault, &e.body_sha256) {
@@ -1435,6 +1442,7 @@ pub fn restore_snapshot(vault: &Vault, s3: &S3Client, snapshot_id: &str) -> Resu
             &manifest,
             &payload.file_data,
             &payload.note_data,
+            &payload.account_data,
             BlobSyncScope::All,
             None,
         );
@@ -1588,10 +1596,11 @@ fn pull_missing_blobs(
     manifest: &SyncManifest,
     files: &FileData,
     notes: &NoteData,
+    accounts: &AccountData,
     scope: BlobSyncScope,
     progress: Option<&dyn Fn(BlobSyncProgress)>,
 ) -> Result<usize> {
-    let wanted = blob_hashes_for_scope(files, notes, scope);
+    let wanted = blob_hashes_for_scope(files, notes, accounts, scope);
     let pending: Vec<String> = wanted
         .into_iter()
         .filter(|sha| !blob::blob_exists(vault, sha) && manifest.objects.contains_key(&blob_logical_path(sha)))
@@ -1653,7 +1662,7 @@ fn extra_objects_diverged(vault: &Vault, manifest: &SyncManifest) -> bool {
         .get("data/notes.json")
         .map(|e| e.sha256.as_str())
         .unwrap_or("");
-    let needed = collect_blob_hashes(&files, &notes);
+    let needed = collect_blob_hashes_all(&files, &notes, &accounts);
     let blobs_missing_or_changed = needed.iter().any(|sha| {
         manifest
             .objects
@@ -1716,7 +1725,7 @@ fn stable_state_hash(
     file_entries.sort_by(|a, b| a.id.cmp(&b.id));
     let mut note_entries = notes.entries.clone();
     note_entries.sort_by(|a, b| a.id.cmp(&b.id));
-    let mut blob_hashes: Vec<String> = collect_blob_hashes(files, notes).into_iter().collect();
+    let mut blob_hashes: Vec<String> = collect_blob_hashes_all(files, notes, accounts).into_iter().collect();
     blob_hashes.sort();
     let payload = serde_json::json!({
         "identities": identities,
@@ -1746,10 +1755,17 @@ fn local_has_syncable_assets(vault: &Vault) -> Result<bool> {
     let notes = store::load_notes(vault).unwrap_or_default();
     Ok(!data.identities.is_empty()
         || !data.keys.is_empty()
+        || !data.repos.is_empty()
         || !totp.entries.is_empty()
         || !accounts.entries.is_empty()
         || !files.entries.is_empty()
         || !notes.entries.is_empty())
+}
+
+/// 合并结果和云端不一致才上传。
+/// 云端已经有备份不是拒绝推送的理由；结果一致时不推，避免用空本地盖掉云端。
+pub(crate) fn should_upload_after_pull(need_push: bool) -> bool {
+    need_push
 }
 
 /// 先拉取再按需推送。空本地不会覆盖已有云端。
@@ -1779,7 +1795,7 @@ pub fn pull_then_maybe_push_with(
     if remote_before.is_some() {
         let (pulled, need_push) =
             pull_from_cloud_inner(vault, s3, false, false, blob_scope, progress)?;
-        if need_push && local_has_syncable_assets(vault)? {
+        if should_upload_after_pull(need_push) {
             let pushed = push_to_cloud_with(vault, s3, blob_scope, progress)?;
             return Ok(SyncResult {
                 message: format!("已拉取并推送：{}", pushed.message),
@@ -1862,6 +1878,18 @@ pub fn publish_after_edit_with(
 mod tests {
     use super::*;
     use crate::vault::crypto::MasterKey;
+
+    #[test]
+    fn remote_presence_does_not_block_upload_of_local_delta() {
+        assert!(
+            should_upload_after_pull(true),
+            "合并后和云端不一致时必须推送，不能因为云端已有数据就跳过"
+        );
+        assert!(
+            !should_upload_after_pull(false),
+            "合并结果已与云端一致时不推，避免空本地覆盖云端"
+        );
+    }
 
     #[test]
     fn test_sync_object_hmac_and_encryption() {
@@ -2013,7 +2041,7 @@ mod tests {
         assert!(hashes.contains(&"aa".repeat(32)));
         assert!(hashes.contains(&"bb".repeat(32)));
         assert!(hashes.contains(&"cc".repeat(32)));
-        let bodies = blob_hashes_for_scope(&files, &notes, BlobSyncScope::NoteBodiesOnly);
+        let bodies = blob_hashes_for_scope(&files, &notes, &AccountData::default(), BlobSyncScope::NoteBodiesOnly);
         assert_eq!(bodies.len(), 1);
         assert!(bodies.contains(&"bb".repeat(32)));
         assert!(!bodies.contains(&"aa".repeat(32)));

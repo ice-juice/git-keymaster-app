@@ -99,7 +99,7 @@ export function FileCard({ e, m }: { e: FileEntry; m: FilesModel }) {
         <button type="button" className="btn sm primary" disabled={!!m.exportingId} onClick={() => void m.exportFile(e)}>
           <Download size={13} /> {t("files.actionExport")}
         </button>
-        <button type="button" className="btn sm" disabled={m.writesLocked} onClick={() => m.setEditor(editFromEntry(e))}>
+        <button type="button" className="btn sm" disabled={m.writesLocked} onClick={() => void m.openExistingEditor(editFromEntry(e))}>
           <Pencil size={13} /> {t("files.actionEdit")}
         </button>
         <button type="button" className="btn sm danger" disabled={m.writesLocked} onClick={() => m.setPendingDelete(e)}>
@@ -153,7 +153,7 @@ export function FilesTable({ m }: { m: FilesModel }) {
                   <button type="button" className="btn ghost sm" disabled={!!m.exportingId} onClick={() => void m.exportFile(e)}>
                     {t("files.actionExport")}
                   </button>
-                  <button type="button" className="btn ghost sm" disabled={m.writesLocked} onClick={() => m.setEditor(editFromEntry(e))}>
+                  <button type="button" className="btn ghost sm" disabled={m.writesLocked} onClick={() => void m.openExistingEditor(editFromEntry(e))}>
                     {t("files.actionEdit")}
                   </button>
                   <button type="button" className="btn ghost sm" disabled={m.writesLocked} onClick={() => m.setPendingDelete(e)}>

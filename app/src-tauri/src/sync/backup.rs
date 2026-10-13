@@ -5,7 +5,9 @@
 //! 适合换机离线迁移、冷备份以及故障恢复。
 
 use crate::error::{AppError, Result};
-use crate::model::{collect_blob_hashes, AccountData, FileData, KeyRecord, NoteData, Secrets, TotpData, VaultData};
+use crate::model::{
+    collect_blob_hashes_all, AccountData, FileData, KeyRecord, NoteData, Secrets, TotpData, VaultData,
+};
 use crate::store::blob;
 use crate::platform::PlatformOps;
 use crate::store;
@@ -119,7 +121,7 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
         }
     }
     let mut blobs = HashMap::new();
-    for hash in collect_blob_hashes(&file_data, &note_data) {
+    for hash in collect_blob_hashes_all(&file_data, &note_data, &account_data) {
         match blob::read_blob_bytes(vault, &hash) {
             Ok(raw) => {
                 blobs.insert(hash, B64.encode(raw));

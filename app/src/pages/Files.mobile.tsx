@@ -140,7 +140,7 @@ export function FilesMobile() {
               className="m-list-sheet-item"
               disabled={m.writesLocked}
               onClick={() => {
-                m.setEditor(editFromEntry(m.sheetEntry!));
+                void m.openExistingEditor(editFromEntry(m.sheetEntry!));
                 m.setSheetEntry(null);
               }}
             >

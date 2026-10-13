@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { Check, Search } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { resolvePlatform } from "../platform/resolve";
@@ -122,19 +123,77 @@ export function GroupMenuList({
   );
 }
 
+const POP_PAD = 8;
+const POP_GAP = 6;
+
+function placeGroupMenu(anchor: DOMRect, popWidth: number, popHeight: number) {
+  let left = anchor.right - popWidth;
+  if (left < POP_PAD) left = POP_PAD;
+  if (left + popWidth > window.innerWidth - POP_PAD) {
+    left = Math.max(POP_PAD, window.innerWidth - POP_PAD - popWidth);
+  }
+
+  const belowTop = anchor.bottom + POP_GAP;
+  const spaceBelow = window.innerHeight - POP_PAD - belowTop;
+  const spaceAbove = anchor.top - POP_PAD - POP_GAP;
+  let top = belowTop;
+  if (popHeight > 0 && popHeight > spaceBelow && spaceAbove > spaceBelow) {
+    top = Math.max(POP_PAD, anchor.top - POP_GAP - popHeight);
+  } else if (popHeight > 0 && top + popHeight > window.innerHeight - POP_PAD) {
+    top = Math.max(POP_PAD, window.innerHeight - POP_PAD - popHeight);
+  }
+  return { top, left };
+}
+
 export function GroupMenuSurface({
   open,
   onClose,
   title,
+  anchorRef,
   children,
 }: {
   open: boolean;
   onClose: () => void;
   title: string;
+  /** 桌面下拉的定位锚点。传入后弹层挂到 body，避免被 overflow 裁切。 */
+  anchorRef?: RefObject<HTMLElement | null>;
   children: ReactNode;
 }) {
   const mobile = resolvePlatform() === "mobile";
+  const popRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<{ top: number; left: number } | null>(null);
   useOverlayBack(open && mobile, onClose);
+
+  useLayoutEffect(() => {
+    if (!open || mobile || !anchorRef) return;
+    const anchor = anchorRef.current;
+    const pop = popRef.current;
+    if (!anchor || !pop) return;
+
+    function sync() {
+      const node = anchorRef?.current;
+      const panel = popRef.current;
+      if (!node || !panel) return;
+      const next = placeGroupMenu(node.getBoundingClientRect(), panel.offsetWidth, panel.offsetHeight);
+      setBox((prev) => (prev && prev.top === next.top && prev.left === next.left ? prev : next));
+    }
+
+    sync();
+    const ro = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(sync);
+    ro?.observe(pop);
+    function onScroll(ev: Event) {
+      const panel = popRef.current;
+      if (panel && ev.target instanceof Node && panel.contains(ev.target)) return;
+      sync();
+    }
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", sync);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", sync);
+    };
+  }, [open, mobile, anchorRef]);
 
   useEffect(() => {
     if (!open) return;
@@ -161,12 +220,41 @@ export function GroupMenuSurface({
     );
   }
 
+  const pop = (
+    <div
+      ref={popRef}
+      className="group-menu-pop"
+      role="dialog"
+      aria-label={title}
+      style={
+        anchorRef
+          ? {
+              position: "fixed",
+              top: box?.top ?? -9999,
+              left: box?.left ?? 0,
+              right: "auto",
+            }
+          : undefined
+      }
+    >
+      {children}
+    </div>
+  );
+
+  if (anchorRef) {
+    return createPortal(
+      <>
+        <div className="group-menu-backdrop" onClick={onClose} />
+        {pop}
+      </>,
+      document.body,
+    );
+  }
+
   return (
     <>
       <div className="group-menu-backdrop" onClick={onClose} />
-      <div className="group-menu-pop" role="dialog" aria-label={title}>
-        {children}
-      </div>
+      {pop}
     </>
   );
 }

@@ -167,7 +167,7 @@ function TotpMobileCard({
               disabled={m.writesLocked}
               title={t("common.edit")}
               onPointerDown={(ev) => ev.stopPropagation()}
-              onClick={() => m.setEditor({ ...e })}
+              onClick={() => void m.openExistingEditor(e)}
             >
               <Edit3 size={14} />
             </button>
