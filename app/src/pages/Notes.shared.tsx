@@ -2,7 +2,7 @@ import { forwardRef, useEffect, useLayoutEffect, useMemo, useRef, useState, type
 import Markdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { ArrowUpToLine, Check, ChevronDown, Columns2, Eye, FileCode2, Pin, Plus, Rows2, Save, Tag, Trash2, Type, X } from "lucide-react";
+import { ArrowUpToLine, Check, ChevronDown, Columns2, Eye, FileCode2, Maximize2, Minimize2, PanelLeft, Pin, Plus, Rows2, Save, Tag, Trash2, Type, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDangerDialog, Empty, ErrorDialog } from "../ui/common";
 import { GroupManageDialogs, groupManageHandlers } from "../ui/GroupDialog";
@@ -10,7 +10,7 @@ import { GroupReorderButtons } from "../ui/GroupReorderButtons";
 import { GroupTabs } from "../ui/GroupTabs";
 import { moveGroupNames } from "../ui/groupOrder";
 import { MarkdownToolbar } from "../ui/MarkdownToolbar";
-import { applyScrollRatio, NoteMarkdownEditor, scrollRatioOf } from "../ui/NoteMarkdownEditor";
+import { NoteMarkdownEditor } from "../ui/NoteMarkdownEditor";
 import {
   extractKmassetHashes,
   type NoteExportFormat,
@@ -24,6 +24,85 @@ import { api } from "../lib/ipc";
 import type { NoteEntry } from "../lib/ipc";
 
 const assetCache = new Map<string, string>();
+
+const SOURCE_LINE_BLOCKS = new Set([
+  "p",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "ul",
+  "ol",
+  "li",
+  "blockquote",
+  "pre",
+  "table",
+  "hr",
+  "tr",
+]);
+
+type HastLike = {
+  type: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  position?: { start?: { line?: number } };
+  children?: HastLike[];
+};
+
+/** 给预览里的块级元素标上源码行号，供对比模式对齐滚动。 */
+function rehypeSourceLine() {
+  return (tree: HastLike) => {
+    const walk = (node: HastLike) => {
+      if (node.type === "element" && node.tagName && SOURCE_LINE_BLOCKS.has(node.tagName)) {
+        const line = node.position?.start?.line;
+        if (line) {
+          node.properties = node.properties || {};
+          node.properties.dataSourceLine = String(line);
+        }
+      }
+      for (const child of node.children || []) walk(child);
+    };
+    walk(tree);
+  };
+}
+
+function previewLineNearTop(root: HTMLElement): number | null {
+  const nodes = root.querySelectorAll<HTMLElement>("[data-source-line]");
+  if (!nodes.length) return null;
+  const limit = root.getBoundingClientRect().top + 1;
+  let bestLine = Number(nodes[0].dataset.sourceLine) || 1;
+  let bestTop = Number.NEGATIVE_INFINITY;
+  nodes.forEach((el) => {
+    const line = Number(el.dataset.sourceLine);
+    if (!line) return;
+    const top = el.getBoundingClientRect().top;
+    if (top <= limit && top >= bestTop) {
+      bestTop = top;
+      bestLine = line;
+    }
+  });
+  return bestLine;
+}
+
+function scrollPreviewToLine(root: HTMLElement, line: number) {
+  const nodes = root.querySelectorAll<HTMLElement>("[data-source-line]");
+  if (!nodes.length) return;
+  let target: HTMLElement | null = null;
+  let best = -1;
+  for (const el of nodes) {
+    const n = Number(el.dataset.sourceLine) || 0;
+    if (n <= line && n >= best) {
+      best = n;
+      target = el;
+    }
+  }
+  if (!target) return;
+  const delta = target.getBoundingClientRect().top - root.getBoundingClientRect().top;
+  if (Math.abs(delta) < 1) return;
+  root.scrollTop += delta;
+}
 
 function urlTransform(url: string) {
   if (url.startsWith("kmasset://") || url.startsWith("data:image/")) return url;
@@ -108,6 +187,7 @@ export const NotePreview = forwardRef<
     <div ref={ref} className={"note-preview" + (breaks ? " is-hard-breaks" : "")} onScroll={onScroll}>
       <Markdown
         remarkPlugins={breaks ? [remarkGfm, remarkBreaks] : [remarkGfm]}
+        rehypePlugins={[rehypeSourceLine]}
         urlTransform={urlTransform}
         components={{ img: ({ src, alt }) => <NoteImg src={src} alt={alt} /> }}
       >
@@ -883,6 +963,10 @@ export function NoteEditorCard({
   onInsertImage,
   leading,
   mobile,
+  expanded,
+  onToggleExpand,
+  listOpen,
+  onToggleList,
 }: {
   m: NotesModel;
   layout: NotesViewLayout;
@@ -891,39 +975,37 @@ export function NoteEditorCard({
   onInsertImage: () => void;
   leading?: ReactNode;
   mobile?: boolean;
+  expanded?: boolean;
+  onToggleExpand?: () => void;
+  listOpen?: boolean;
+  onToggleList?: () => void;
 }) {
   const { t } = useTranslation();
   const stats = notePlainStats(m.draft.markdown);
   const showSource = layout !== "preview";
   const showPreview = layout !== "edit";
   const previewRef = useRef<HTMLDivElement>(null);
-  const sourcePaneRef = useRef<HTMLDivElement>(null);
-  const scrollLock = useRef<"source" | "preview" | null>(null);
-  const scrollUnlock = useRef(0);
+  const syncToken = useRef(0);
+  const syncOrigin = useRef<"source" | "preview" | null>(null);
+  const syncFrame = useRef(0);
   const syncScroll = layout === "split" && !mobile;
 
-  function lockScroll(side: "source" | "preview") {
-    scrollLock.current = side;
-    window.clearTimeout(scrollUnlock.current);
-    scrollUnlock.current = window.setTimeout(() => {
-      scrollLock.current = null;
-    }, 80);
-  }
+  useEffect(() => () => window.cancelAnimationFrame(syncFrame.current), []);
 
-  useEffect(() => {
-    if (!syncScroll) return;
-    const root = sourcePaneRef.current;
-    if (!root) return;
-    const onScroll = (event: Event) => {
-      const target = event.target;
-      if (!(target instanceof HTMLElement) || scrollLock.current === "preview") return;
-      if (target.scrollHeight <= target.clientHeight) return;
-      lockScroll("source");
-      applyScrollRatio(previewRef.current, scrollRatioOf(target));
-    };
-    root.addEventListener("scroll", onScroll, { capture: true, passive: true });
-    return () => root.removeEventListener("scroll", onScroll, true);
-  }, [syncScroll]);
+  function scheduleSync(origin: "source" | "preview", apply: () => void) {
+    if (syncOrigin.current && syncOrigin.current !== origin) return;
+    const token = ++syncToken.current;
+    syncOrigin.current = origin;
+    window.cancelAnimationFrame(syncFrame.current);
+    syncFrame.current = window.requestAnimationFrame(() => {
+      if (syncToken.current !== token) return;
+      apply();
+      // 程序化滚动的 scroll 事件在这次回调里同步发生；下一帧再解锁，避免回声。
+      syncFrame.current = window.requestAnimationFrame(() => {
+        if (syncToken.current === token) syncOrigin.current = null;
+      });
+    });
+  }
 
   return (
     <div className={"note-editor-card" + (mobile ? " is-mobile" : "")}>
@@ -953,6 +1035,30 @@ export function NoteEditorCard({
           <div className="note-editor-tools-row">
             <NoteLayoutSwitch layout={layout} onLayout={onLayout} modes={modes} />
             <div className="note-editor-tool-actions">
+              {onToggleList && (
+                <button
+                  type="button"
+                  className={"note-icon-btn note-expand-btn" + (listOpen ? " on" : "")}
+                  title={listOpen ? t("notes.hideNoteList") : t("notes.showNoteList")}
+                  aria-label={listOpen ? t("notes.hideNoteList") : t("notes.showNoteList")}
+                  aria-pressed={!!listOpen}
+                  onClick={onToggleList}
+                >
+                  <PanelLeft size={14} />
+                </button>
+              )}
+              {onToggleExpand && (
+                <button
+                  type="button"
+                  className={"note-icon-btn note-expand-btn" + (expanded ? " on" : "")}
+                  title={expanded ? t("notes.collapseEditor") : t("notes.expandEditor")}
+                  aria-label={expanded ? t("notes.collapseEditor") : t("notes.expandEditor")}
+                  aria-pressed={!!expanded}
+                  onClick={onToggleExpand}
+                >
+                  {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                </button>
+              )}
               {m.isDirty && !m.saving && <span className="note-save-state dirty">{t("notes.dirty")}</span>}
               {m.saving && <span className="note-save-state saving">{t("notes.saving")}</span>}
               <button
@@ -977,8 +1083,7 @@ export function NoteEditorCard({
           </div>
           {showSource && (
             <MarkdownToolbar
-              onWrap={m.wrapSelection}
-              onInsert={m.insertAtCursor}
+              editorRef={m.editorRef}
               onInsertImage={onInsertImage}
               disabled={m.writesLocked || m.assetUploading}
             />
@@ -988,7 +1093,6 @@ export function NoteEditorCard({
       <div className={"notes-panes" + (layout === "split" ? " split" : "")}>
         {showSource && (
           <div
-            ref={sourcePaneRef}
             className="note-pane"
             onBlur={(ev) => {
               const next = ev.relatedTarget as Node | null;
@@ -998,20 +1102,21 @@ export function NoteEditorCard({
           >
             {layout === "split" && <div className="note-pane-label">{t("notes.paneSource")}</div>}
             <NoteMarkdownEditor
-              key={m.draft.id ?? "new"}
               ref={m.editorRef}
               value={m.draft.markdown}
+              syncEpoch={m.editorEpoch}
               onChange={(markdown) => m.updateDraft({ markdown })}
               placeholder={t("notes.sourcePlaceholder")}
               disabled={m.writesLocked}
               mobile={mobile}
               onImageFile={(file) => ingestNoteImage(m, file)}
-              onScrollRatio={
+              onScrollLine={
                 syncScroll
-                  ? (ratio) => {
-                      if (scrollLock.current === "preview") return;
-                      lockScroll("source");
-                      applyScrollRatio(previewRef.current, ratio);
+                  ? (line) => {
+                      scheduleSync("source", () => {
+                        const preview = previewRef.current;
+                        if (preview) scrollPreviewToLine(preview, line);
+                      });
                     }
                   : undefined
               }
@@ -1028,9 +1133,12 @@ export function NoteEditorCard({
                 syncScroll
                   ? () => {
                       const el = previewRef.current;
-                      if (!el || scrollLock.current === "source") return;
-                      lockScroll("preview");
-                      m.editorRef.current?.setScrollRatio(scrollRatioOf(el));
+                      if (!el) return;
+                      const line = previewLineNearTop(el);
+                      if (line == null) return;
+                      scheduleSync("preview", () => {
+                        m.editorRef.current?.scrollToSourceLine(line);
+                      });
                     }
                   : undefined
               }

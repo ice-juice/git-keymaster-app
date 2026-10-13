@@ -125,10 +125,10 @@ export function NoteMobileEditor({
     }
   }
 
-  const headingOptions: { id: "h1" | "h2" | "h3"; label: string; icon: typeof Heading1; insert: string }[] = [
-    { id: "h1", label: t("notes.tbH1"), icon: Heading1, insert: "\n# " },
-    { id: "h2", label: t("notes.tbH2"), icon: Heading2, insert: "\n## " },
-    { id: "h3", label: t("notes.tbH3"), icon: Heading3, insert: "\n### " },
+  const headingOptions: { id: "h1" | "h2" | "h3"; label: string; icon: typeof Heading1; level: 1 | 2 | 3 }[] = [
+    { id: "h1", label: t("notes.tbH1"), icon: Heading1, level: 1 },
+    { id: "h2", label: t("notes.tbH2"), icon: Heading2, level: 2 },
+    { id: "h3", label: t("notes.tbH3"), icon: Heading3, level: 3 },
   ];
 
   function placeHeadingMenu() {
@@ -150,12 +150,10 @@ export function NoteMobileEditor({
     });
   }
 
-  function insertHeading(text: string) {
-    m.insertAtCursor(text);
+  function insertHeading(level: 1 | 2 | 3) {
+    m.editorRef.current?.toggleHeading(level);
     setHeadingOpen(false);
   }
-
-  const MD_TABLE = "|  |  |  |\n| --- | --- | --- |\n|  |  |  |";
 
   return (
     <div className="m-note-mobile-editor">
@@ -303,9 +301,9 @@ export function NoteMobileEditor({
             }}
           >
             <NoteMarkdownEditor
-              key={m.draft.id ?? "new"}
               ref={m.editorRef}
               value={m.draft.markdown}
+              syncEpoch={m.editorEpoch}
               onChange={(markdown) => m.updateDraft({ markdown })}
               placeholder={t("notes.sourcePlaceholder")}
               disabled={m.writesLocked}
@@ -375,7 +373,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbTable")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.insertAtCursor(`\n${MD_TABLE}`, 3);
+                m.editorRef.current?.insertTable();
               }}
             >
               <Table2 size={16} />
@@ -391,7 +389,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbBold")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.wrapSelection("**");
+                m.editorRef.current?.toggleWrap("**");
               }}
             >
               <Bold size={16} />
@@ -403,7 +401,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbItalic")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.wrapSelection("*");
+                m.editorRef.current?.toggleWrap("*");
               }}
             >
               <Italic size={16} />
@@ -415,7 +413,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbStrike")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.wrapSelection("~~");
+                m.editorRef.current?.toggleWrap("~~");
               }}
             >
               <Strikethrough size={16} />
@@ -431,7 +429,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbUl")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.insertAtCursor("\n- ");
+                m.editorRef.current?.toggleLinePrefix("ul");
               }}
             >
               <List size={16} />
@@ -443,7 +441,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbOl")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.insertAtCursor("\n1. ");
+                m.editorRef.current?.toggleLinePrefix("ol");
               }}
             >
               <ListOrdered size={16} />
@@ -455,7 +453,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbTask")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.insertAtCursor("\n- [ ] ");
+                m.editorRef.current?.toggleLinePrefix("task");
               }}
             >
               <ListChecks size={16} />
@@ -471,7 +469,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbQuote")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.insertAtCursor("\n> ");
+                m.editorRef.current?.toggleLinePrefix("quote");
               }}
             >
               <Quote size={16} />
@@ -483,7 +481,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbCode")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.wrapSelection("\n```\n", "\n```\n");
+                m.editorRef.current?.insertCodeBlock();
               }}
             >
               <Code size={16} />
@@ -495,7 +493,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbHr")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.insertAtCursor("\n\n---\n\n");
+                m.editorRef.current?.insertHr();
               }}
             >
               <Minus size={16} />
@@ -507,7 +505,7 @@ export function NoteMobileEditor({
               aria-label={t("notes.tbLink")}
               onPointerDown={(e) => {
                 e.preventDefault();
-                m.wrapSelection("[", "](url)");
+                m.editorRef.current?.toggleWrap("[", "](url)");
               }}
             >
               <Link size={16} />
@@ -548,7 +546,7 @@ export function NoteMobileEditor({
                       className="m-acc-heading-item"
                       onPointerDown={(e) => {
                         e.preventDefault();
-                        insertHeading(item.insert);
+                        insertHeading(item.level);
                       }}
                     >
                       <Icon size={14} />

@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
-    "test:unit": "node --experimental-strip-types --test src/shared/*.test.ts",
+    "test:unit": "node --experimental-strip-types --test src/shared/*.test.ts src/ui/*.test.ts",
     "preview": "vite preview",
     "tauri": "tauri"
   },
