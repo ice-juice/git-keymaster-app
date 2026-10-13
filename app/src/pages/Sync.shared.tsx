@@ -1,8 +1,6 @@
 import { useEffect, useState } from "react";
 import {
   Cloud,
-  CloudUpload,
-  CloudDownload,
   RefreshCw,
   Shield,
   FileArchive,
@@ -23,7 +21,6 @@ import {
   errMessage,
   type S3Config,
   type CloudSyncStatus,
-  type SyncResult,
   type BackupSummary,
   type AutoSyncSettings,
   type BlobSyncProgress,
@@ -71,7 +68,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   const [loadingStatus, setLoadingStatus] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null);
-  const [syncing, setSyncing] = useState<"push" | "pull" | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [configSaved, setConfigSaved] = useState(false);
   const [autoSync, setAutoSync] = useState<AutoSyncSettings | null>(null);
@@ -85,12 +82,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   const [shareQr, setShareQr] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
   const [err, setErr] = useState("");
-  const [pendingConfirm, setPendingConfirm] = useState<
-    | { kind: "push" }
-    | { kind: "pull" }
-    | { kind: "restore"; id: string; at: string }
-    | null
-  >(null);
+  const [pendingConfirm, setPendingConfirm] = useState<{ kind: "restore"; id: string; at: string } | null>(null);
   useOverlayBack(!!pendingConfirm, () => setPendingConfirm(null));
   useOverlayBack(!!s3Auth, () => setS3Auth(null));
   useOverlayBack(!!shareQr, () => setShareQr(null));
@@ -377,44 +369,24 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     return true;
   }
 
-  function handlePush() {
+  async function runSyncNow() {
     if (!ensureConfigured()) return;
-    setPendingConfirm({ kind: "push" });
-  }
-
-  function handlePull() {
-    if (!ensureConfigured()) return;
-    setPendingConfirm({ kind: "pull" });
-  }
-
-  async function runPush() {
-    setSyncing("push");
+    setSyncing(true);
     setSyncNotice(null);
-    setPendingConfirm(null);
     try {
-      const res: SyncResult = await api.cloudSyncPush();
-      setSyncNotice(t("syncPage.okMsg", { message: res.message }));
-      await refreshStatus();
-      await loadSnapshots();
-    } catch (e) {
-      setSyncNotice(t("syncPage.pushFail", { error: errMessage(e) }));
-    } finally {
-      setSyncing(null);
-    }
-  }
-
-  async function runPull() {
-    setSyncing("pull");
-    setSyncNotice(null);
-    setPendingConfirm(null);
-    try {
-      const res: SyncResult = await api.cloudSyncPull();
-      setSyncNotice(t("syncPage.pullOk", { message: res.message, identities: res.identityCount, keys: res.keyCount }));
+      const res = await api.runAutoSyncNow();
+      setSyncNotice(
+        res
+          ? t("syncPage.okMsg", { message: res.message })
+          : t("syncPage.okMsg", { message: t("syncPage.alreadyLatest") }),
+      );
+      const settings = await api.getAutoSyncSettings();
+      setAutoSync(settings);
       await refreshStatus();
     } catch (e) {
-      setSyncNotice(t("syncPage.pullFail", { error: errMessage(e) }));
+      setSyncNotice(t("syncPage.failErr", { error: errMessage(e) }));
     } finally {
-      setSyncing(null);
+      setSyncing(false);
     }
   }
 
@@ -554,6 +526,8 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
     }
   })();
 
+  const lastSyncAt = autoSync?.lastAutoSyncAt || cloudStatus?.remoteUpdatedAt || "";
+
   return (
     <div className="stack-lg">
       <ErrorDialog message={err} onClose={() => setErr("")} />
@@ -575,30 +549,6 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
           }
           onCancel={() => setS3Auth(null)}
           onConfirm={confirmS3Auth}
-        />
-      )}
-      {pendingConfirm?.kind === "push" && (
-        <ConfirmDialog
-          title={t("syncPage.confirmPushTitle")}
-          message={t("syncPage.confirmPushMsg")}
-          detail={t("syncPage.confirmPushDetail")}
-          confirmLabel={t("syncPage.confirmPush")}
-          busy={syncing === "push"}
-          busyLabel={t("syncPage.pushing")}
-          onCancel={() => setPendingConfirm(null)}
-          onConfirm={() => void runPush()}
-        />
-      )}
-      {pendingConfirm?.kind === "pull" && (
-        <ConfirmDialog
-          title={t("syncPage.confirmPullTitle")}
-          message={t("syncPage.confirmPullMsg")}
-          detail={t("syncPage.confirmPullDetail")}
-          confirmLabel={t("syncPage.confirmPull")}
-          busy={syncing === "pull"}
-          busyLabel={t("syncPage.pulling")}
-          onCancel={() => setPendingConfirm(null)}
-          onConfirm={() => void runPull()}
         />
       )}
       {pendingConfirm?.kind === "restore" && (
@@ -725,10 +675,10 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 <div className="stat-card-title">{t("syncPage.lastSync")}</div>
                 <div className="stat-card-body">
                   <div className="stat-card-val" style={{ fontSize: 13, lineHeight: 1.4 }}>
-                    {cloudStatus?.remoteUpdatedAt ? new Date(cloudStatus.remoteUpdatedAt).toLocaleTimeString() : t("common.emDash")}
+                    {lastSyncAt ? new Date(lastSyncAt).toLocaleTimeString() : t("common.emDash")}
                   </div>
                   <div className="stat-card-sub">
-                    {cloudStatus?.remoteUpdatedAt ? new Date(cloudStatus.remoteUpdatedAt).toLocaleDateString() : t("syncPage.neverSync")}
+                    {lastSyncAt ? new Date(lastSyncAt).toLocaleDateString() : t("syncPage.neverSync")}
                   </div>
                 </div>
               </div>
@@ -770,58 +720,18 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                 <button
                   type="button"
                   className="btn primary"
-                  disabled={writesLocked || syncing !== null || cloudStatus?.status === "unconfigured"}
-                  onClick={handlePush}
+                  disabled={syncing || cloudStatus?.status === "unconfigured"}
+                  onClick={() => void runSyncNow()}
                 >
-                  <CloudUpload size={14} />
-                  {syncing === "push" ? t("syncPage.pushingEnc") : t("syncPage.pushBtn")}
-                </button>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={syncing !== null || cloudStatus?.status === "unconfigured" || !cloudStatus?.remoteExists}
-                  onClick={handlePull}
-                >
-                  <CloudDownload size={14} />
-                  {syncing === "pull" ? t("syncPage.pullingSync") : t("syncPage.pullBtn")}
+                  <RefreshCw size={14} className={syncing ? "animate-spin" : ""} />
+                  {syncing ? t("syncPage.pullingSync") : t("syncPage.syncNow")}
                 </button>
               </div>
             </div>
           </Card>
 
           {/* 板块 2: 精简后的定时同步 */}
-          <Card
-            title={t("syncPage.autoTitle")}
-            actions={
-              <button
-                type="button"
-                className="btn ghost sm"
-                disabled={syncing !== null || cloudStatus?.status === "unconfigured"}
-                onClick={async () => {
-                  setSyncing("pull");
-                  setSyncNotice(null);
-                  try {
-                    const res = await api.runAutoSyncNow();
-                    setSyncNotice(
-                      res
-                        ? t("syncPage.okMsg", { message: res.message })
-                        : t("syncPage.okMsg", { message: t("syncPage.alreadyLatest") }),
-                    );
-                    await refreshStatus();
-                    await loadSnapshots();
-                  } catch (e) {
-                    setSyncNotice(t("syncPage.failErr", { error: errMessage(e) }));
-                  } finally {
-                    setSyncing(null);
-                  }
-                }}
-                style={{ display: "inline-flex", alignItems: "center", gap: 4 }}
-              >
-                <RefreshCw size={12} className={syncing === "pull" ? "animate-spin" : ""} />
-                {t("syncPage.syncNow")}
-              </button>
-            }
-          >
+          <Card title={t("syncPage.autoTitle")}>
             <div className="stack">
               <div className="between" style={{ flexWrap: "wrap", gap: 8 }}>
                 <div>

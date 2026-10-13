@@ -62,17 +62,94 @@ pub fn init_base_dir(dir: PathBuf) {
     let _ = BASE_DIR.set(dir);
 }
 
+/// 未注入 Tauri 目录时，按宿主选择可跨重启保留的配置根。
+///
+/// Windows 继续用 `%APPDATA%`（与现有 `git-keymaster` 目录一致）。
+/// macOS / Linux 没有 `APPDATA`，以前会落到临时目录，虚拟机或系统重启后配置消失，
+/// 启动就被当成未初始化。这里改到用户配置目录。只有连家目录都没有时才用临时目录。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HostKind {
+    Windows,
+    Macos,
+    Linux,
+    Other,
+}
+
+fn non_empty(raw: Option<&str>) -> Option<&str> {
+    raw.map(str::trim).filter(|s| !s.is_empty())
+}
+
+pub fn resolve_config_base(
+    appdata: Option<&str>,
+    home: Option<&str>,
+    xdg_config_home: Option<&str>,
+    host: HostKind,
+) -> PathBuf {
+    if let Some(dir) = non_empty(appdata) {
+        return PathBuf::from(dir);
+    }
+    match host {
+        HostKind::Windows => {
+            if let Some(home) = non_empty(home) {
+                return PathBuf::from(home).join("AppData").join("Roaming");
+            }
+        }
+        HostKind::Macos => {
+            if let Some(home) = non_empty(home) {
+                return PathBuf::from(home)
+                    .join("Library")
+                    .join("Application Support");
+            }
+        }
+        HostKind::Linux => {
+            if let Some(xdg) = non_empty(xdg_config_home) {
+                return PathBuf::from(xdg);
+            }
+            if let Some(home) = non_empty(home) {
+                return PathBuf::from(home).join(".config");
+            }
+        }
+        HostKind::Other => {}
+    }
+    std::env::temp_dir()
+}
+
+fn current_host() -> HostKind {
+    #[cfg(windows)]
+    {
+        HostKind::Windows
+    }
+    #[cfg(target_os = "macos")]
+    {
+        HostKind::Macos
+    }
+    #[cfg(target_os = "linux")]
+    {
+        HostKind::Linux
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
+    {
+        HostKind::Other
+    }
+}
+
 /// 本机配置根目录。
 ///
-/// 优先用 [`init_base_dir`] 注入的值；未注入时桌面回退 `%APPDATA%`，
-/// 最后才回退临时目录（仅单元测试等无宿主场景会走到）。
+/// 优先用 [`init_base_dir`] 注入的值（移动端沙箱目录）。
+/// 桌面未注入时走 [`resolve_config_base`]，避免 macOS / Linux 把配置写进临时目录。
 pub fn config_base_dir() -> PathBuf {
     if let Some(dir) = BASE_DIR.get() {
         return dir.clone();
     }
-    std::env::var("APPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir())
+    resolve_config_base(
+        std::env::var("APPDATA").ok().as_deref(),
+        std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .ok()
+            .as_deref(),
+        std::env::var("XDG_CONFIG_HOME").ok().as_deref(),
+        current_host(),
+    )
 }
 
 pub fn app_config_dir() -> PathBuf {
@@ -230,6 +307,26 @@ mod tests {
                 PathBuf::from("/data/user/0/com.jeck.gitkeymaster/files"),
                 PathBuf::from("/data/user/0/com.jeck.gitkeymaster"),
             ]
+        );
+    }
+
+    #[test]
+    fn linux_and_macos_config_base_is_not_temp() {
+        let linux = resolve_config_base(None, Some("/home/dev"), None, HostKind::Linux);
+        assert_eq!(linux, PathBuf::from("/home/dev/.config"));
+        let xdg = resolve_config_base(None, Some("/home/dev"), Some("/data/cfg"), HostKind::Linux);
+        assert_eq!(xdg, PathBuf::from("/data/cfg"));
+        let mac = resolve_config_base(None, Some("/Users/dev"), None, HostKind::Macos);
+        assert_eq!(
+            mac,
+            PathBuf::from("/Users/dev/Library/Application Support")
+        );
+        let win = resolve_config_base(Some(r"C:\Users\dev\AppData\Roaming"), None, None, HostKind::Windows);
+        assert_eq!(win, PathBuf::from(r"C:\Users\dev\AppData\Roaming"));
+        let win_fallback = resolve_config_base(None, Some(r"C:\Users\dev"), None, HostKind::Windows);
+        assert_eq!(
+            win_fallback,
+            PathBuf::from(r"C:\Users\dev\AppData\Roaming")
         );
     }
 

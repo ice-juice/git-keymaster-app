@@ -109,11 +109,18 @@ pub struct AppState {
     pub allow_exit: AtomicBool,
     /// 自动同步进行中，避免重叠拉取/推送。
     pub auto_sync_busy: AtomicBool,
-    /// 最近一次周期同步完成时刻（进程内）。
+    /// 最近一次自动同步尝试时刻（进程内）。只用于 20 秒去重，到期与否看配置里的真实时钟。
     pub last_periodic_sync: Mutex<Option<Instant>>,
     /// 编辑后若当时正在同步，结束后再推一次。
     pub pending_edit_publish: AtomicBool,
-    /// 启动后首次云同步未完成时禁止写入。
+    /// 保存云配置时若同步正忙，结束后再做一次先拉后推。
+    pub pending_full_sync: AtomicBool,
+    /// 本进程是否已经尝试过首启云同步。失败也不在本进程里重打；持久标记见配置。
+    pub startup_sync_done: AtomicBool,
+    /// 界面锁定后 Vault 会清掉主密钥，定时同步仍用这份进程级副本。
+    /// 只在进程退出或恢复出厂时丢掉，锁定/托盘不会清。
+    pub sync_key: Mutex<Option<crate::vault::crypto::MasterKey>>,
+    /// 历史字段：云同步不再用它挡住写入。手动路径仍会检查。
     pub writes_locked: AtomicBool,
     /// 后台启动任务进行中，避免重叠。
     pub bootstrap_busy: AtomicBool,
@@ -140,6 +147,9 @@ impl AppState {
             auto_sync_busy: AtomicBool::new(false),
             last_periodic_sync: Mutex::new(None),
             pending_edit_publish: AtomicBool::new(false),
+            pending_full_sync: AtomicBool::new(false),
+            startup_sync_done: AtomicBool::new(false),
+            sync_key: Mutex::new(None),
             writes_locked: AtomicBool::new(false),
             bootstrap_busy: AtomicBool::new(false),
             startup_note: Mutex::new(None),

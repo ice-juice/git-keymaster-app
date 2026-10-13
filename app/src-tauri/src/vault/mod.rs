@@ -52,8 +52,13 @@ impl Vault {
     }
 
     /// 目标目录是否已是一个已初始化的工作空间。
+    ///
+    /// 原子写中途被杀掉时，正本可能暂时只剩 `vault.json.prev`。
+    /// 先找回再判断，避免虚拟机硬重启后被误当成未初始化。
     pub fn exists(root: &Path) -> bool {
-        Self::vault_path(root).is_file()
+        let path = Self::vault_path(root);
+        recover_previous_if_missing(&path);
+        path.is_file()
     }
 
     /// 初始化新工作空间：生成 MK 与恢复密钥，写 vault.json 与子目录骨架。
@@ -105,6 +110,7 @@ impl Vault {
     /// 加载已有工作空间的头部（处于锁定状态）。
     pub fn load(root: &Path) -> Result<Self> {
         let path = Self::vault_path(root);
+        recover_previous_if_missing(&path);
         if !path.is_file() {
             return Err(AppError::NotInitialized);
         }
@@ -508,6 +514,20 @@ mod tests {
         recover_previous_if_missing(&path);
         assert_eq!(std::fs::read(&path).unwrap(), b"live");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn exists_recovers_vault_header_left_as_prev() {
+        let root = temp_root();
+        let (v, _rec) = Vault::init(&root, "pw", fast_kdf()).unwrap();
+        drop(v);
+        let path = root.join(VAULT_FILE);
+        let prev = previous_path(&path);
+        std::fs::rename(&path, &prev).unwrap();
+        assert!(Vault::exists(&root), "中断的原子写不应被当成未初始化");
+        assert!(path.is_file());
+        assert!(Vault::load(&root).is_ok());
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
