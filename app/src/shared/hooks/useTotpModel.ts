@@ -16,13 +16,49 @@ import { detectTotpInput } from "../../lib/totpInput";
 import { i18n } from "../../lib/i18n";
 import { firstOtpauth, pickQrFromGallery, scanQrWithCamera, totpImportUris } from "../../lib/qrCapture";
 import { isMobilePlatform } from "../../lib/platform";
+import { platformFamily, resolvePlatformBrand } from "../../lib/accountInput";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { applyGroupOrder, removeGroupMeta, renameGroupMeta, sortGroups } from "../../ui/groupOrder";
 import type { GroupDialogState } from "../../ui/GroupDialog";
 import { useApp } from "../../store";
 
 const VIEW_KEY = "gam.totp.view";
+const BANNER_KEY = "gam.totp.banner.hidden";
 const NOTE_MAX = 32;
+
+export type TotpView = "grid" | "list" | "platform";
+export type TotpEditorState = Partial<TotpEntry> & { secret?: string; isPlatformLocked?: boolean };
+export type TotpPlatformGroup = {
+  key: string;
+  name: string;
+  icon?: string;
+  list: TotpEntry[];
+};
+export type TotpPlatformModal = { key: string; platform: string; icon?: string };
+
+function readView(): TotpView {
+  const stored = localStorage.getItem(VIEW_KEY);
+  return stored === "list" || stored === "platform" ? stored : "grid";
+}
+
+function readBannerHidden(): boolean {
+  try {
+    return sessionStorage.getItem(BANNER_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+/** 周期剩余秒数不是秘密，掩码态也可本地推算。 */
+export function totpRemainSeconds(period: number, nowMs = Date.now()): number {
+  const safe = period > 0 ? period : 30;
+  const elapsed = Math.floor(nowMs / 1000) % safe;
+  return elapsed === 0 ? safe : safe - elapsed;
+}
+
+export function maskTotpCode(digits?: number): string {
+  return digits === 8 ? "•••• ••••" : "••• •••";
+}
 
 export function clipNote(note?: string | null) {
   const text = (note || "").trim();
@@ -39,16 +75,21 @@ export function useTotpModel() {
   const [builtins, setBuiltins] = useState<BuiltinIconInfo[]>([]);
   const [q, setQ] = useState("");
   const [group, setGroup] = useState("全部");
-  const [view, setView] = useState<"grid" | "list">(() =>
-    localStorage.getItem(VIEW_KEY) === "list" ? "list" : "grid",
-  );
+  const [view, setView] = useState<TotpView>(readView);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [bannerHidden, setBannerHidden] = useState(readBannerHidden);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [clipHint, setClipHint] = useState<Record<string, number>>({});
   const [err, setErr] = useState("");
   const [codes, setCodes] = useState<Record<string, { code: string; remain: number; period: number }>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [reauth, setReauth] = useState<null | ((pw: string) => Promise<void>)>(null);
   const reauthCancel = useRef<(() => void) | null>(null);
   const [revealCfg, setRevealCfg] = useState({ grace: 5, clip: 20 });
-  const [editor, setEditor] = useState<null | Partial<TotpEntry> & { secret?: string }>(null);
+  const [editor, setEditor] = useState<TotpEditorState | null>(null);
+  const [editingPlatformModal, setEditingPlatformModal] = useState<TotpPlatformModal | null>(null);
+  const [moreOpenId, setMoreOpenId] = useState<string | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [secretDlg, setSecretDlg] = useState<null | { id: string; secret?: string; uri?: string; qr?: string }>(null);
   const [batchImport, setBatchImport] = useState<TotpImportResult | null>(null);
   const [groupDlg, setGroupDlg] = useState<GroupDialogState | null>(null);
@@ -77,6 +118,15 @@ export function useTotpModel() {
 
   useEffect(() => {
     const t = window.setInterval(() => {
+      const stamp = Date.now();
+      setNowMs(stamp);
+      setClipHint((prev) => {
+        const next: Record<string, number> = {};
+        for (const [id, until] of Object.entries(prev)) {
+          if (until > stamp) next[id] = until;
+        }
+        return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+      });
       setCodes((prev) => {
         const next = { ...prev };
         for (const id of Object.keys(next)) {
@@ -118,9 +168,59 @@ export function useTotpModel() {
       .sort((a, b) => a.sortOrder - b.sortOrder || a.issuer.localeCompare(b.issuer));
   }, [entries, q, group]);
 
-  function setViewMode(mode: "grid" | "list") {
+  const platforms = useMemo<TotpPlatformGroup[]>(() => {
+    const map = new Map<string, TotpEntry[]>();
+    for (const e of filtered) {
+      const family = platformFamily(e.issuer, builtins);
+      const key = family || `__solo:${e.id}`;
+      const list = map.get(key) || [];
+      list.push(e);
+      map.set(key, list);
+    }
+    return [...map.entries()]
+      .map(([key, list]) => {
+        list.sort((a, b) => a.sortOrder - b.sortOrder || a.account.localeCompare(b.account) || a.issuer.localeCompare(b.issuer));
+        if (key.startsWith("__solo:")) {
+          return { key, name: "", icon: list[0]?.icon || undefined, list };
+        }
+        const brand = resolvePlatformBrand(
+          list[0].issuer,
+          list.find((item) => item.icon)?.icon,
+          list.map((item) => ({ platform: item.issuer, icon: item.icon })),
+          builtins,
+        );
+        return { key, name: brand.platform, icon: brand.icon, list };
+      })
+      .sort((a, b) => (a.name || "\uffff").localeCompare(b.name || "\uffff"));
+  }, [filtered, builtins]);
+
+  function setViewMode(mode: TotpView) {
     setView(mode);
+    setMoreOpenId(null);
+    setCtxMenu(null);
     localStorage.setItem(VIEW_KEY, mode);
+  }
+
+  function dismissBanner() {
+    try {
+      sessionStorage.setItem(BANNER_KEY, "1");
+    } catch {
+      /* ignore quota / private mode */
+    }
+    setBannerHidden(true);
+  }
+
+  function clearFilters() {
+    setGroup("全部");
+    setQ("");
+  }
+
+  function expandAll() {
+    setCollapsed({});
+  }
+
+  function collapseAll() {
+    setCollapsed(Object.fromEntries(platforms.map((g) => [g.key, true])));
   }
 
   async function withAuth<T>(fn: (pw?: string) => Promise<T>): Promise<T | undefined> {
@@ -190,6 +290,9 @@ export function useTotpModel() {
       return;
     }
     setCopiedId(id);
+    if (revealCfg.clip > 0) {
+      setClipHint((prev) => ({ ...prev, [id]: Date.now() + revealCfg.clip * 1000 }));
+    }
     window.setTimeout(() => {
       setCopiedId((prev) => (prev === id ? null : prev));
     }, 1500);
@@ -477,6 +580,56 @@ export function useTotpModel() {
     setPendingDelete(e);
   }
 
+  async function updatePlatformBrand(groupKey: string, newPlatformName: string, newIcon?: string) {
+    if (writesLocked) {
+      setErr(i18n.t("totp.batchGroupLocked"));
+      return;
+    }
+    const trimmedName = newPlatformName.trim();
+    if (!trimmedName) {
+      setErr(i18n.t("totp.needPlatform"));
+      return;
+    }
+    const targets = groupKey.startsWith("__solo:")
+      ? entries.filter((e) => e.id === groupKey.slice("__solo:".length))
+      : entries.filter((e) => platformFamily(e.issuer, builtins) === groupKey);
+    if (targets.length === 0) return;
+
+    setBusy(true);
+    try {
+      for (const item of targets) {
+        await api.totpUpdate({
+          id: item.id,
+          issuer: trimmedName,
+          account: item.account,
+          note: item.note || undefined,
+          url: item.url || undefined,
+          group: item.group || undefined,
+          algorithm: item.algorithm,
+          digits: item.digits,
+          period: item.period,
+          icon: newIcon || undefined,
+          sortOrder: item.sortOrder,
+        });
+      }
+      setEditingPlatformModal(null);
+      const nextFamily = platformFamily(trimmedName, builtins);
+      setCollapsed((prev) => {
+        const next = { ...prev };
+        if (prev[groupKey] && nextFamily && nextFamily !== groupKey) {
+          next[nextFamily] = prev[groupKey];
+          delete next[groupKey];
+        }
+        return next;
+      });
+      await load();
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function confirmDeleteEntry() {
     if (!pendingDelete) return;
     setBusy(true);
@@ -590,6 +743,16 @@ export function useTotpModel() {
     setGroup,
     view,
     setViewMode,
+    collapsed,
+    setCollapsed,
+    platforms,
+    expandAll,
+    collapseAll,
+    bannerHidden,
+    dismissBanner,
+    nowMs,
+    clipHint,
+    clearFilters,
     err,
     setErr,
     codes,
@@ -600,6 +763,14 @@ export function useTotpModel() {
     editor,
     setEditor,
     openExistingEditor,
+    editingPlatformModal,
+    setEditingPlatformModal,
+    updatePlatformBrand,
+    moreOpenId,
+    setMoreOpenId,
+    ctxMenu,
+    openContextMenu: (id: string, x: number, y: number) => setCtxMenu({ id, x, y }),
+    closeContextMenu: () => setCtxMenu(null),
     secretDlg,
     setSecretDlg,
     batchImport,

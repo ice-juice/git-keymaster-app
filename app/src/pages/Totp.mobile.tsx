@@ -1,28 +1,32 @@
-import { useEffect, useRef, useState, type PointerEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import {
   Camera,
+  ChevronsDown,
+  ChevronsUp,
   ImagePlus,
+  MoreHorizontal,
   Plus,
-  Eye,
-  EyeOff,
-  KeyRound,
-  Edit3,
-  Trash2,
   Check,
-  Copy,
-  Link2,
   FolderKanban,
 } from "lucide-react";
-import { api, type TotpEntry } from "../lib/ipc";
-import { Badge, Empty } from "../ui/common";
+import { type TotpEntry } from "../lib/ipc";
+import { Badge } from "../ui/common";
 import { IconMark } from "../ui/IconMark";
-import { CountdownRing } from "../ui/CountdownRing";
 import { MobileListToolbar } from "../ui/MobileListToolbar";
 import { GroupPicker } from "../ui/GroupPicker";
 import { useTranslation } from "react-i18next";
 import { useTotpModel, clipNote, type TotpModel } from "../shared/hooks/useTotpModel";
-import { pushMobileBack } from "../shared/mobileBack";
-import { formatCode, TotpDialogs, TotpFilters } from "./Totp.shared";
+import { pushMobileBack, useOverlayBack } from "../shared/mobileBack";
+import { TotpCodeSlot } from "../ui/TotpCodeSlot";
+import {
+  TotpDialogs,
+  TotpEmpty,
+  TotpFilters,
+  TotpPlatformGroups,
+  TotpViewSwitcher,
+  totpActionItems,
+  totpSlotProps,
+} from "./Totp.shared";
 import { TotpMobileEditor } from "./TotpMobileEditor";
 import { useItemFocus } from "../shared/hooks/useItemFocus";
 import { can } from "../platform/capabilities";
@@ -48,15 +52,6 @@ function TotpMobileCard({
   onEnterSelect: () => void;
 }) {
   const { t } = useTranslation();
-  const shown = m.codes[e.id];
-  const [cached, setCached] = useState(shown);
-  useEffect(() => {
-    if (shown) setCached(shown);
-  }, [shown]);
-  const live = shown ?? cached;
-  const revealed = !!shown;
-  const seedMissing = e.hasSeed === false;
-  const isCopied = m.copiedId === e.id;
   const timerRef = useRef<number | null>(null);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const skipClickRef = useRef(false);
@@ -85,32 +80,8 @@ function TotpMobileCard({
     if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > MOVE_CANCEL_PX) clearPress();
   }
 
-  return (
-    <div
-      className={
-        "m-totp-card" + (selecting ? " is-selecting" : "") + (selected ? " is-checked" : "")
-      }
-      data-focus-id={e.id}
-      role={selecting ? "checkbox" : undefined}
-      aria-checked={selecting ? selected : undefined}
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={clearPress}
-      onPointerCancel={clearPress}
-      onContextMenu={(ev) => ev.preventDefault()}
-      onClickCapture={(ev) => {
-        if (skipClickRef.current) {
-          skipClickRef.current = false;
-          ev.preventDefault();
-          ev.stopPropagation();
-          return;
-        }
-        if (!selecting) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        if (!locked) onToggle();
-      }}
-    >
+  const body = (moreBtn?: ReactNode) => (
+    <>
       <div className="m-totp-card-head">
         {selecting && (
           <span className={"m-totp-check" + (selected ? " on" : "")} aria-hidden>
@@ -123,21 +94,6 @@ function TotpMobileCard({
             <div className="m-totp-card-issuer" title={e.issuer}>
               <span>{e.issuer}</span>
               {e.group && <Badge kind="info">{e.group}</Badge>}
-              {e.url && !selecting && (
-                <button
-                  type="button"
-                  className="btn ghost sm"
-                  style={{ padding: "0 2px" }}
-                  title={t("totp.openSite")}
-                  onPointerDown={(ev) => ev.stopPropagation()}
-                  onClick={(ev) => {
-                    ev.stopPropagation();
-                    api.openUrl(e.url!);
-                  }}
-                >
-                  <Link2 size={12} />
-                </button>
-              )}
             </div>
             <div className="m-totp-card-account" title={e.account}>
               {e.account}
@@ -149,107 +105,108 @@ function TotpMobileCard({
             )}
           </div>
         </div>
-
-        {!selecting && (
-          <div className="m-totp-card-ops">
-            <button
-              type="button"
-              className="m-totp-op-btn"
-              title={t("totp.secretTitle")}
-              onPointerDown={(ev) => ev.stopPropagation()}
-              onClick={() => m.openSecret(e.id)}
-            >
-              <KeyRound size={14} />
-            </button>
-            <button
-              type="button"
-              className="m-totp-op-btn"
-              disabled={m.writesLocked}
-              title={t("common.edit")}
-              onPointerDown={(ev) => ev.stopPropagation()}
-              onClick={() => void m.openExistingEditor(e)}
-            >
-              <Edit3 size={14} />
-            </button>
-            <button
-              type="button"
-              className="m-totp-op-btn danger"
-              disabled={m.writesLocked}
-              title={t("common.delete")}
-              onPointerDown={(ev) => ev.stopPropagation()}
-              onClick={() => m.deleteEntry(e)}
-            >
-              <Trash2 size={14} />
-            </button>
-          </div>
-        )}
+        {!selecting && moreBtn ? <div className="m-totp-card-ops">{moreBtn}</div> : null}
       </div>
+      <TotpCodeSlot {...totpSlotProps(m, e)} fade selecting={selecting} />
+    </>
+  );
 
-      {seedMissing && (
-        <div className="callout danger sm" style={{ margin: 0 }}>
-          {t("totp.seedLostShort")}
-        </div>
-      )}
+  const cardProps = {
+    role: selecting ? ("checkbox" as const) : undefined,
+    "aria-checked": selecting ? selected : undefined,
+    onPointerDown,
+    onPointerMove,
+    onPointerUp: clearPress,
+    onPointerCancel: clearPress,
+    onContextMenu: (ev: { preventDefault(): void }) => ev.preventDefault(),
+    onClickCapture: (ev: { preventDefault(): void; stopPropagation(): void }) => {
+      if (skipClickRef.current) {
+        skipClickRef.current = false;
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+      if (!selecting) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (!locked) onToggle();
+    },
+  };
 
-      <div
-        className={"m-totp-code-area" + (revealed ? " is-revealed" : "") + (selecting ? " is-static" : "")}
-        onClick={() => {
-          if (selecting || seedMissing) return;
-          if (shown) {
-            m.copyCode(e.id);
-          } else {
-            m.reveal(e.id);
-          }
-        }}
-      >
-        <div className="m-totp-code-layer is-masked">
-          <span className="m-totp-code-masked">••••••</span>
+  return (
+    <div
+      className={"m-totp-card" + (selecting ? " is-selecting" : "") + (selected ? " is-checked" : "")}
+      data-focus-id={e.id}
+      {...cardProps}
+    >
+      {body(
+        selecting ? undefined : (
           <button
             type="button"
-            className="m-totp-view-btn"
-            disabled={seedMissing || selecting}
+            className="totp-more-btn m-totp-more-btn"
+            aria-label={t("totp.moreActions")}
+            aria-haspopup="dialog"
+            aria-expanded={m.moreOpenId === e.id}
+            onPointerDown={(ev) => ev.stopPropagation()}
             onClick={(ev) => {
               ev.stopPropagation();
-              if (selecting) return;
-              m.reveal(e.id);
+              m.setMoreOpenId(e.id);
             }}
           >
-            <Eye size={13} />
-            <span>{t("totp.view")}</span>
+            <MoreHorizontal size={18} aria-hidden />
           </button>
+        ),
+      )}
+    </div>
+  );
+}
+
+function TotpActionSheet({ m }: { m: TotpModel }) {
+  const { t } = useTranslation();
+  const entry = m.moreOpenId ? m.entries.find((e) => e.id === m.moreOpenId) : undefined;
+  const setMoreOpenId = m.setMoreOpenId;
+  const close = useCallback(() => setMoreOpenId(null), [setMoreOpenId]);
+  useOverlayBack(!!entry, close);
+  if (!entry) return null;
+  const title = entry.issuer || t("totp.unnamed");
+  return (
+    <div className="wizard-overlay" onClick={close}>
+      <div
+        className="m-note-sheet m-totp-action-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        <div className="m-note-sheet-handle" />
+        <div className="m-note-sheet-head">
+          <div className="m-note-sheet-title">{title}</div>
+          {entry.account && (
+            <div className="m-note-sheet-meta">
+              <span>{entry.account}</span>
+            </div>
+          )}
         </div>
-        <div className="m-totp-code-layer is-live" aria-hidden={!revealed}>
-          <div className="m-totp-live-left">
-            {live && (
-              <CountdownRing
-                remain={live.remain}
-                period={live.period || e.period || 30}
-                size={28}
-              />
-            )}
-          </div>
-          <span className="m-totp-code-num" key={live?.code || "idle"}>
-            {live ? formatCode(live.code) : "••••••"}
-          </span>
-          <div className="m-totp-live-right">
+        <div className="m-note-sheet-actions">
+          {totpActionItems(entry, m, t, 18).map((item) => (
             <button
+              key={item.key}
               type="button"
-              className="m-totp-hide-btn"
-              title={t("totp.hideCode")}
-              aria-label={t("totp.hideCode")}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                if (selecting) return;
-                m.hideCode(e.id);
+              className={"m-note-sheet-item" + (item.danger ? " is-danger" : "")}
+              disabled={item.disabled}
+              onClick={() => {
+                close();
+                item.onClick();
               }}
             >
-              <EyeOff size={14} />
+              {item.icon}
+              <span>{item.label}</span>
             </button>
-            <span className={"m-totp-copy-icon" + (isCopied ? " copied" : "")} title={isCopied ? t("totp.copied") : t("common.copy")}>
-              {isCopied ? <Check size={14} /> : <Copy size={14} />}
-            </span>
-          </div>
+          ))}
         </div>
+        <button type="button" className="btn m-note-sheet-cancel" onClick={close}>
+          {t("common.cancel")}
+        </button>
       </div>
     </div>
   );
@@ -282,6 +239,7 @@ export function TotpMobile() {
   }
 
   function enterSelect(id: string) {
+    m.setMoreOpenId(null);
     setSelecting(true);
     setSelectedIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
   }
@@ -337,6 +295,24 @@ export function TotpMobile() {
     });
   }, [groupSheet, m.busy]);
 
+  const allFolded = m.platforms.length > 0 && m.platforms.every((g) => m.collapsed[g.key]);
+  const foldLabel = allFolded ? t("pages.expandAll") : t("pages.collapseAll");
+
+  function renderCard(e: TotpEntry) {
+    return (
+      <TotpMobileCard
+        key={e.id}
+        e={e}
+        m={m}
+        selecting={selecting}
+        selected={selectedSet.has(e.id)}
+        locked={m.busy}
+        onToggle={() => toggleSelect(e.id)}
+        onEnterSelect={() => enterSelect(e.id)}
+      />
+    );
+  }
+
   return (
     <div className="stack-lg">
       <MobileListToolbar
@@ -377,11 +353,31 @@ export function TotpMobile() {
         ]}
       />
 
-      <TotpFilters m={m} hideSearch />
+      <div className="m-totp-view-row">
+        <TotpViewSwitcher view={m.view} setViewMode={m.setViewMode} />
+      </div>
+      <TotpFilters
+        m={m}
+        hideSearch
+        trailing={
+          m.view === "platform" && m.platforms.length > 0 ? (
+            <button
+              type="button"
+              className={"m-group-more-btn" + (allFolded ? " is-on" : "")}
+              title={foldLabel}
+              aria-label={foldLabel}
+              aria-expanded={!allFolded}
+              onClick={() => (allFolded ? m.expandAll() : m.collapseAll())}
+            >
+              {allFolded ? <ChevronsDown size={15} aria-hidden /> : <ChevronsUp size={15} aria-hidden />}
+            </button>
+          ) : undefined
+        }
+      />
 
       {m.filtered.length === 0 ? (
         <div className="card" style={{ padding: "30px 10px" }}>
-          <Empty icon="⏳" text={m.q ? t("totp.emptySearch") : t("totp.emptyMobile")} />
+          <TotpEmpty m={m} mobile />
         </div>
       ) : (
         <div className="m-totp-list">
@@ -421,22 +417,20 @@ export function TotpMobile() {
               </button>
             </div>
           )}
-          {m.filtered.map((e) => (
-            <TotpMobileCard
-              key={e.id}
-              e={e}
-              m={m}
-              selecting={selecting}
-              selected={selectedSet.has(e.id)}
-              locked={m.busy}
-              onToggle={() => toggleSelect(e.id)}
-              onEnterSelect={() => enterSelect(e.id)}
-            />
-          ))}
+          {m.view === "platform"
+            ? (
+              <TotpPlatformGroups
+                m={m}
+                variant="mobile"
+                renderRow={(e) => renderCard(e)}
+              />
+            )
+            : m.filtered.map((e) => renderCard(e))}
         </div>
       )}
 
       <TotpDialogs m={m} skipEditor />
+      <TotpActionSheet m={m} />
 
       {m.editor && (
         <TotpMobileEditor

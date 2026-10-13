@@ -488,7 +488,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
   );
 }
 
-function EditPlatformModal({
+export function EditPlatformModal({
   originalPlatform,
   currentIcon,
   builtins,
@@ -496,6 +496,8 @@ function EditPlatformModal({
   onCancel,
   onConfirm,
   onError,
+  title,
+  syncHint,
 }: {
   originalPlatform: string;
   currentIcon?: string;
@@ -504,6 +506,8 @@ function EditPlatformModal({
   onCancel: () => void;
   onConfirm: (newName: string, newIcon?: string) => Promise<void>;
   onError: (message: string) => void;
+  title?: string;
+  syncHint?: string;
 }) {
   const { t } = useTranslation();
   const [name, setName] = useState(originalPlatform);
@@ -566,7 +570,7 @@ function EditPlatformModal({
     <div className="wizard-overlay" style={{ zIndex: 60 }}>
       <div className="card dialog-card" style={{ width: 440, maxWidth: "95vw" }} onClick={(e) => e.stopPropagation()}>
         <div className="card-head">
-          <div className="card-title">{t("accounts.platformTitle")}</div>
+          <div className="card-title">{title || t("accounts.platformTitle")}</div>
         </div>
         <div className="card-body stack" style={{ gap: 14 }}>
           <div className="field">
@@ -608,7 +612,7 @@ function EditPlatformModal({
           </div>
 
           <div className="hint">
-            {t("accounts.platformSync", { name: originalPlatform })}
+            {syncHint || t("accounts.platformSync", { name: originalPlatform })}
           </div>
         </div>
         <div className="card-foot" style={{ justifyContent: "flex-end", gap: 8 }}>

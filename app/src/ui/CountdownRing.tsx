@@ -30,6 +30,7 @@ export function CountdownRing({
         } as React.CSSProperties
       }
       title={t("totp.remain", { n: remain })}
+      aria-hidden
     >
       <svg viewBox="0 0 32 32">
         <circle className="bg-circle" cx="16" cy="16" r={r} />

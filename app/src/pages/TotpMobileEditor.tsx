@@ -19,7 +19,9 @@ import { rememberCustomIcon } from "../lib/secretsUi";
 import { detectTotpInput } from "../lib/totpInput";
 import { colorIconRef } from "../shared/iconColor";
 import { findBuiltinAccount, platformEntryMode } from "../shared/iconAliases";
+import { Badge } from "../ui/common";
 import { BuiltinIconSelect } from "../ui/BuiltinIconSelect";
+import { IconMark } from "../ui/IconMark";
 import { IconUploadStack } from "../ui/IconColorPicker";
 import { GroupPicker } from "../ui/GroupPicker";
 import { OptionSelect } from "../ui/OptionSelect";
@@ -134,17 +136,19 @@ export function TotpMobileEditor({
       const issuerRaw = d.issuer || value.issuer || "";
       const keepCustom = value.icon?.startsWith("custom:");
       const matched = findBuiltinAccount(m.builtins, issuerRaw);
-      if (matched) setPlatformMode("builtin");
-      else if (issuerRaw.trim()) setPlatformMode("custom");
+      if (!value.isPlatformLocked) {
+        if (matched) setPlatformMode("builtin");
+        else if (issuerRaw.trim()) setPlatformMode("custom");
+      }
       m.setEditor({
         ...value,
         secret: d.secret,
-        issuer: matched ? matched.name : issuerRaw,
+        issuer: value.isPlatformLocked ? value.issuer : matched ? matched.name : issuerRaw,
         account: d.account || value.account,
         algorithm: d.algorithm || value.algorithm || "SHA1",
         digits: d.digits || value.digits || 6,
         period: d.period || value.period || 30,
-        icon: keepCustom ? value.icon : matched ? `builtin:${matched.id}` : value.icon,
+        icon: value.isPlatformLocked ? value.icon : keepCustom ? value.icon : matched ? `builtin:${matched.id}` : value.icon,
       });
       if ((d.algorithm && d.algorithm !== "SHA1") || d.digits !== 6 || d.period !== 30) {
         setShowAdvanced(true);
@@ -266,6 +270,18 @@ export function TotpMobileEditor({
 
           <div className="m-field">
             <label className="m-field-label">{t("totp.issuer")}</label>
+            {value.isPlatformLocked ? (
+              <div>
+                <div className="platform-brand is-locked">
+                  <IconMark icon={value.icon} builtins={m.builtins} label={value.issuer || t("totp.unnamed")} size={36} />
+                  <div className="platform-brand-main">
+                    <span className="platform-brand-name">{value.issuer || t("totp.unnamed")}</span>
+                    <Badge kind="info">{t("totp.lockedInGroup")}</Badge>
+                  </div>
+                </div>
+                <div className="m-field-hint">{t("totp.fromGroup")}</div>
+              </div>
+            ) : (
             <div className="platform-brand">
               <IconUploadStack
                 icon={value.icon}
@@ -305,6 +321,7 @@ export function TotpMobileEditor({
                 </div>
               </div>
             </div>
+            )}
           </div>
 
           <div className="m-field">

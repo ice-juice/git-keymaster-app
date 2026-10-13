@@ -10,6 +10,11 @@ function createLabelText(label: string | undefined, fallback: string) {
   return (label || fallback).replace(/^\+\s*/, "");
 }
 
+function visibleGroupChips(items: GroupTabItem[], value: string, hideZeroCount?: boolean) {
+  if (!hideZeroCount) return items;
+  return items.filter((item) => item.key === "全部" || item.key === value || (item.count ?? 0) > 0);
+}
+
 export function GroupTabs({
   items,
   value,
@@ -21,6 +26,8 @@ export function GroupTabs({
   createLabel,
   createDisabled,
   trailing,
+  hideZeroCount,
+  wrapChips,
 }: {
   items: GroupTabItem[];
   value: string;
@@ -33,6 +40,10 @@ export function GroupTabs({
   createDisabled?: boolean;
   /** 移动端分组条右侧附加操作，紧挨「更多分组」按钮。 */
   trailing?: ReactNode;
+  /** 计数为 0 的分组不进芯片条，仍留在「更多」里管理。 */
+  hideZeroCount?: boolean;
+  /** 芯片允许换行，不再靠渐隐裁掉末尾名称。 */
+  wrapChips?: boolean;
 }) {
   const isMobile = resolvePlatform() === "mobile";
 
@@ -49,6 +60,7 @@ export function GroupTabs({
         createLabel={createLabel}
         createDisabled={createDisabled}
         trailing={trailing}
+        hideZeroCount={hideZeroCount}
       />
     );
   }
@@ -64,6 +76,8 @@ export function GroupTabs({
       onDelete={onDelete}
       createLabel={createLabel}
       createDisabled={createDisabled}
+      hideZeroCount={hideZeroCount}
+      wrapChips={wrapChips}
     />
   );
 }
@@ -78,6 +92,8 @@ function DesktopGroupTabs({
   onDelete,
   createLabel,
   createDisabled,
+  hideZeroCount,
+  wrapChips,
 }: {
   items: GroupTabItem[];
   value: string;
@@ -88,6 +104,8 @@ function DesktopGroupTabs({
   onDelete?: (key: string) => void;
   createLabel?: string;
   createDisabled?: boolean;
+  hideZeroCount?: boolean;
+  wrapChips?: boolean;
 }) {
   const { t } = useTranslation();
   const trackRef = useRef<HTMLDivElement>(null);
@@ -115,10 +133,12 @@ function DesktopGroupTabs({
     }
   }, [value]);
 
+  const chips = visibleGroupChips(items, value, hideZeroCount);
+
   return (
     <div className="group-tabs-bar">
-      <div className={"group-tabs-track" + (overflows ? " is-overflow" : "")} ref={trackRef}>
-        {items.map((item) => {
+      <div className={"group-tabs-track" + (wrapChips ? " is-wrap" : overflows ? " is-overflow" : "")} ref={trackRef}>
+        {chips.map((item) => {
           const on = item.key === value;
           return (
             <button
@@ -211,6 +231,7 @@ function MobileGroupTabs({
   createLabel,
   createDisabled,
   trailing,
+  hideZeroCount,
 }: {
   items: GroupTabItem[];
   value: string;
@@ -222,6 +243,7 @@ function MobileGroupTabs({
   createLabel?: string;
   createDisabled?: boolean;
   trailing?: ReactNode;
+  hideZeroCount?: boolean;
 }) {
   const { t } = useTranslation();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -236,6 +258,7 @@ function MobileGroupTabs({
     }
   }, [value]);
 
+  const chips = visibleGroupChips(items, value, hideZeroCount);
   const barClass = [
     "m-group-filter-bar",
     hasMultiple ? "has-more" : "",
@@ -247,7 +270,7 @@ function MobileGroupTabs({
   return (
     <div className={barClass}>
       <div className="m-group-track" ref={trackRef}>
-        {items.map((item) => {
+        {chips.map((item) => {
           const on = item.key === value;
           return (
             <button
