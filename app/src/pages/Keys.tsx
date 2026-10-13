@@ -26,7 +26,7 @@ export function Keys() {
   const [showGen, setShowGen] = useState(false);
   const [viewing, setViewing] = useState<KeyRecord | null>(null);
   const [copiedId, setCopiedId] = useState<string>("");
-  const { writesLocked } = useApp();
+  const { writesLocked, dataVersion } = useApp();
 
   async function loadVault() {
     try {
@@ -46,7 +46,7 @@ export function Keys() {
 
   useEffect(() => {
     loadVault();
-  }, []);
+  }, [dataVersion]);
 
   async function doGenerate() {
     setErr("");

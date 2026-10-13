@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub const DEFAULT_AUTO_SYNC_MINUTES: u32 = 30;
-pub const MIN_AUTO_SYNC_MINUTES: u32 = 5;
+pub const MIN_AUTO_SYNC_MINUTES: u32 = 1;
 pub const MAX_AUTO_SYNC_MINUTES: u32 = 24 * 60;
 /// 内置默认更新源仓库（出厂值，用户可覆盖）。
 pub const DEFAULT_UPDATE_REPO: &str = "ice-juice/git-keymaster-app";
@@ -87,7 +87,6 @@ pub fn attachment_per_file_limit_bytes(limit_mb: u32) -> u64 {
     u64::from(clamp_attachment_per_file_limit_mb(limit_mb)) * 1024 * 1024
 }
 
-/// 0 表示关闭；其余夹到 5–1440 分钟。
 fn default_ui_locale() -> String {
     "system".into()
 }
@@ -100,6 +99,7 @@ pub fn clamp_ui_locale(raw: &str) -> String {
     }
 }
 
+/// 0 表示关闭；其余夹到 1–1440 分钟。
 pub fn clamp_auto_sync_minutes(minutes: u32) -> u32 {
     if minutes == 0 {
         0
@@ -129,7 +129,8 @@ pub struct AppConfig {
     /// 关闭主窗口时的记住选择：`tray` 最小化到托盘，`quit` 退出；`None` 每次询问。
     #[serde(default)]
     pub close_action: Option<String>,
-    /// 自动同步间隔（分钟）。0 关闭；默认 30。打开程序时仍会先拉取一次。
+    /// 自动同步间隔（分钟）。0 关闭定时；默认 30。
+    /// 每个进程只在首次解锁后后台同步一次，之后按这个间隔，不跟解锁次数走。
     #[serde(default = "default_auto_sync_minutes")]
     pub auto_sync_minutes: u32,
     /// 最近一次自动/手动云同步时间（ISO）。
@@ -138,6 +139,10 @@ pub struct AppConfig {
     /// 最近一次自动同步说明（成功或失败摘要）。
     #[serde(default)]
     pub last_auto_sync_message: Option<String>,
+    /// 真·首次云同步是否已经成功过。旧配置缺字段时为 false，仍会强制一次。
+    /// 失败不置位，下次进程启动还可以再试；之后的解锁不再强制拉取。
+    #[serde(default)]
+    pub initial_cloud_sync_done: bool,
     /// 本机安装实例 ID。换机/重装会变，不进云端工作空间。
     #[serde(default)]
     pub machine_id: String,
@@ -329,6 +334,7 @@ impl Default for AppConfig {
             auto_sync_minutes: DEFAULT_AUTO_SYNC_MINUTES,
             last_auto_sync_at: None,
             last_auto_sync_message: None,
+            initial_cloud_sync_done: false,
             machine_id: String::new(),
             update_source: None,
             auto_check_update: true,
@@ -366,16 +372,32 @@ impl AppConfig {
     pub fn load() -> Self {
         crate::identity::migrate_app_data();
         let path = config_file();
-        let mut cfg = match std::fs::read_to_string(&path) {
-            Ok(raw) => serde_json::from_str(&raw).unwrap_or_default(),
-            Err(_) => AppConfig::default(),
-        };
-        // 旧版把桶钥匙和代理密码明文写在这份文件里。先挪到待迁区并清掉
-        // 结构体上的密钥字段，这样未解锁的 IPC 读不到；先不 save，免得
-        // 保险库还没打开就把磁盘明文抹掉。
-        cfg.capture_legacy_secrets();
-        cfg.ensure_machine_id();
-        cfg
+        // 写到一半被重启打断时，正本可能不在，上一份还在 `.prev`。
+        crate::vault::recover_previous_if_missing(&path);
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => match serde_json::from_str::<Self>(&raw) {
+                Ok(mut cfg) => {
+                    // 旧版把桶钥匙和代理密码明文写在这份文件里。先挪到待迁区并清掉
+                    // 结构体上的密钥字段，这样未解锁的 IPC 读不到；先不 save，免得
+                    // 保险库还没打开就把磁盘明文抹掉。
+                    cfg.capture_legacy_secrets();
+                    cfg.ensure_machine_id();
+                    cfg
+                }
+                Err(e) => {
+                    // 解析失败绝不能 save 成默认空配置，否则工作空间路径被抹掉，
+                    // 下次启动就会进初始化向导，看起来像虚拟机重启把库重置了。
+                    log::warn!("本机 config.json 无法解析，已保留原文件: {e}");
+                    Self::default()
+                }
+            },
+            Err(_) => {
+                let mut cfg = Self::default();
+                cfg.capture_legacy_secrets();
+                cfg.ensure_machine_id();
+                cfg
+            }
+        }
     }
 
     pub fn ensure_machine_id(&mut self) -> &str {
@@ -535,6 +557,10 @@ mod tests {
             !cfg.allow_screenshots,
             "旧配置缺字段时应默认禁止截屏"
         );
+        assert!(
+            !cfg.initial_cloud_sync_done,
+            "旧配置缺字段时仍应做一次首启云同步"
+        );
         assert_eq!(clamp_ui_locale("ZH"), "zh");
         assert_eq!(clamp_ui_locale("en"), "en");
         assert_eq!(clamp_ui_locale("nope"), "system");
@@ -575,7 +601,8 @@ mod tests {
     #[test]
     fn clamp_auto_sync_minutes_off_and_range() {
         assert_eq!(clamp_auto_sync_minutes(0), 0);
-        assert_eq!(clamp_auto_sync_minutes(1), MIN_AUTO_SYNC_MINUTES);
+        assert_eq!(clamp_auto_sync_minutes(1), 1);
+        assert_eq!(clamp_auto_sync_minutes(5), 5);
         assert_eq!(clamp_auto_sync_minutes(30), 30);
         assert_eq!(clamp_auto_sync_minutes(9999), MAX_AUTO_SYNC_MINUTES);
     }

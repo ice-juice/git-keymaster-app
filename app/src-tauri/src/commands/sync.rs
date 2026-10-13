@@ -217,10 +217,12 @@ pub fn get_cloud_sync_config(state: State<AppState>) -> Result<Option<S3Config>>
 
 #[tauri::command]
 pub fn save_cloud_sync_config(
+    app: AppHandle,
     state: State<AppState>,
     sync_config: Option<S3Config>,
 ) -> Result<()> {
     let vault = clone_unlocked_vault(&state)?;
+    let configured = sync_config.is_some();
     let mut sync_config = sync_config;
     match sync_config.as_mut() {
         Some(cfg) => {
@@ -245,6 +247,13 @@ pub fn save_cloud_sync_config(
     drop(config);
     invalidate_view_cache();
     invalidate_client_cache();
+    if configured {
+        crate::sync::scheduler::capture_sync_key_from_state(&state);
+        crate::sync::scheduler::refresh_background_sync(&app);
+        crate::sync::scheduler::kick_full_sync(app);
+    } else {
+        crate::sync::scheduler::refresh_background_sync(&app);
+    }
     Ok(())
 }
 
@@ -400,6 +409,7 @@ pub async fn cloud_sync_push(app: AppHandle, state: State<'_, AppState>) -> Resu
         )
     };
 
+    let app_done = app.clone();
     let result = run_cloud_io(move || {
         let client = reuse_or_create_s3_client(sync_config, &app_cfg)?;
         let progress = |p: engine::BlobSyncProgress| {
@@ -411,6 +421,7 @@ pub async fn cloud_sync_push(app: AppHandle, state: State<'_, AppState>) -> Resu
     })
     .await?;
     invalidate_view_cache();
+    let _ = app_done.emit("vault-data-changed", ());
     Ok(result)
 }
 
@@ -429,6 +440,7 @@ pub async fn cloud_sync_pull(app: AppHandle, state: State<'_, AppState>) -> Resu
         )
     };
 
+    let app_done = app.clone();
     let result = run_cloud_io(move || {
         let client = reuse_or_create_s3_client(sync_config, &app_cfg)?;
         let progress = |p: engine::BlobSyncProgress| {
@@ -440,6 +452,7 @@ pub async fn cloud_sync_pull(app: AppHandle, state: State<'_, AppState>) -> Resu
     })
     .await?;
     invalidate_view_cache();
+    let _ = app_done.emit("vault-data-changed", ());
     Ok(result)
 }
 
@@ -471,11 +484,14 @@ pub fn get_auto_sync_settings(state: State<AppState>) -> AutoSyncSettings {
 }
 
 #[tauri::command]
-pub fn set_auto_sync_minutes(state: State<AppState>, minutes: u32) -> Result<u32> {
+pub fn set_auto_sync_minutes(app: AppHandle, state: State<AppState>, minutes: u32) -> Result<u32> {
     let minutes = clamp_auto_sync_minutes(minutes);
-    let mut cfg = recover_lock(&state.config);
-    cfg.auto_sync_minutes = minutes;
-    cfg.save()?;
+    {
+        let mut cfg = recover_lock(&state.config);
+        cfg.auto_sync_minutes = minutes;
+        cfg.save()?;
+    }
+    crate::sync::scheduler::refresh_background_sync(&app);
     Ok(minutes)
 }
 
@@ -531,7 +547,11 @@ pub fn list_cloud_snapshots(state: State<AppState>, force: Option<bool>) -> Resu
 }
 
 #[tauri::command]
-pub fn restore_cloud_snapshot(state: State<AppState>, snapshot_id: String) -> Result<SyncResult> {
+pub fn restore_cloud_snapshot(
+    app: AppHandle,
+    state: State<AppState>,
+    snapshot_id: String,
+) -> Result<SyncResult> {
     crate::commands::ensure_writes_allowed(&state)?;
     let vault_guard = recover_lock(&state.vault);
     let vault = vault_guard.as_ref().ok_or(AppError::Locked)?;
@@ -540,13 +560,16 @@ pub fn restore_cloud_snapshot(state: State<AppState>, snapshot_id: String) -> Re
     let _ = crate::commands::write::reconcile_ssh_hosts(vault);
     invalidate_view_cache();
     // 直接推送恢复结果，避免再拉一次把当前云端较新数据合并回来。
-    if let Ok(pushed) = engine::push_to_cloud(vault, &client) {
+    let result = if let Ok(pushed) = engine::push_to_cloud(vault, &client) {
         invalidate_view_cache();
-        return Ok(SyncResult {
+        SyncResult {
             message: format!("{}；已推送到云端：{}", result.message, pushed.message),
             ..pushed
-        });
-    }
+        }
+    } else {
+        result
+    };
+    let _ = app.emit("vault-data-changed", ());
     Ok(result)
 }
 

@@ -14,9 +14,11 @@ import { clearAllDrafts } from "./shared/noteDrafts";
 interface AppStore {
   status: VaultStatus | null;
   loading: boolean;
+  statusError: boolean;
   theme: ThemeMode;
   writesLocked: boolean;
   startupNote: string;
+  dataVersion: number;
   unlockAnimEnabled: boolean;
   unlockAnimStyle: UnlockAnimStyle;
   playUnlockAnim: boolean;
@@ -25,6 +27,7 @@ interface AppStore {
   setTheme: (t: ThemeMode) => void;
   toggleTheme: () => void;
   setWritesLock: (locked: boolean, note?: string | null) => void;
+  bumpData: () => void;
   setUnlockAnimEnabled: (on: boolean) => void;
   setUnlockAnimStyle: (style: UnlockAnimStyle) => void;
   startUnlockAnim: (style?: UnlockAnimStyle) => void;
@@ -39,9 +42,11 @@ applyTheme(initialTheme);
 export const useApp = create<AppStore>((set, get) => ({
   status: null,
   loading: true,
+  statusError: false,
   theme: initialTheme,
   writesLocked: false,
   startupNote: "",
+  dataVersion: 0,
   unlockAnimEnabled: getUnlockAnimEnabled(),
   unlockAnimStyle: getUnlockAnimStyle(),
   playUnlockAnim: false,
@@ -50,6 +55,7 @@ export const useApp = create<AppStore>((set, get) => ({
   setWritesLock: (locked, note) => {
     set({ writesLocked: locked, startupNote: note ?? "" });
   },
+  bumpData: () => set((s) => ({ dataVersion: s.dataVersion + 1 })),
   setUnlockAnimEnabled: (on: boolean) => {
     setUnlockAnimEnabledStored(on);
     set({ unlockAnimEnabled: on });
@@ -81,11 +87,13 @@ export const useApp = create<AppStore>((set, get) => ({
       set({
         status,
         loading: false,
+        statusError: false,
         writesLocked: !!status.writesLocked,
         startupNote: status.startupNote ?? "",
       });
     } catch {
-      set({ loading: false });
+      // 读状态失败不能当成「未初始化」，否则会误进引导页。
+      set({ loading: false, statusError: true });
     }
   },
   lock: async () => {

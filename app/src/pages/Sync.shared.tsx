@@ -42,6 +42,8 @@ type S3AuthIntent = "export" | "share" | "reveal";
 
 const AUTO_PRESETS: { labelKey: string; minutes: number }[] = [
   { labelKey: "syncPage.intervalOff", minutes: 0 },
+  { labelKey: "syncPage.interval1", minutes: 1 },
+  { labelKey: "syncPage.interval5", minutes: 5 },
   { labelKey: "syncPage.interval15", minutes: 15 },
   { labelKey: "syncPage.interval30", minutes: 30 },
   { labelKey: "syncPage.interval60", minutes: 60 },

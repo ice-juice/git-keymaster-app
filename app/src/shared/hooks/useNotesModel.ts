@@ -109,7 +109,7 @@ async function writeNoteExport(entry: NoteEntry, dest: string, format: NoteExpor
 }
 
 export function useNotesModel() {
-  const { writesLocked } = useApp();
+  const { writesLocked, dataVersion } = useApp();
   const [entries, setEntries] = useState<NoteEntry[]>([]);
   const [groups, setGroups] = useState<GroupMeta[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -152,7 +152,7 @@ export function useNotesModel() {
 
   useEffect(() => {
     load().catch((e) => setErr(errMessage(e)));
-  }, [load]);
+  }, [load, dataVersion]);
 
   const allTags = useMemo(() => {
     const set = new Set<string>();

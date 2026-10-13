@@ -10,7 +10,7 @@ use crate::vault::kdf::{calibrate, DEFAULT_TARGET_MS};
 use crate::vault::Vault;
 use serde::Serialize;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -27,7 +27,7 @@ pub struct VaultStatus {
     pub grace_expires_at: Option<String>,
     /// `tray` / `quit` / None（每次询问）。
     pub close_action: Option<String>,
-    /// 启动云同步未完成时禁止修改。
+    /// 云同步不再挡住操作。字段保留，避免旧前端读不到。
     pub writes_locked: bool,
     /// 移动端主界面返回键：true 回系统桌面保活，false 退出。
     pub mobile_background_run: bool,
@@ -243,7 +243,6 @@ pub fn vault_unlock(app: AppHandle, state: State<'_, AppState>, password: String
             recover_lock(&state.unlock_guard).reset();
             crate::commands::hydrate_config_secrets(&state);
             grant_grace_if_configured(&state);
-            begin_write_lock(&state, &app, "正在从云端同步，可浏览、暂不可修改");
             schedule_after_unlock(app);
             Ok(())
         }
@@ -268,7 +267,6 @@ pub fn vault_unlock_recovery(
     drop(vault);
     crate::commands::hydrate_config_secrets(&state);
     grant_grace_if_configured(&state);
-    begin_write_lock(&state, &app, "正在从云端同步，可浏览、暂不可修改");
     schedule_after_unlock(app);
     Ok(())
 }
@@ -294,7 +292,6 @@ pub fn vault_unlock_biometric(app: AppHandle, state: State<'_, AppState>) -> Res
             recover_lock(&state.unlock_guard).reset();
             crate::commands::hydrate_config_secrets(&state);
             grant_grace_if_configured(&state);
-            begin_write_lock(&state, &app, "正在从云端同步，可浏览、暂不可修改");
             schedule_after_unlock(app);
             Ok(())
         }
@@ -325,6 +322,7 @@ pub fn lock_in_memory(state: &AppState) {
     crate::commands::sync::invalidate_cloud_view_cache();
     crate::commands::sync::invalidate_client_cache();
     crate::biometric::clear_session_secrets();
+    // 不清除进程级 sync_key：锁屏/托盘后定时云同步还要靠它。界面本身已锁。
     // 锁上了却把刚复制的密码留在剪贴板，等于没锁。
     crate::clipboard::clear_on_teardown();
     crate::commands::clear_reveal_grace(state);
@@ -540,47 +538,13 @@ pub fn vault_try_grace_unlock(app: AppHandle, state: State<'_, AppState>) -> Res
     Ok(ok)
 }
 
-fn begin_write_lock(state: &AppState, app: &AppHandle, note: &str) {
-    state
-        .writes_locked
-        .store(true, std::sync::atomic::Ordering::SeqCst);
-    if let Ok(mut n) = state.startup_note.lock() {
-        *n = Some(note.to_string());
-    }
-    let _ = app.emit(
-        "writes-lock",
-        serde_json::json!({ "locked": true, "note": note }),
-    );
-}
-
-fn end_write_lock(state: &AppState, app: &AppHandle) {
-    state
-        .writes_locked
-        .store(false, std::sync::atomic::Ordering::SeqCst);
-    if let Ok(mut n) = state.startup_note.lock() {
-        *n = None;
-    }
-    let _ = app.emit(
-        "writes-lock",
-        serde_json::json!({ "locked": false, "note": null }),
-    );
-    let _ = app.emit("startup-ready", serde_json::json!({}));
-}
-
-fn set_startup_note(state: &AppState, app: &AppHandle, note: &str) {
-    if let Ok(mut n) = state.startup_note.lock() {
-        *n = Some(note.to_string());
-    }
-    let _ = app.emit(
-        "writes-lock",
-        serde_json::json!({ "locked": true, "note": note }),
-    );
-}
-
-/// 解锁后的慢活：先拉云端，再补 SSH / 加载 agent。不挡进入主界面。
+/// 解锁后的慢活：补 SSH / 加载 agent。云同步不在这里做，也不锁写入。
+///
+/// 首启强制同步由调度器按配置级标记决定；之后的解锁不再立刻拉取。
+/// 锁屏、托盘都不会停掉定时器。
 pub(crate) fn schedule_after_unlock(app: AppHandle) {
+    crate::sync::scheduler::on_vault_unlocked(app.clone());
     let state = app.state::<AppState>();
-    begin_write_lock(&state, &app, "正在从云端同步，可浏览、暂不可修改");
     if state
         .bootstrap_busy
         .swap(true, std::sync::atomic::Ordering::SeqCst)
@@ -597,23 +561,18 @@ pub(crate) fn schedule_after_unlock(app: AppHandle) {
         {
             let _ = crate::sys::adopt_ssh_config(std::path::Path::new(&p));
         }
-        set_startup_note(&state, &app, "正在从云端拉取身份数据…");
-        let _ = crate::sync::scheduler::run(&app, "startup");
-        set_startup_note(&state, &app, "正在补齐 SSH 配置…");
         let vault_clone = match state.vault.lock() {
             Ok(g) => g.as_ref().filter(|v| v.is_unlocked()).cloned(),
             Err(_) => {
                 state
                     .bootstrap_busy
                     .store(false, std::sync::atomic::Ordering::SeqCst);
-                end_write_lock(&state, &app);
                 return;
             }
         };
         if let Some(v) = vault_clone {
             let _ = crate::commands::write::reconcile_ssh_hosts(&v);
         }
-        set_startup_note(&state, &app, "正在加载 ssh-agent…");
         load_agent_best_effort(&state);
         state
             .bootstrap_busy
@@ -625,12 +584,7 @@ pub(crate) fn schedule_after_unlock(app: AppHandle) {
             .and_then(|g| g.as_ref().map(|v| v.is_unlocked()))
             .unwrap_or(false);
         if still_unlocked {
-            end_write_lock(&state, &app);
             crate::update::scheduler::kick_after_unlock(app.clone());
-        } else {
-            state
-                .writes_locked
-                .store(false, std::sync::atomic::Ordering::SeqCst);
         }
     });
 }
@@ -644,10 +598,14 @@ pub fn set_launch_at_login(state: State<AppState>, enabled: bool) -> Result<()> 
 }
 
 #[tauri::command]
-pub fn set_mobile_background_run(state: State<AppState>, enabled: bool) -> Result<()> {
-    let mut cfg = recover_lock(&state.config);
-    cfg.mobile_background_run = enabled;
-    cfg.save()
+pub fn set_mobile_background_run(app: AppHandle, state: State<AppState>, enabled: bool) -> Result<()> {
+    {
+        let mut cfg = recover_lock(&state.config);
+        cfg.mobile_background_run = enabled;
+        cfg.save()?;
+    }
+    crate::sync::scheduler::refresh_background_sync(&app);
+    Ok(())
 }
 
 #[tauri::command]
@@ -794,6 +752,7 @@ pub fn factory_reset(
     steps.push("已关闭开机自启动并清除免验证会话与指纹凭据".into());
 
     *recover_lock(&state.vault) = None;
+    crate::sync::scheduler::clear_sync_key(&state);
     {
         let mut cfg = crate::app_config::AppConfig::default();
         cfg.ensure_machine_id();

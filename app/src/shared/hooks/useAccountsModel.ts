@@ -49,7 +49,7 @@ function initExtraDraft(value: AccountEditorState): AccountEditorState {
 }
 
 export function useAccountsModel() {
-  const { writesLocked } = useApp();
+  const { writesLocked, dataVersion } = useApp();
   const [entries, setEntries] = useState<AccountEntry[]>([]);
   const [groups, setGroups] = useState<GroupMeta[]>([]);
   const [totps, setTotps] = useState<TotpEntry[]>([]);
@@ -102,7 +102,7 @@ export function useAccountsModel() {
 
   useEffect(() => {
     load().catch((e) => setErr(errMessage(e)));
-  }, [load]);
+  }, [load, dataVersion]);
 
   useEffect(() => {
     api

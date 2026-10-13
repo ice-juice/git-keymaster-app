@@ -32,7 +32,7 @@ export function clipNote(note?: string | null) {
 export { NOTE_MAX };
 
 export function useTotpModel() {
-  const { writesLocked } = useApp();
+  const { writesLocked, dataVersion } = useApp();
   const [entries, setEntries] = useState<TotpEntry[]>([]);
   const [groups, setGroups] = useState<GroupMeta[]>([]);
   const [builtins, setBuiltins] = useState<BuiltinIconInfo[]>([]);
@@ -65,7 +65,7 @@ export function useTotpModel() {
 
   useEffect(() => {
     load().catch((e) => setErr(errMessage(e)));
-  }, [load]);
+  }, [load, dataVersion]);
 
   useEffect(() => {
     api

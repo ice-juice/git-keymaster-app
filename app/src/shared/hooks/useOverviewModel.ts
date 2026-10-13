@@ -45,7 +45,7 @@ export interface TestResultMap {
 
 export function useOverviewModel() {
   const nav = useNavigate();
-  const { writesLocked } = useApp();
+  const { writesLocked, dataVersion } = useApp();
   const skipLocalGit = resolvePlatform() === "mobile";
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [keys, setKeys] = useState<KeyRecord[]>([]);
@@ -90,7 +90,7 @@ export function useOverviewModel() {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [dataVersion]);
 
   useEffect(() => {
     if (writesLocked) return;

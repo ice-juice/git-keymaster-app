@@ -90,7 +90,7 @@ function haystack(e: FileEntry): string {
 }
 
 export function useFilesModel() {
-  const { writesLocked } = useApp();
+  const { writesLocked, dataVersion } = useApp();
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [groups, setGroups] = useState<GroupMeta[]>([]);
   const [usageBytes, setUsageBytes] = useState(0);
@@ -122,7 +122,7 @@ export function useFilesModel() {
 
   useEffect(() => {
     load().catch((e) => setErr(errMessage(e)));
-  }, [load]);
+  }, [load, dataVersion]);
 
   useEffect(() => {
     api

@@ -19,7 +19,7 @@ const SOURCE_KEYS: Record<string, string> = {
 
 export function Repos() {
   const { t } = useTranslation();
-  const { writesLocked } = useApp();
+  const { writesLocked, dataVersion } = useApp();
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get("tab");
   const hasUrlParam = !!searchParams.get("url");
@@ -70,7 +70,7 @@ export function Repos() {
 
   useEffect(() => {
     load();
-  }, []);
+  }, [dataVersion]);
 
   async function pickRoot() {
     setErr("");

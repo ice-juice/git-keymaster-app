@@ -2,5 +2,6 @@
 
 #[cfg(target_os = "ios")]
 pub mod ios_layout;
+pub mod bgsync;
 pub mod nav;
 pub mod update;

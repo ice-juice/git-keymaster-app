@@ -18,7 +18,7 @@ interface NavItemDef {
 export function Layout({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const location = useLocation();
-  const { status, lock, writesLocked, startupNote } = useApp();
+  const { status, lock, writesLocked, startupNote, dataVersion } = useApp();
   const [idCount, setIdCount] = useState<number | null>(null);
   const [keyCount, setKeyCount] = useState<number | null>(null);
   const [repoCount, setRepoCount] = useState<number | null>(null);
@@ -54,7 +54,7 @@ export function Layout({ children }: { children: ReactNode }) {
     return () => {
       unmounted = true;
     };
-  }, [status?.unlocked, writesLocked]);
+  }, [status?.unlocked, writesLocked, dataVersion]);
 
   const GIT_NAV: NavItemDef[] = [
     { to: "/", label: t("nav.overview"), icon: "home", end: true, badge: idCount },

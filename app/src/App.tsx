@@ -22,7 +22,7 @@ import { FilesPage } from "./pages/Files";
 import { NotesPage } from "./pages/Notes";
 import { NoteMobileEditorPreview } from "./pages/NoteMobileEditor.preview";
 import { CloseConfirmHost } from "./ui/CloseConfirm";
-import { ToastHost } from "./ui/Toast";
+import { showAppToast, ToastHost } from "./ui/Toast";
 import UnlockAnimation from "./ui/UnlockAnimation";
 import { MobileShell } from "./ui/MobileShell";
 import { CommandPalette } from "./ui/CommandPalette";
@@ -68,8 +68,10 @@ export default function App() {
   const {
     status,
     loading,
+    statusError,
     refresh,
     setWritesLock,
+    bumpData,
     playUnlockAnim,
     animPreviewStyle,
     unlockAnimStyle,
@@ -178,6 +180,31 @@ export default function App() {
   }, [refresh, setWritesLock]);
 
   useEffect(() => {
+    let unlistenData: (() => void) | undefined;
+    let unlistenSync: (() => void) | undefined;
+    listen("vault-data-changed", () => {
+      bumpData();
+    })
+      .then((fn) => {
+        unlistenData = fn;
+      })
+      .catch(() => {});
+    listen<{ ok?: boolean; trigger?: string }>("cloud-auto-sync", (ev) => {
+      if (ev.payload?.ok === false && ev.payload?.trigger === "startup") {
+        showAppToast(t("startup.syncFailed"), { dismissible: true });
+      }
+    })
+      .then((fn) => {
+        unlistenSync = fn;
+      })
+      .catch(() => {});
+    return () => {
+      unlistenData?.();
+      unlistenSync?.();
+    };
+  }, [bumpData, t]);
+
+  useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen("window-restored", async () => {
       try {
@@ -186,6 +213,11 @@ export default function App() {
         /* 免验证未开启或已过期，走解锁页 */
       }
       await refresh();
+      try {
+        await api.runAutoSyncNow();
+      } catch {
+        /* 补一次周期同步失败不打断恢复 */
+      }
     })
       .then((fn) => {
         unlisten = fn;
@@ -209,7 +241,16 @@ export default function App() {
         <div className="muted">{t("common.loading")}</div>
       </div>
     );
-  } else if (!status?.initialized) {
+  } else if (statusError || !status) {
+    screen = (
+      <div className="center-stage">
+        <div className="muted">{t("common.statusLoadFailed")}</div>
+        <button type="button" className="btn primary" onClick={() => void refresh()}>
+          {t("common.refresh")}
+        </button>
+      </div>
+    );
+  } else if (!status.initialized) {
     screen = <InitWizard />;
   } else if (!status.unlocked) {
     screen = <Unlock />;
