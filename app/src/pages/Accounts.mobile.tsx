@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import {
   ChevronDown,
+  ChevronsDown,
+  ChevronsUp,
   Clock,
   Copy,
   ExternalLink,
@@ -26,7 +28,7 @@ import { AccountsDialogs, AccountsFilters, PlatformTagFilter } from "./Accounts.
 import { activeAccountTag, tagsInAccounts, visibleAccountsForTag } from "../shared/accountList";
 import { AccountMobileEditor } from "./AccountMobileEditor";
 import { useItemFocus } from "../shared/hooks/useItemFocus";
-import { parseIconColor, pickPlatformIcon } from "../shared/iconColor";
+import { parseIconColor, platformListIcon } from "../shared/iconColor";
 
 function AccountMobileCard({
   e,
@@ -200,7 +202,7 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
         const tags = tagsInAccounts(list);
         const selected = activeAccountTag(tags, m.selectedTags[platform]);
         const shown = visibleAccountsForTag(list, selected);
-        const iconItem = pickPlatformIcon(list.map((e) => e.icon));
+        const iconItem = platformListIcon(platform, list.map((e) => e.icon), m.builtins);
         const urlItem = list.find((e) => e.url)?.url;
         const accent = platformAccent(platform, iconItem, m.builtins);
 
@@ -358,6 +360,24 @@ function AccountsMobileList({ m }: { m: AccountsModel }) {
   );
 }
 
+function PlatformFoldToggle({ m }: { m: AccountsModel }) {
+  const { t } = useTranslation();
+  const allFolded = m.platforms.every(([platform]) => m.collapsed[platform]);
+  const label = allFolded ? t("pages.expandAll") : t("pages.collapseAll");
+  return (
+    <button
+      type="button"
+      className={"m-group-more-btn" + (allFolded ? " is-on" : "")}
+      title={label}
+      aria-label={label}
+      aria-expanded={!allFolded}
+      onClick={() => (allFolded ? m.expandAll() : m.collapseAll())}
+    >
+      {allFolded ? <ChevronsDown size={15} /> : <ChevronsUp size={15} />}
+    </button>
+  );
+}
+
 export function AccountsMobile() {
   const { t } = useTranslation();
   const m = useAccountsModel();
@@ -379,7 +399,11 @@ export function AccountsMobile() {
         onAdd={() => m.setEditor({})}
       />
 
-      <AccountsFilters m={m} hideSearch />
+      <AccountsFilters
+        m={m}
+        hideSearch
+        groupTrailing={m.platforms.length > 0 ? <PlatformFoldToggle m={m} /> : undefined}
+      />
       <AccountsMobileList m={m} />
       <AccountsDialogs m={m} compact skipEditor />
 

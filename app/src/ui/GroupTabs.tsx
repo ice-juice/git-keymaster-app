@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDown, Layers, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { resolvePlatform } from "../platform/resolve";
@@ -20,6 +20,7 @@ export function GroupTabs({
   onDelete,
   createLabel,
   createDisabled,
+  trailing,
 }: {
   items: GroupTabItem[];
   value: string;
@@ -30,6 +31,8 @@ export function GroupTabs({
   onDelete?: (key: string) => void;
   createLabel?: string;
   createDisabled?: boolean;
+  /** 移动端分组条右侧附加操作，紧挨「更多分组」按钮。 */
+  trailing?: ReactNode;
 }) {
   const isMobile = resolvePlatform() === "mobile";
 
@@ -45,6 +48,7 @@ export function GroupTabs({
         onDelete={onDelete}
         createLabel={createLabel}
         createDisabled={createDisabled}
+        trailing={trailing}
       />
     );
   }
@@ -200,6 +204,7 @@ function MobileGroupTabs({
   onDelete,
   createLabel,
   createDisabled,
+  trailing,
 }: {
   items: GroupTabItem[];
   value: string;
@@ -210,6 +215,7 @@ function MobileGroupTabs({
   onDelete?: (key: string) => void;
   createLabel?: string;
   createDisabled?: boolean;
+  trailing?: ReactNode;
 }) {
   const { t } = useTranslation();
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -224,8 +230,16 @@ function MobileGroupTabs({
     }
   }, [value]);
 
+  const barClass = [
+    "m-group-filter-bar",
+    hasMultiple ? "has-more" : "",
+    trailing ? "has-trailing" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className="m-group-filter-bar">
+    <div className={barClass}>
       <div className="m-group-track" ref={trackRef}>
         {items.map((item) => {
           const on = item.key === value;
@@ -260,17 +274,20 @@ function MobileGroupTabs({
         )}
       </div>
 
-      {hasMultiple && (
+      {(hasMultiple || trailing) && (
         <div className="m-group-more-box">
-          <button
-            type="button"
-            className={"m-group-more-btn" + (sheetOpen ? " is-open" : "")}
-            aria-label={t("group.openList")}
-            title={t("group.openList")}
-            onClick={() => setSheetOpen(true)}
-          >
-            <Layers size={15} />
-          </button>
+          {hasMultiple && (
+            <button
+              type="button"
+              className={"m-group-more-btn" + (sheetOpen ? " is-open" : "")}
+              aria-label={t("group.openList")}
+              title={t("group.openList")}
+              onClick={() => setSheetOpen(true)}
+            >
+              <Layers size={15} />
+            </button>
+          )}
+          {trailing}
         </div>
       )}
 

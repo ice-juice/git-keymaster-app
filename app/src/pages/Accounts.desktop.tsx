@@ -14,6 +14,7 @@ export function AccountsDesktop() {
     m.clearPlatformTags();
     m.setCollapsed({});
   });
+  const allFolded = m.platforms.length > 0 && m.platforms.every(([platform]) => m.collapsed[platform]);
 
   return (
     <div className="stack-lg">
@@ -22,11 +23,14 @@ export function AccountsDesktop() {
         desc={t("pages.accountsDesc")}
         actions={
           <>
-            <button type="button" className="btn sm" onClick={m.expandAll}>
-              <ChevronsDown size={13} /> {t("pages.expandAll")}
-            </button>
-            <button type="button" className="btn sm" onClick={m.collapseAll}>
-              <ChevronsUp size={13} /> {t("pages.collapseAll")}
+            <button
+              type="button"
+              className={"btn sm" + (allFolded ? " is-folded" : "")}
+              aria-pressed={allFolded}
+              onClick={() => (allFolded ? m.expandAll() : m.collapseAll())}
+            >
+              {allFolded ? <ChevronsDown size={13} /> : <ChevronsUp size={13} />}
+              {allFolded ? t("pages.expandAll") : t("pages.collapseAll")}
             </button>
             <button type="button" className="btn primary sm" disabled={m.writesLocked} onClick={() => m.setEditor({})}>
               <Plus size={13} /> {t("pages.addAccount")}

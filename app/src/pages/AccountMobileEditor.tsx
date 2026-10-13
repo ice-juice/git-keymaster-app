@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from "react";
+import { useMemo, useRef, useState, useEffect, type KeyboardEvent } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   ChevronLeft,
@@ -19,13 +19,15 @@ import {
 import { useTranslation } from "react-i18next";
 import { api, errMessage } from "../lib/ipc";
 import { rememberCustomIcon } from "../lib/secretsUi";
-import { detectAccountSource, resolvePlatformBrand, suggestIcon } from "../lib/accountInput";
+import { detectAccountSource, platformFamily, resolvePlatformBrand, suggestIcon } from "../lib/accountInput";
 import { Badge } from "../ui/common";
 import { IconMark } from "../ui/IconMark";
 import { GroupPicker } from "../ui/GroupPicker";
 import { OptionSelect } from "../ui/OptionSelect";
 import { type AccountsModel } from "../shared/hooks/useAccountsModel";
+import { appendAccountTags, tagsForPlatform } from "../shared/accountList";
 import { AccountTagSuggestions } from "./Accounts.shared";
+import { AccountTag } from "../ui/AccountTag";
 import { useOverlayBack } from "../shared/mobileBack";
 import { AccountExtraFields } from "../ui/AccountExtraFields";
 import { BuiltinIconSelect } from "../ui/BuiltinIconSelect";
@@ -502,30 +504,12 @@ export function AccountMobileEditor({
             />
           </div>
 
-          <div className="m-field">
-            <label className="m-field-label">
-              <span className="row" style={{ gap: 4 }}>
-                <Tag size={13} />
-                <span>{t("accounts.tags")}</span>
-              </span>
-            </label>
-            <input
-              className="input"
-              placeholder={t("accounts.tagsPh")}
-              value={(value.tags || []).join(" ")}
-              onChange={(e) =>
-                m.setEditor({
-                  ...value,
-                  tags: e.target.value.split(/\s+/).filter(Boolean),
-                })
-              }
-            />
-            <AccountTagSuggestions
-              existing={m.allTags}
-              value={value.tags}
-              onChange={(tags) => m.setEditor({ ...value, tags })}
-            />
-          </div>
+          <MobileAccountTags
+            key={value.id || "new"}
+            tags={value.tags || []}
+            existing={tagsForPlatform(m.entries, value.platform || "", (name) => platformFamily(name, m.builtins))}
+            onChange={(tags) => m.setEditor((prev) => (prev ? { ...prev, tags } : prev))}
+          />
 
           <div className="m-field">
             <label className="m-field-label">
@@ -590,6 +574,93 @@ export function AccountMobileEditor({
           </section>
         )}
       </main>
+    </div>
+  );
+}
+
+function MobileAccountTags({
+  tags,
+  existing,
+  onChange,
+}: {
+  tags: string[];
+  existing: string[];
+  onChange: (tags: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState("");
+  const confirmed = tags.map((tag) => tag.trim()).filter(Boolean);
+
+  function pushTags(raw: string) {
+    const next = appendAccountTags(confirmed, raw);
+    if (next.length !== confirmed.length || next.some((tag, index) => tag !== confirmed[index])) onChange(next);
+  }
+
+  function onDraftChange(raw: string) {
+    if (!/\s/.test(raw)) {
+      setDraft(raw);
+      return;
+    }
+    const finished = /\s$/.test(raw);
+    const parts = raw.split(/\s+/).filter(Boolean);
+    const done = finished ? parts : parts.slice(0, -1);
+    const rest = finished ? "" : parts[parts.length - 1] || "";
+    if (done.length) pushTags(done.join(" "));
+    setDraft(rest);
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.nativeEvent.isComposing || event.key === "Process" || event.keyCode === 229) return;
+    if (event.key === "Enter" || event.key === " " || event.code === "Space") {
+      event.preventDefault();
+      pushTags(draft);
+      setDraft("");
+      return;
+    }
+    if (event.key === "Backspace" && !draft && confirmed.length) {
+      event.preventDefault();
+      onChange(confirmed.slice(0, -1));
+    }
+  }
+
+  return (
+    <div className="m-field">
+      <label className="m-field-label" htmlFor="m-account-tag-entry">
+        <span className="row" style={{ gap: 4 }}>
+          <Tag size={13} />
+          <span>{t("accounts.tags")}</span>
+        </span>
+      </label>
+      <div className="m-account-tag-box">
+        {confirmed.map((tag, index) => (
+          <AccountTag
+            key={`${tag}-${index}`}
+            tag={tag}
+            onRemove={() => onChange(confirmed.filter((_, itemIndex) => itemIndex !== index))}
+            removeLabel={t("common.remove")}
+          />
+        ))}
+        <input
+          id="m-account-tag-entry"
+          className="m-account-tag-entry"
+          placeholder={t("accounts.tagsChipPh")}
+          value={draft}
+          autoCapitalize="none"
+          autoCorrect="off"
+          autoComplete="off"
+          enterKeyHint="done"
+          onChange={(event) => onDraftChange(event.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      </div>
+      <div className="m-account-tag-suggest">
+        <AccountTagSuggestions
+          existing={existing}
+          value={confirmed}
+          hashed={false}
+          onChange={onChange}
+        />
+      </div>
     </div>
   );
 }

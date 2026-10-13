@@ -1,3 +1,5 @@
+import { resolveBuiltinQuery } from "./iconAliases.ts";
+
 /** 字母图标的预设色。存在账号 icon 字段里，格式为 `color:#RRGGBB`。 */
 export const ICON_PRESET_COLORS = [
   "#2563eb",
@@ -41,4 +43,23 @@ export function pickPlatformIcon(icons: Array<string | null | undefined>): strin
     list.find((icon) => icon.startsWith("color:")) ||
     list[0]
   );
+}
+
+/**
+ * 列表里同一平台的头部图标。
+ * 账号上的上传图、已保存的内置图标、显式字母色都保留；
+ * 图标为空时按平台名回退到预设内置 logo。
+ */
+export function platformListIcon(
+  platform: string | null | undefined,
+  icons: Array<string | null | undefined>,
+  builtins: { id: string; name: string }[],
+): string | undefined {
+  const picked = pickPlatformIcon(icons);
+  if (picked && !isLetterIcon(picked)) return picked;
+  if (!picked) {
+    const id = resolveBuiltinQuery(platform || "", builtins);
+    if (id) return `builtin:${id}`;
+  }
+  return picked;
 }

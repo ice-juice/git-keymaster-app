@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
   activeAccountTag,
+  appendAccountTags,
   collectAccountTags,
   compareAccountsInPlatform,
   primaryAccountTag,
+  tagsForPlatform,
   tagsInAccounts,
   toggleAccountTag,
   visibleAccountsForTag,
@@ -96,5 +98,66 @@ describe("toggleAccountTag", () => {
   test("adds a new tag and removes an existing one", () => {
     assert.deepEqual(toggleAccountTag(["老婆"], "work"), ["老婆", "work"]);
     assert.deepEqual(toggleAccountTag(["老婆", "work"], "老婆"), ["work"]);
+  });
+});
+
+describe("tagsForPlatform", () => {
+  const entries = [
+    { platform: "GitHub", tags: ["mine", "shared"] },
+    { platform: "  GitHub  ", tags: ["team"] },
+    { platform: "GitLab", tags: ["mine"] },
+    { platform: "   ", tags: ["ghost"] },
+    { platform: "", tags: ["empty"] },
+  ];
+
+  test("keeps the account being edited and drops other platforms", () => {
+    assert.deepEqual(tagsForPlatform(entries, "GitHub"), ["mine", "shared", "team"]);
+  });
+
+  test("matches trimmed platform names without caring about case", () => {
+    assert.deepEqual(tagsForPlatform(entries, " github "), ["mine", "shared", "team"]);
+  });
+
+  test("is empty when the platform is blank or not in the vault", () => {
+    assert.deepEqual(tagsForPlatform(entries, ""), []);
+    assert.deepEqual(tagsForPlatform(entries, "   "), []);
+    assert.deepEqual(tagsForPlatform(entries, "Notion"), []);
+  });
+
+  test("uses the same family key as platform grouping", () => {
+    const family = (name: string) => {
+      const trimmed = name.trim().toLowerCase();
+      if (!trimmed) return "";
+      if (trimmed === "github" || trimmed === "gh") return "builtin:github";
+      return trimmed;
+    };
+    assert.deepEqual(
+      tagsForPlatform(
+        [
+          { platform: "GitHub", tags: ["work"] },
+          { platform: "gh", tags: ["oss"] },
+          { platform: "GitLab", tags: ["home"] },
+        ],
+        " github ",
+        family,
+      ),
+      ["oss", "work"],
+    );
+    assert.deepEqual(tagsForPlatform([{ platform: "gh", tags: ["oss"] }], "Notion", family), []);
+  });
+
+  test("stays empty when the family key itself is blank", () => {
+    assert.deepEqual(
+      tagsForPlatform([{ platform: "GitHub", tags: ["work"] }], "GitHub", () => ""),
+      [],
+    );
+  });
+});
+
+describe("appendAccountTags", () => {
+  test("commits words and skips blanks or duplicates", () => {
+    assert.deepEqual(appendAccountTags(["老婆"], " work  work "), ["老婆", "work"]);
+    assert.deepEqual(appendAccountTags(["work"], "   "), ["work"]);
+    assert.deepEqual(appendAccountTags(undefined, " home  work "), ["home", "work"]);
   });
 });

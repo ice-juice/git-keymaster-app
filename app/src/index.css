@@ -377,6 +377,16 @@ body {
   color: #fff;
 }
 .btn.sm { padding: 2.5px 7px; font-size: 11px; }
+.btn.is-folded {
+  background: var(--accent-soft);
+  border-color: rgba(99, 102, 241, 0.45);
+  color: var(--accent);
+}
+.btn.is-folded:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .btn.lg { padding: 6px 14px; font-size: 12.5px; }
 
 /* 卡片与网格 */
@@ -2184,6 +2194,70 @@ hr.sep { border: none; border-top: 1px solid var(--border); margin: 6px 0; }
 }
 .icon-color-swatch.on {
   box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--text);
+}
+.account-tag-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--input-bg);
+  box-sizing: border-box;
+}
+.account-tag-box:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.account-tag-box .account-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 2px 0 8px;
+  border-style: solid;
+  border-width: 1px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1;
+}
+.account-tag-box .account-tag-x {
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+.account-tag-box .account-tag-x:hover,
+.account-tag-box .account-tag-x:active {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+.account-tag-entry {
+  flex: 1 1 96px;
+  min-width: 72px;
+  height: 22px;
+  padding: 0 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+}
+.account-tag-entry::placeholder {
+  color: var(--text-mute);
 }
 .account-tag-suggest {
   display: flex;

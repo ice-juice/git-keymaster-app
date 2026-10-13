@@ -71,7 +71,8 @@ export function IconMark({
   const info = builtins.find((b) => b.id === id) || fallbackIcon();
   const letter = (label || info.glyph || "?").slice(0, 2);
   const tint = color || parseIconColor(icon) || art?.color || info.color;
-  if (art && !color && !parseIconColor(icon)) {
+  // 外部强调色只涂字母底。有预设图形时仍画 logo，避免平台头被染成字母。
+  if (art) {
     const mark = Math.max(10, Math.round(size * 0.62));
     return (
       <div

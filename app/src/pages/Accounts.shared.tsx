@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useRef, useState } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, Copy, Eye, EyeOff, Plus, Clock, ExternalLink, Check, Pencil } from "lucide-react";
 import {
@@ -10,7 +10,7 @@ import {
 } from "../lib/ipc";
 import { copyWithClear, rememberCustomIcon } from "../lib/secretsUi";
 import { Empty, Badge, ConfirmDangerDialog, FieldLabel, ErrorDialog } from "../ui/common";
-import { detectAccountSource, resolvePlatformBrand, suggestIcon } from "../lib/accountInput";
+import { detectAccountSource, platformFamily, resolvePlatformBrand, suggestIcon } from "../lib/accountInput";
 import { ReauthDialog } from "../ui/ReauthDialog";
 import { IconMark } from "../ui/IconMark";
 import { CountdownRing } from "../ui/CountdownRing";
@@ -19,7 +19,7 @@ import { GroupPicker } from "../ui/GroupPicker";
 import { GroupTabs } from "../ui/GroupTabs";
 import { useTranslation } from "react-i18next";
 import { type AccountEditorState, type AccountsModel } from "../shared/hooks/useAccountsModel";
-import { activeAccountTag, tagsInAccounts, toggleAccountTag, visibleAccountsForTag } from "../shared/accountList";
+import { activeAccountTag, appendAccountTags, tagsForPlatform, tagsInAccounts, toggleAccountTag, visibleAccountsForTag } from "../shared/accountList";
 import { findBuiltinAccount, platformEntryMode } from "../shared/iconAliases";
 import { useOverlayBack } from "../shared/mobileBack";
 import { AccountExtraFields } from "../ui/AccountExtraFields";
@@ -28,9 +28,17 @@ import { BuiltinIconSelect } from "../ui/BuiltinIconSelect";
 import { IconUploadStack } from "../ui/IconColorPicker";
 import { OptionSelect } from "../ui/OptionSelect";
 import { PasswordGenerateControls } from "../ui/PasswordGenerate";
-import { colorIconRef, parseIconColor, pickPlatformIcon } from "../shared/iconColor";
+import { colorIconRef, parseIconColor, platformListIcon } from "../shared/iconColor";
 
-export function AccountsFilters({ m, hideSearch }: { m: AccountsModel; hideSearch?: boolean }) {
+export function AccountsFilters({
+  m,
+  hideSearch,
+  groupTrailing,
+}: {
+  m: AccountsModel;
+  hideSearch?: boolean;
+  groupTrailing?: ReactNode;
+}) {
   const { t } = useTranslation();
   const manage = groupManageHandlers(m);
   return (
@@ -52,6 +60,7 @@ export function AccountsFilters({ m, hideSearch }: { m: AccountsModel; hideSearc
           onReorder={m.writesLocked ? undefined : m.reorderGroups}
           createLabel={t("accounts.newGroup")}
           createDisabled={m.writesLocked}
+          trailing={groupTrailing}
         />
         {!hideSearch && (
           <input className="input" style={{ maxWidth: 280 }} placeholder={t("accounts.search")} value={m.q} onChange={(e) => m.setQ(e.target.value)} />
@@ -101,10 +110,12 @@ export function AccountTagSuggestions({
   existing,
   value,
   onChange,
+  hashed = true,
 }: {
   existing: string[];
   value?: string[];
   onChange: (tags: string[]) => void;
+  hashed?: boolean;
 }) {
   const { t } = useTranslation();
   if (existing.length === 0) return null;
@@ -117,13 +128,89 @@ export function AccountTagSuggestions({
           <AccountTag
             key={tag}
             tag={tag}
-            hashed
+            hashed={hashed}
             selected={selected.has(tag)}
             onClick={() => onChange(toggleAccountTag(value, tag))}
           />
         ))}
       </div>
     </div>
+  );
+}
+
+function AccountTagField({
+  tags,
+  existing,
+  onChange,
+}: {
+  tags: string[];
+  existing: string[];
+  onChange: (tags: string[]) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState("");
+  const confirmed = tags.map((tag) => tag.trim()).filter(Boolean);
+
+  function pushTags(raw: string) {
+    const next = appendAccountTags(confirmed, raw);
+    if (next.length !== confirmed.length || next.some((tag, index) => tag !== confirmed[index])) onChange(next);
+  }
+
+  function onDraftChange(raw: string) {
+    if (!/\s/.test(raw)) {
+      setDraft(raw);
+      return;
+    }
+    const finished = /\s$/.test(raw);
+    const parts = raw.split(/\s+/).filter(Boolean);
+    const done = finished ? parts : parts.slice(0, -1);
+    const rest = finished ? "" : parts[parts.length - 1] || "";
+    if (done.length) pushTags(done.join(" "));
+    setDraft(rest);
+  }
+
+  function onKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.nativeEvent.isComposing || event.key === "Process" || event.keyCode === 229) return;
+    if (event.key === "Enter" || event.key === " " || event.code === "Space") {
+      event.preventDefault();
+      pushTags(draft);
+      setDraft("");
+      return;
+    }
+    if (event.key === "Backspace" && !draft && confirmed.length) {
+      event.preventDefault();
+      onChange(confirmed.slice(0, -1));
+    }
+  }
+
+  return (
+    <>
+      <div className="account-tag-box">
+        {confirmed.map((tag, index) => (
+          <AccountTag
+            key={`${tag}-${index}`}
+            tag={tag}
+            onRemove={() => onChange(confirmed.filter((_, itemIndex) => itemIndex !== index))}
+            removeLabel={t("common.remove")}
+          />
+        ))}
+        <input
+          className="account-tag-entry"
+          placeholder={confirmed.length ? "" : t("accounts.tagsChipPh")}
+          value={draft}
+          autoCapitalize="none"
+          autoCorrect="off"
+          autoComplete="off"
+          onChange={(event) => onDraftChange(event.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      </div>
+      <AccountTagSuggestions
+        existing={existing}
+        value={confirmed}
+        onChange={onChange}
+      />
+    </>
   );
 }
 
@@ -149,6 +236,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
         const tags = tagsInAccounts(list);
         const selected = activeAccountTag(tags, m.selectedTags[platform]);
         const shown = visibleAccountsForTag(list, selected);
+        const iconItem = platformListIcon(platform, list.map((e) => e.icon), m.builtins);
         return (
           <div key={platform} className={"platform-group" + (folded ? " collapsed" : "")}>
             <button
@@ -159,7 +247,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
               <div className="platform-title">
                 <ChevronDown size={15} className={"chevron" + (folded ? " rot" : "")} />
                 <IconMark
-                  icon={pickPlatformIcon(list.map((e) => e.icon))}
+                  icon={iconItem}
                   builtins={m.builtins}
                   label={platform}
                   size={28}
@@ -195,7 +283,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                   onClick={() =>
                     m.setEditingPlatformModal({
                       platform,
-                      icon: pickPlatformIcon(list.map((e) => e.icon)),
+                      icon: iconItem,
                     })
                   }
                 >
@@ -208,7 +296,7 @@ export function AccountsList({ m, compact }: { m: AccountsModel; compact?: boole
                     m.setEditor({
                       platform,
                       url: list.find((e) => e.url)?.url,
-                      icon: pickPlatformIcon(list.map((e) => e.icon)),
+                      icon: iconItem,
                       isPlatformLocked: true,
                     })
                   }
@@ -583,7 +671,7 @@ export function AccountsDialogs({ m, compact, skipEditor }: { m: AccountsModel; 
           existing={m.entries
             .filter((e) => e.id !== m.editor?.id)
             .map((e) => ({ platform: e.platform, icon: e.icon }))}
-          existingTags={m.allTags}
+          existingTags={tagsForPlatform(m.entries, m.editor.platform || "", (name) => platformFamily(name, m.builtins))}
           totps={m.totps}
           busy={m.busy}
           onChange={m.setEditor}
@@ -1118,15 +1206,10 @@ function AccountEditor({
               </div>
               <div className="field">
                 <FieldLabel name={t("accounts.tags")} tip={t("accounts.tagsTip")} />
-                <input
-                  className="input"
-                  placeholder={t("accounts.tagsPh")}
-                  value={(value.tags || []).join(" ")}
-                  onChange={(e) => onChange({ ...value, tags: e.target.value.split(/\s+/).filter(Boolean) })}
-                />
-                <AccountTagSuggestions
+                <AccountTagField
+                  key={value.id || "new"}
+                  tags={value.tags || []}
                   existing={existingTags}
-                  value={value.tags}
                   onChange={(tags) => onChange({ ...value, tags })}
                 />
               </div>

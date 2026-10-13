@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import { colorIconRef, isLetterIcon, parseIconColor, pickPlatformIcon } from "./iconColor.ts";
+import { colorIconRef, isLetterIcon, parseIconColor, pickPlatformIcon, platformListIcon } from "./iconColor.ts";
 
 describe("parseIconColor", () => {
   test("reads a stored letter color", () => {
@@ -30,5 +30,31 @@ describe("pickPlatformIcon", () => {
       pickPlatformIcon(["color:#475569", "custom:abc", "builtin:github"]),
       "custom:abc",
     );
+  });
+});
+
+const builtins = [
+  { id: "github", name: "GitHub" },
+  { id: "wechat", name: "微信" },
+];
+
+describe("platformListIcon", () => {
+  test("keeps an uploaded image and a stored builtin icon", () => {
+    assert.equal(
+      platformListIcon("GitHub", ["custom:abc", "builtin:github"], builtins),
+      "custom:abc",
+    );
+    assert.equal(platformListIcon("别的名字", ["builtin:github"], builtins), "builtin:github");
+  });
+
+  test("falls back to the preset logo when account icons are empty", () => {
+    assert.equal(platformListIcon("GitHub", [undefined, ""], builtins), "builtin:github");
+    assert.equal(platformListIcon("微信", [null], builtins), "builtin:wechat");
+    assert.equal(platformListIcon("github.com", [undefined], builtins), "builtin:github");
+  });
+
+  test("keeps an explicit letter color and unknown platforms", () => {
+    assert.equal(platformListIcon("GitHub", ["color:#475569"], builtins), "color:#475569");
+    assert.equal(platformListIcon("我的站", [undefined], builtins), undefined);
   });
 });
