@@ -27,25 +27,21 @@ import {
   type CloudSnapshot,
 } from "../lib/ipc";
 import { PageHead, Card, Badge, FieldLabel, ConfirmDialog, ErrorDialog } from "../ui/common";
+import { OptionSelect } from "../ui/OptionSelect";
 import { ReauthDialog } from "../ui/ReauthDialog";
 import { S3SetupGuide, S3GuideButton, type S3GuideProvider } from "../ui/S3SetupGuide";
 import { encodeS3ConfigPayload, importS3ConfigFromPicker } from "../lib/s3ConfigPick";
 import { firstS3ConfigJson, scanQrWithCamera } from "../lib/qrCapture";
 import { useApp } from "../store";
 import { useOverlayBack } from "../shared/mobileBack";
+import {
+  AUTO_SYNC_PRESETS,
+  autoSyncMinutesFromOption,
+  autoSyncSelectValue,
+} from "../shared/autoSyncPresets";
 import { can } from "../platform/capabilities";
 
 type S3AuthIntent = "export" | "share" | "reveal";
-
-const AUTO_PRESETS: { labelKey: string; minutes: number }[] = [
-  { labelKey: "syncPage.intervalOff", minutes: 0 },
-  { labelKey: "syncPage.interval1", minutes: 1 },
-  { labelKey: "syncPage.interval5", minutes: 5 },
-  { labelKey: "syncPage.interval15", minutes: 15 },
-  { labelKey: "syncPage.interval30", minutes: 30 },
-  { labelKey: "syncPage.interval60", minutes: 60 },
-  { labelKey: "syncPage.interval120", minutes: 120 },
-];
 
 export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   const { t } = useTranslation();
@@ -733,50 +729,45 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
           {/* 板块 2: 精简后的定时同步 */}
           <Card title={t("syncPage.autoTitle")}>
             <div className="stack">
-              <div className="between" style={{ flexWrap: "wrap", gap: 8 }}>
-                <div>
-                  <div style={{ fontSize: 11.5, fontWeight: 600 }}>{t("syncPage.period")}</div>
-                  <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>
-                    {t("syncPage.periodHint")}
-                  </div>
+              <div>
+                <div style={{ fontSize: 11.5, fontWeight: 600 }}>{t("syncPage.period")}</div>
+                <div className="muted" style={{ fontSize: 11, marginTop: 1 }}>
+                  {t("syncPage.periodHint")}
                 </div>
-                <div className="choice-row" style={{ margin: 0 }}>
-                  {AUTO_PRESETS.map((p) => {
-                    const on = (autoSync?.minutes ?? 30) === p.minutes;
-                    return (
-                      <button
-                        key={p.minutes}
-                        type="button"
-                        className={"choice" + (on ? " on" : "")}
-                        disabled={savingAuto}
-                        style={{ padding: "4px 9px", fontSize: 11 }}
-                        onClick={async () => {
-                          setSavingAuto(true);
-                          try {
-                            const minutes = await api.setAutoSyncMinutes(p.minutes);
-                            setAutoSync((prev) =>
-                              prev
-                                ? { ...prev, minutes }
-                                : {
-                                    minutes,
-                                    defaultMinutes: 30,
-                                    lastAutoSyncAt: null,
-                                    lastAutoSyncMessage: null,
-                                    syncAttachmentsWifiOnly: true,
-                                    syncAttachmentsManualOnly: false,
-                                  },
-                            );
-                          } catch (e) {
-                            setSyncNotice(t("syncPage.failErr", { error: errMessage(e) }));
-                          } finally {
-                            setSavingAuto(false);
-                          }
-                        }}
-                      >
-                        {t(p.labelKey)}
-                      </button>
-                    );
-                  })}
+                <div style={{ marginTop: 8, width: compact ? "100%" : 240, maxWidth: "100%" }}>
+                  <OptionSelect
+                    title={t("syncPage.period")}
+                    value={autoSyncSelectValue(autoSync?.minutes)}
+                    disabled={savingAuto}
+                    onChange={async (next) => {
+                      const picked = autoSyncMinutesFromOption(next);
+                      if (picked == null || (autoSync != null && autoSync.minutes === picked)) return;
+                      setSavingAuto(true);
+                      try {
+                        const minutes = await api.setAutoSyncMinutes(picked);
+                        setAutoSync((prev) =>
+                          prev
+                            ? { ...prev, minutes }
+                            : {
+                                minutes,
+                                defaultMinutes: 30,
+                                lastAutoSyncAt: null,
+                                lastAutoSyncMessage: null,
+                                syncAttachmentsWifiOnly: true,
+                                syncAttachmentsManualOnly: false,
+                              },
+                        );
+                      } catch (e) {
+                        setSyncNotice(t("syncPage.failErr", { error: errMessage(e) }));
+                      } finally {
+                        setSavingAuto(false);
+                      }
+                    }}
+                    options={AUTO_SYNC_PRESETS.map((p) => ({
+                      value: String(p.minutes),
+                      label: t(p.labelKey),
+                    }))}
+                  />
                 </div>
               </div>
               {autoSync?.lastAutoSyncAt && (

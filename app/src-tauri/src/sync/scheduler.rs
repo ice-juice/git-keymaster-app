@@ -30,6 +30,8 @@ impl Drop for BusyGuard<'_> {
 }
 
 pub fn start(app: AppHandle) {
+    // 周期同步必须离开 WebView 所在线程。桌面是窗口主线程，安卓是 JavaBridge；
+    // 堵在那上面时，滑动、点按、返回都会停。不要改成从命令里直接 `run`。
     // 不在这里写 last_periodic_sync：启动去重会把「刚写入的时间戳」当成刚同步过。
     // 时间戳只在真正尝试之后更新。tick 自己 panic 也不能把这条线程带走。
     std::thread::Builder::new()
@@ -480,6 +482,26 @@ mod tests {
         assert!(!periodic_due(Some(recent.as_str()), 30, now));
         assert!(periodic_due(Some(exact.as_str()), 30, now));
         assert!(periodic_due(Some(old.as_str()), 30, now));
+    }
+
+    /// 周期/启动同步走 `gam-autosync` 这条普通线程，不经过 Tauri 命令。
+    /// 安卓上命令线程是 WebView 的 JavaBridge，同步若改回命令就会把滑动和返回冻住。
+    #[test]
+    fn periodic_sync_stays_off_the_webview_thread() {
+        let src = include_str!("scheduler.rs");
+        let head = src.split("mod tests").next().unwrap_or(src);
+        assert!(
+            head.contains(".name(\"gam-autosync\""),
+            "周期同步必须在独立线程上跑"
+        );
+        assert!(
+            !head.contains("#[tauri::command]"),
+            "调度器不能注册成 Tauri 命令"
+        );
+        assert!(
+            head.contains("std::thread::Builder::new()"),
+            "启动同步也不能直接在调用线程上 run"
+        );
     }
 
     #[test]

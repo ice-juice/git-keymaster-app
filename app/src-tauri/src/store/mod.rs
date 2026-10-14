@@ -10,6 +10,8 @@ use crate::vault::crypto::{self, KEY_LEN, LABEL_KEYFILE, LABEL_METADATA, XNONCE_
 use crate::vault::Vault;
 use serde::de::DeserializeOwned;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 
 fn seal(key: &[u8; KEY_LEN], plaintext: &[u8]) -> Result<Vec<u8>> {
     let nonce = crypto::new_nonce();
@@ -81,6 +83,67 @@ fn icon_path(vault: &Vault, hash: &str) -> Result<PathBuf> {
     Ok(vault.root().join("icons").join(format!("{hash}.webp")))
 }
 
+/// 明文元数据缓存的代次。锁定、改密钥、成功落盘都会加一，并立刻丢掉缓存。
+///
+/// 解锁后侧栏、总览、首页会同时来读 identities / totp / accounts / files / notes。
+/// 这些读以前各自占着保险库锁把同一份冷文件解密一遍。放置越久页缓存越冷，
+/// 窗口线程上还要拿同一把锁的命令就干等，桌面被标成未响应，手机上 WebView 桥也点不动。
+/// 缓存只在已解锁期间复用，锁定必须清掉。
+static PLAINTEXT_GEN: AtomicU64 = AtomicU64::new(1);
+
+struct PlainCache<T> {
+    gen: u64,
+    path: PathBuf,
+    value: T,
+}
+
+static CACHE_DATA: Mutex<Option<PlainCache<VaultData>>> = Mutex::new(None);
+static CACHE_SECRETS: Mutex<Option<PlainCache<Secrets>>> = Mutex::new(None);
+static CACHE_TOTP: Mutex<Option<PlainCache<TotpData>>> = Mutex::new(None);
+static CACHE_ACCOUNTS: Mutex<Option<PlainCache<AccountData>>> = Mutex::new(None);
+static CACHE_FILES: Mutex<Option<PlainCache<FileData>>> = Mutex::new(None);
+static CACHE_NOTES: Mutex<Option<PlainCache<NoteData>>> = Mutex::new(None);
+
+fn cache_lock<T>(slot: &Mutex<Option<PlainCache<T>>>) -> MutexGuard<'_, Option<PlainCache<T>>> {
+    slot.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// 丢掉已解密的元数据。锁定和主密钥更换时调用，避免下一把钥匙读到上一把的明文。
+pub fn invalidate_plaintext_cache() {
+    PLAINTEXT_GEN.fetch_add(1, Ordering::AcqRel);
+    *cache_lock(&CACHE_DATA) = None;
+    *cache_lock(&CACHE_SECRETS) = None;
+    *cache_lock(&CACHE_TOTP) = None;
+    *cache_lock(&CACHE_ACCOUNTS) = None;
+    *cache_lock(&CACHE_FILES) = None;
+    *cache_lock(&CACHE_NOTES) = None;
+}
+
+fn load_cached<T: Clone + Default + DeserializeOwned>(
+    vault: &Vault,
+    path: PathBuf,
+    slot: &Mutex<Option<PlainCache<T>>>,
+) -> Result<T> {
+    let gen = PLAINTEXT_GEN.load(Ordering::Acquire);
+    let mut guard = cache_lock(slot);
+    if let Some(hit) = guard.as_ref() {
+        if hit.gen == gen && hit.path == path {
+            return Ok(hit.value.clone());
+        }
+    }
+    // 同一类文件同时来的读在这把锁上排队，解密一次，后来的命中缓存。
+    // 不拿保险库锁，窗口线程查状态不用等冷文件。
+    let value: T = load_sealed(vault, &path)?;
+    if PLAINTEXT_GEN.load(Ordering::Acquire) == gen {
+        *guard = Some(PlainCache {
+            gen,
+            path,
+            value: value.clone(),
+        });
+    }
+    Ok(value)
+}
+
 fn load_sealed<T: Default + DeserializeOwned>(vault: &Vault, path: &Path) -> Result<T> {
     crate::vault::recover_previous_if_missing(path);
     if !path.exists() {
@@ -94,6 +157,11 @@ fn load_sealed<T: Default + DeserializeOwned>(vault: &Vault, path: &Path) -> Res
 
 /// 读取元数据容器（不存在时返回默认）。需已解锁。
 pub fn load_data(vault: &Vault) -> Result<VaultData> {
+    load_cached(vault, data_path(vault), &CACHE_DATA)
+}
+
+/// 校验主密钥时绕过缓存。缓存里是上一把钥匙解出的明文，不能用来证明新钥匙有效。
+pub fn load_data_uncached(vault: &Vault) -> Result<VaultData> {
     load_sealed(vault, &data_path(vault))
 }
 
@@ -101,18 +169,22 @@ pub fn save_data(vault: &Vault, data: &VaultData) -> Result<()> {
     let key = vault.subkey(LABEL_METADATA)?;
     let json = serde_json::to_vec(data)?;
     let sealed = seal(&key, &json)?;
-    atomic_write(&data_path(vault), &sealed)
+    atomic_write(&data_path(vault), &sealed)?;
+    invalidate_plaintext_cache();
+    Ok(())
 }
 
 pub fn load_secrets(vault: &Vault) -> Result<Secrets> {
-    load_sealed(vault, &secrets_path(vault))
+    load_cached(vault, secrets_path(vault), &CACHE_SECRETS)
 }
 
 pub fn save_secrets(vault: &Vault, secrets: &Secrets) -> Result<()> {
     let key = vault.subkey(LABEL_METADATA)?;
     let json = serde_json::to_vec(secrets)?;
     let sealed = seal(&key, &json)?;
-    atomic_write(&secrets_path(vault), &sealed)
+    atomic_write(&secrets_path(vault), &sealed)?;
+    invalidate_plaintext_cache();
+    Ok(())
 }
 
 /// 首次解锁：把 config.json 里的旧明文写进 secrets.enc，再补回内存供设置页回填。
@@ -205,47 +277,55 @@ pub fn key_exists(vault: &Vault, key_id: &str) -> bool {
 }
 
 pub fn load_totp(vault: &Vault) -> Result<TotpData> {
-    load_sealed(vault, &totp_path(vault))
+    load_cached(vault, totp_path(vault), &CACHE_TOTP)
 }
 
 pub fn save_totp(vault: &Vault, data: &TotpData) -> Result<()> {
     let key = vault.subkey(LABEL_METADATA)?;
     let json = serde_json::to_vec(data)?;
     let sealed = seal(&key, &json)?;
-    atomic_write(&totp_path(vault), &sealed)
+    atomic_write(&totp_path(vault), &sealed)?;
+    invalidate_plaintext_cache();
+    Ok(())
 }
 
 pub fn load_accounts(vault: &Vault) -> Result<AccountData> {
-    load_sealed(vault, &accounts_path(vault))
+    load_cached(vault, accounts_path(vault), &CACHE_ACCOUNTS)
 }
 
 pub fn save_accounts(vault: &Vault, data: &AccountData) -> Result<()> {
     let key = vault.subkey(LABEL_METADATA)?;
     let json = serde_json::to_vec(data)?;
     let sealed = seal(&key, &json)?;
-    atomic_write(&accounts_path(vault), &sealed)
+    atomic_write(&accounts_path(vault), &sealed)?;
+    invalidate_plaintext_cache();
+    Ok(())
 }
 
 pub fn load_files(vault: &Vault) -> Result<FileData> {
-    load_sealed(vault, &files_path(vault))
+    load_cached(vault, files_path(vault), &CACHE_FILES)
 }
 
 pub fn save_files(vault: &Vault, data: &FileData) -> Result<()> {
     let key = vault.subkey(LABEL_METADATA)?;
     let json = serde_json::to_vec(data)?;
     let sealed = seal(&key, &json)?;
-    atomic_write(&files_path(vault), &sealed)
+    atomic_write(&files_path(vault), &sealed)?;
+    invalidate_plaintext_cache();
+    Ok(())
 }
 
 pub fn load_notes(vault: &Vault) -> Result<NoteData> {
-    load_sealed(vault, &notes_path(vault))
+    load_cached(vault, notes_path(vault), &CACHE_NOTES)
 }
 
 pub fn save_notes(vault: &Vault, data: &NoteData) -> Result<()> {
     let key = vault.subkey(LABEL_METADATA)?;
     let json = serde_json::to_vec(data)?;
     let sealed = seal(&key, &json)?;
-    atomic_write(&notes_path(vault), &sealed)
+    atomic_write(&notes_path(vault), &sealed)?;
+    invalidate_plaintext_cache();
+    Ok(())
 }
 
 pub fn save_icon(vault: &Vault, hash: &str, webp: &[u8]) -> Result<()> {
@@ -550,6 +630,44 @@ mod tests {
         let raw = std::fs::read(notes_path(&v)).unwrap();
         assert!(!String::from_utf8_lossy(&raw).contains("私密备忘"));
         assert_eq!(load_notes(&v).unwrap().entries, notes.entries);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 解锁后的并发读会打到同一份冷文件。缓存命中后删掉磁盘，仍应返回上一份明文；
+    /// 锁定清缓存之后必须重新读盘，不能把上一把钥匙的明文留在进程里。
+    #[test]
+    fn plaintext_cache_serves_until_invalidated() {
+        let (v, root) = unlocked_vault();
+        let mut data = VaultData::default();
+        data.identities.push(Identity {
+            id: "id-1".into(),
+            name: "cached".into(),
+            platform: "github".into(),
+            host_alias: "github-cached".into(),
+            real_host: "github.com".into(),
+            user: "git".into(),
+            email: None,
+            git_user_name: None,
+            key_id: None,
+            owners: vec![],
+            strict_mode: false,
+            updated_at: String::new(),
+        });
+        save_data(&v, &data).unwrap();
+        assert_eq!(load_data(&v).unwrap().identities[0].name, "cached");
+
+        std::fs::remove_file(data_path(&v)).unwrap();
+        assert_eq!(
+            load_data(&v).unwrap().identities[0].name,
+            "cached",
+            "同一代次内不应再读盘"
+        );
+
+        invalidate_plaintext_cache();
+        assert!(
+            load_data(&v).unwrap().identities.is_empty(),
+            "清缓存后文件已不在，必须当成空库而不是继续吐旧明文"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 }

@@ -206,12 +206,30 @@ impl Vault {
         self.mk = None; // MasterKey 的 Drop 会 zeroize
     }
 
-    /// 用已恢复的主密钥解锁（仅供本机 DPAPI 免验证会话）。
-    pub fn unlock_with_master_key(&mut self, mk: MasterKey) -> Result<()> {
+    /// 装上主密钥，不读业务数据。调用方应先放开保险库锁，再自行校验。
+    pub fn install_master_key(&mut self, mk: MasterKey) {
         self.mk = Some(mk);
-        let data_file = self.root.join("data").join("identities.enc");
-        if data_file.is_file() && crate::store::load_data(self).is_err() {
+    }
+
+    /// 用已恢复的主密钥解锁，并确认能解开身份库。
+    ///
+    /// 会解密 `identities.enc`。不要在还握着进程级保险库锁时调用，否则窗口线程上的
+    /// 状态查询会一直等到整份冷文件解密完。同步线程手里的是一份副本，可以走这里。
+    pub fn unlock_with_master_key(&mut self, mk: MasterKey) -> Result<()> {
+        self.install_master_key(mk);
+        crate::store::invalidate_plaintext_cache();
+        if self.master_key_opens_data().is_err() {
             self.lock();
+            crate::store::invalidate_plaintext_cache();
+            return Err(AppError::BadPassword);
+        }
+        Ok(())
+    }
+
+    /// 身份库存在时，主密钥必须能通过 AEAD。文件还没建过则算通过。
+    pub fn master_key_opens_data(&self) -> Result<()> {
+        let data_file = self.root.join("data").join("identities.enc");
+        if data_file.is_file() && crate::store::load_data_uncached(self).is_err() {
             return Err(AppError::BadPassword);
         }
         Ok(())
@@ -727,5 +745,21 @@ mod tests {
 
         std::fs::remove_dir_all(&src).ok();
         std::fs::remove_dir_all(&dest).ok();
+    }
+
+    /// 装钥匙和校验必须能拆开：校验会解密身份库，不能在还握着进程锁时做。
+    #[test]
+    fn install_master_key_stays_unlocked_when_ciphertext_is_garbage() {
+        let root = temp_root();
+        let (v, _) = Vault::init(&root, "pw", fast_kdf()).unwrap();
+        let mk = MasterKey::from_bytes(v.master_key_bytes().unwrap());
+        let mut locked = Vault::load(&root).unwrap();
+        locked.install_master_key(mk);
+        assert!(locked.is_unlocked());
+        assert!(locked.master_key_opens_data().is_ok());
+        std::fs::write(root.join("data").join("identities.enc"), b"not-a-vault").unwrap();
+        assert!(locked.master_key_opens_data().is_err());
+        assert!(locked.is_unlocked());
+        std::fs::remove_dir_all(&root).ok();
     }
 }

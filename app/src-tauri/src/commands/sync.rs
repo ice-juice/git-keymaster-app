@@ -533,15 +533,33 @@ fn require_client(state: &AppState) -> Result<S3Client> {
 }
 
 #[tauri::command]
-pub fn list_cloud_snapshots(state: State<AppState>, force: Option<bool>) -> Result<Vec<SnapshotMeta>> {
+pub async fn list_cloud_snapshots(
+    state: State<'_, AppState>,
+    force: Option<bool>,
+) -> Result<Vec<SnapshotMeta>> {
     if !force.unwrap_or(false) {
         if let Some(items) = cached_snapshots(VIEW_CACHE_TTL) {
             return Ok(items);
         }
     }
+    // 「立即同步」结束后还会强制拉一次快照。同步命令会占住窗口主线程。
     let vault = clone_unlocked_vault(&state)?;
-    let client = require_client(&state)?;
-    let items = engine::list_snapshots(&vault, &client)?;
+    let (sync_config, app_cfg) = {
+        let config = recover_lock(&state.config);
+        let sync_config = config
+            .cloud_sync
+            .clone()
+            .ok_or_else(|| AppError::Invalid("尚未配置云存储连接参数".into()))?;
+        if !sync_config.has_usable_secret() {
+            return Err(AppError::Locked);
+        }
+        (sync_config, config.clone())
+    };
+    let items = run_cloud_io(move || {
+        let client = reuse_or_create_s3_client(sync_config, &app_cfg)?;
+        engine::list_snapshots(&vault, &client)
+    })
+    .await?;
     store_snapshots(items.clone());
     Ok(items)
 }
@@ -573,9 +591,15 @@ pub fn restore_cloud_snapshot(
     Ok(result)
 }
 
+/// 手动「立即同步」走先拉后推：XChaCha20-Poly1305、压缩和阻塞 HTTP。
+///
+/// 同步命令会在收到 IPC 的线程上跑完。桌面这条线程就是窗口主线程，Windows 会标成「未响应」。
+/// 安卓是 WebView 的 JavaBridge（`Ipc.postMessage` → `Rust.ipc`），堵住之后页面不能滑、不能点、返回键的
+/// `evaluateJavascript` 也排不上。两端都要把活放进 `spawn_blocking`。
+/// `reqwest::blocking` 也不能留在 async 命令的 Tokio worker 上。
 #[tauri::command]
-pub fn run_auto_sync_now(app: AppHandle) -> Result<Option<SyncResult>> {
-    crate::sync::scheduler::run(&app, "manual")
+pub async fn run_auto_sync_now(app: AppHandle) -> Result<Option<SyncResult>> {
+    run_cloud_io(move || crate::sync::scheduler::run(&app, "manual")).await
 }
 
 fn validate_s3_config(cfg: &S3Config) -> Result<()> {
@@ -706,5 +730,93 @@ mod tests {
         let locked = export_s3_config_authorized(&vault, &root.join("locked.json"), cfg, "access-pw");
         assert!(matches!(locked, Err(AppError::Locked)));
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// 同步 `#[tauri::command]` 跑在窗口主线程上。立即同步若改回同步函数，这里编不过。
+    #[test]
+    fn run_auto_sync_now_is_async_command() {
+        fn assert_future<F: std::future::Future>(_: fn(tauri::AppHandle) -> F) {}
+        assert_future(run_auto_sync_now);
+    }
+
+    /// 命令体必须走 `run_cloud_io`。只改成 async 仍会在 Tokio worker 上创建 blocking Client 并 panic。
+    #[test]
+    fn manual_sync_and_snapshot_list_use_cloud_io_offload() {
+        let src = include_str!("sync.rs");
+        for signature in [
+            "pub async fn run_auto_sync_now",
+            "pub async fn list_cloud_snapshots",
+        ] {
+            let start = src.find(signature).unwrap_or_else(|| {
+                panic!("{signature} 必须是 async 命令，否则窗口主线程会被云同步堵住")
+            });
+            let rest = &src[start..];
+            let next = rest[signature.len()..]
+                .find("\n#[tauri::command]")
+                .map(|i| i + signature.len())
+                .unwrap_or(rest.len());
+            let body = &rest[..next];
+            assert!(
+                body.contains("run_cloud_io"),
+                "{signature} 必须经 run_cloud_io 把加解密和阻塞 HTTP 移出窗口主线程"
+            );
+        }
+    }
+
+    /// `run_cloud_io` 是立即同步的实际执行点：工作线程必须离开调用线程，
+    /// 并且允许创建 `reqwest::blocking::Client`（在 Tokio worker 上会 panic）。
+    #[test]
+    fn cloud_io_offload_does_not_block_the_caller() {
+        let caller = std::thread::current().id();
+        tauri::async_runtime::block_on(async move {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+            let (ping_tx, ping_rx) = std::sync::mpsc::channel();
+
+            let work = tauri::async_runtime::spawn(async move {
+                run_cloud_io(move || {
+                    let worker = std::thread::current().id();
+                    let _ = started_tx.send(worker);
+                    let _client = reqwest::blocking::Client::builder()
+                        .timeout(std::time::Duration::from_secs(1))
+                        .build()
+                        .expect("spawn_blocking 内应能创建 blocking Client");
+                    let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));
+                    Ok::<_, crate::error::AppError>(worker)
+                })
+                .await
+            });
+
+            let worker = tauri::async_runtime::spawn_blocking(move || {
+                started_rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("阻塞段没有启动")
+            })
+            .await
+            .expect("等待阻塞段失败");
+            assert_ne!(
+                worker, caller,
+                "云同步的加解密和阻塞 HTTP 不能留在命令线程上，否则窗口主线程会未响应"
+            );
+
+            let ping = tauri::async_runtime::spawn(async move {
+                let _ = ping_tx.send(1u8);
+            });
+            // 等待放在 spawn_blocking 上，避免把当前运行时线程堵死。
+            // 阻塞段还占着工作线程时，这个异步任务必须已经跑完。
+            let got = tauri::async_runtime::spawn_blocking(move || {
+                ping_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .expect("阻塞同步占住了异步运行时，界面命令会排不上队")
+            })
+            .await
+            .expect("等待异步任务失败");
+            assert_eq!(got, 1);
+            ping.await.expect("ping 任务被取消");
+
+            let _ = release_tx.send(());
+            let finished_on = work.await.expect("同步任务被取消").expect("run_cloud_io");
+            assert_eq!(finished_on, worker);
+        });
     }
 }
