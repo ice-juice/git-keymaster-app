@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  adoptGeneratedTotp,
+  startTotpLiveClock,
+  totpTimeStep,
+  type TotpLiveCode,
+} from "../totpTime";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   api,
@@ -23,7 +29,6 @@ import type { GroupDialogState } from "../../ui/GroupDialog";
 import { useApp } from "../../store";
 
 const VIEW_KEY = "gam.totp.view";
-const BANNER_KEY = "gam.totp.banner.hidden";
 const NOTE_MAX = 32;
 
 export type TotpView = "grid" | "list" | "platform";
@@ -41,20 +46,7 @@ function readView(): TotpView {
   return stored === "list" || stored === "platform" ? stored : "grid";
 }
 
-function readBannerHidden(): boolean {
-  try {
-    return sessionStorage.getItem(BANNER_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-/** 周期剩余秒数不是秘密，掩码态也可本地推算。 */
-export function totpRemainSeconds(period: number, nowMs = Date.now()): number {
-  const safe = period > 0 ? period : 30;
-  const elapsed = Math.floor(nowMs / 1000) % safe;
-  return elapsed === 0 ? safe : safe - elapsed;
-}
+export { totpRemainSeconds } from "../totpTime";
 
 export function maskTotpCode(digits?: number): string {
   return digits === 8 ? "•••• ••••" : "••• •••";
@@ -77,11 +69,15 @@ export function useTotpModel() {
   const [group, setGroup] = useState("全部");
   const [view, setView] = useState<TotpView>(readView);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const [bannerHidden, setBannerHidden] = useState(readBannerHidden);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [clipHint, setClipHint] = useState<Record<string, number>>({});
   const [err, setErr] = useState("");
-  const [codes, setCodes] = useState<Record<string, { code: string; remain: number; period: number }>>({});
+  const [codes, setCodes] = useState<Record<string, TotpLiveCode>>({});
+  const codesRef = useRef<Record<string, TotpLiveCode>>({});
+  const writeCodes = useCallback((next: Record<string, TotpLiveCode>) => {
+    codesRef.current = next;
+    setCodes(next);
+  }, []);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [reauth, setReauth] = useState<null | ((pw: string) => Promise<void>)>(null);
   const reauthCancel = useRef<(() => void) | null>(null);
@@ -117,44 +113,22 @@ export function useTotpModel() {
   }, []);
 
   useEffect(() => {
-    const t = window.setInterval(() => {
-      const stamp = Date.now();
-      setNowMs(stamp);
-      setClipHint((prev) => {
-        const next: Record<string, number> = {};
-        for (const [id, until] of Object.entries(prev)) {
-          if (until > stamp) next[id] = until;
-        }
-        return Object.keys(next).length === Object.keys(prev).length ? prev : next;
-      });
-      setCodes((prev) => {
-        const next = { ...prev };
-        for (const id of Object.keys(next)) {
-          const item = next[id];
-          if (item.remain <= 1) {
-            api
-              .totpGenerateCode(id)
-              .then((c) => {
-                setCodes((cur) => ({
-                  ...cur,
-                  [id]: { code: c.code, remain: c.remainingSeconds, period: c.period },
-                }));
-              })
-              .catch(() => {
-                setCodes((cur) => {
-                  const { [id]: _, ...rest } = cur;
-                  return rest;
-                });
-              });
-          } else {
-            next[id] = { ...item, remain: item.remain - 1 };
+    return startTotpLiveClock({
+      read: () => codesRef.current,
+      write: writeCodes,
+      refresh: (id) => api.totpGenerateCode(id),
+      onTick: (stamp) => {
+        setNowMs(stamp);
+        setClipHint((prev) => {
+          const next: Record<string, number> = {};
+          for (const [id, until] of Object.entries(prev)) {
+            if (until > stamp) next[id] = until;
           }
-        }
-        return next;
-      });
-    }, 1000);
-    return () => window.clearInterval(t);
-  }, []);
+          return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+        });
+      },
+    });
+  }, [writeCodes]);
 
   const filtered = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -199,15 +173,6 @@ export function useTotpModel() {
     setMoreOpenId(null);
     setCtxMenu(null);
     localStorage.setItem(VIEW_KEY, mode);
-  }
-
-  function dismissBanner() {
-    try {
-      sessionStorage.setItem(BANNER_KEY, "1");
-    } catch {
-      /* ignore quota / private mode */
-    }
-    setBannerHidden(true);
   }
 
   function clearFilters() {
@@ -263,25 +228,24 @@ export function useTotpModel() {
 
   async function reveal(id: string) {
     setErr("");
-    const c = await withAuth((pw) => api.totpGenerateCode(id, pw));
-    if (c) setCodes((m) => ({ ...m, [id]: { code: c.code, remain: c.remainingSeconds, period: c.period } }));
+    const packed = await withAuth((pw) => adoptGeneratedTotp(() => api.totpGenerateCode(id, pw)));
+    if (packed) writeCodes({ ...codesRef.current, [id]: packed });
   }
 
   function hideCode(id: string) {
-    setCodes((m) => {
-      const n = { ...m };
-      delete n[id];
-      return n;
-    });
+    const next = { ...codesRef.current };
+    delete next[id];
+    writeCodes(next);
   }
 
   async function copyCode(id: string) {
-    let cur = codes[id];
-    if (!cur) {
-      const c = await withAuth((pw) => api.totpGenerateCode(id, pw));
-      if (!c) return;
-      cur = { code: c.code, remain: c.remainingSeconds, period: c.period };
-      setCodes((m) => ({ ...m, [id]: cur }));
+    let cur = codesRef.current[id];
+    const now = Date.now();
+    if (!cur || cur.step !== totpTimeStep(cur.period, now)) {
+      const packed = await withAuth((pw) => adoptGeneratedTotp(() => api.totpGenerateCode(id, pw)));
+      if (!packed) return;
+      cur = packed;
+      writeCodes({ ...codesRef.current, [id]: packed });
     }
     try {
       await copyWithClear(cur.code.replace(/\s/g, ""));
@@ -748,8 +712,6 @@ export function useTotpModel() {
     platforms,
     expandAll,
     collapseAll,
-    bannerHidden,
-    dismissBanner,
     nowMs,
     clipHint,
     clearFilters,

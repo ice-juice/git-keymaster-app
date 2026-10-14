@@ -16,6 +16,7 @@ import { MobileListToolbar } from "../ui/MobileListToolbar";
 import { GroupPicker } from "../ui/GroupPicker";
 import { useTranslation } from "react-i18next";
 import { useTotpModel, clipNote, type TotpModel } from "../shared/hooks/useTotpModel";
+import { totpRowIdentity } from "../shared/totpIdentity";
 import { pushMobileBack, useOverlayBack } from "../shared/mobileBack";
 import { TotpCodeSlot } from "../ui/TotpCodeSlot";
 import {
@@ -40,6 +41,7 @@ function TotpMobileCard({
   selecting,
   selected,
   locked,
+  grouped,
   onToggle,
   onEnterSelect,
 }: {
@@ -48,10 +50,16 @@ function TotpMobileCard({
   selecting: boolean;
   selected: boolean;
   locked: boolean;
+  grouped?: boolean;
   onToggle: () => void;
   onEnterSelect: () => void;
 }) {
   const { t } = useTranslation();
+  const idn = grouped ? totpRowIdentity(e, true) : null;
+  const title = idn ? idn.title || t("totp.accountFallback") : e.issuer;
+  const subtitle = idn?.subtitle || "";
+  const iconLabel = idn ? idn.iconLabel || title : e.issuer;
+  const noteText = grouped ? idn?.note || "" : e.note?.trim() || "";
   const timerRef = useRef<number | null>(null);
   const startRef = useRef<{ x: number; y: number } | null>(null);
   const skipClickRef = useRef(false);
@@ -89,18 +97,26 @@ function TotpMobileCard({
           </span>
         )}
         <div className="m-totp-card-identity">
-          <IconMark icon={e.icon} builtins={m.builtins} label={e.issuer} size={28} />
+          <IconMark icon={e.icon} builtins={m.builtins} label={grouped ? iconLabel : e.issuer} size={28} />
           <div className="m-totp-card-meta">
-            <div className="m-totp-card-issuer" title={e.issuer}>
-              <span>{e.issuer}</span>
+            <div className="m-totp-card-issuer" title={grouped ? title : e.issuer}>
+              <span>{grouped ? title : e.issuer}</span>
               {e.group && <Badge kind="info">{e.group}</Badge>}
             </div>
-            <div className="m-totp-card-account" title={e.account}>
-              {e.account}
-            </div>
-            {e.note?.trim() && (
-              <div className="totp-card-note" style={{ marginTop: 2 }} title={e.note.trim()}>
-                {clipNote(e.note)}
+            {grouped ? (
+              subtitle ? (
+                <div className="m-totp-card-account" title={subtitle}>
+                  {subtitle}
+                </div>
+              ) : null
+            ) : (
+              <div className="m-totp-card-account" title={e.account}>
+                {e.account}
+              </div>
+            )}
+            {noteText && (
+              <div className="totp-card-note" style={{ marginTop: 2 }} title={noteText}>
+                {clipNote(noteText)}
               </div>
             )}
           </div>
@@ -298,7 +314,7 @@ export function TotpMobile() {
   const allFolded = m.platforms.length > 0 && m.platforms.every((g) => m.collapsed[g.key]);
   const foldLabel = allFolded ? t("pages.expandAll") : t("pages.collapseAll");
 
-  function renderCard(e: TotpEntry) {
+  function renderCard(e: TotpEntry, grouped = false) {
     return (
       <TotpMobileCard
         key={e.id}
@@ -307,6 +323,7 @@ export function TotpMobile() {
         selecting={selecting}
         selected={selectedSet.has(e.id)}
         locked={m.busy}
+        grouped={grouped}
         onToggle={() => toggleSelect(e.id)}
         onEnterSelect={() => enterSelect(e.id)}
       />
@@ -422,7 +439,7 @@ export function TotpMobile() {
               <TotpPlatformGroups
                 m={m}
                 variant="mobile"
-                renderRow={(e) => renderCard(e)}
+                renderRow={(e) => renderCard(e, true)}
               />
             )
             : m.filtered.map((e) => renderCard(e))}

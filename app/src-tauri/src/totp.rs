@@ -492,6 +492,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn remaining_seconds_aligns_to_unix_epoch() {
+        assert_eq!(remaining_seconds(30, 0), 30);
+        assert_eq!(remaining_seconds(30, 1), 29);
+        assert_eq!(remaining_seconds(30, 29), 1);
+        assert_eq!(remaining_seconds(30, 30), 30);
+        assert_eq!(remaining_seconds(30, 59), 1);
+        assert_eq!(remaining_seconds(30, 1_111_111_109), 1);
+    }
+
+    #[test]
     fn rfc6238_sha1_8digits() {
         // secret ASCII "12345678901234567890" = GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
         let secret = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";

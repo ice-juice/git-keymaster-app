@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Eye, EyeOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { prefersReducedMotion } from "../lib/prefs";
-import { maskTotpCode, totpRemainSeconds } from "../shared/hooks/useTotpModel";
+import { maskTotpCode } from "../shared/hooks/useTotpModel";
+import { totpRemainSeconds } from "../shared/totpTime";
 import type { TotpEntry } from "../lib/ipc";
 import { CountdownRing } from "./CountdownRing";
 
@@ -40,7 +41,8 @@ export function TotpCodeSlot({
   const { t } = useTranslation();
   const seedMissing = entry.hasSeed === false;
   const period = shown?.period || entry.period || 30;
-  const remain = shown ? shown.remain : totpRemainSeconds(period, nowMs);
+  // 揭开后也不用缓存的剩余秒，和掩码态同一套 Unix 对齐。
+  const remain = totpRemainSeconds(period, nowMs);
   const urgent = remain <= 5;
   const digits = entry.digits || 6;
   const masked = maskTotpCode(digits);

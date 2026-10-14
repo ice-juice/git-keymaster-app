@@ -41,6 +41,7 @@ import { OptionSelect } from "../ui/OptionSelect";
 import { clipRemainSeconds, formatCode, TotpCodeSlot } from "../ui/TotpCodeSlot";
 import { useTranslation } from "react-i18next";
 import { clipNote, NOTE_MAX, type TotpEditorState, type TotpModel, type TotpView } from "../shared/hooks/useTotpModel";
+import { totpRowIdentity } from "../shared/totpIdentity";
 import { useOverlayBack } from "../shared/mobileBack";
 import { EditPlatformModal } from "./Accounts.shared";
 
@@ -347,15 +348,18 @@ function TotpListRow({ e, m }: { e: TotpEntry; m: TotpModel }) {
 }
 
 function TotpPlatformRow({ e, m }: { e: TotpEntry; m: TotpModel }) {
+  const { t } = useTranslation();
+  const idn = totpRowIdentity(e, true);
+  const title = idn.title || t("totp.accountFallback");
   return (
     <div className="totp-platform-row" data-focus-id={e.id} {...totpContextMenuProps(m, e)}>
       <div className="totp-list-identity">
-        <IconMark icon={e.icon} builtins={m.builtins} label={e.issuer} size={28} />
+        <IconMark icon={e.icon} builtins={m.builtins} label={idn.iconLabel || title} size={28} />
         <div className="totp-id-copy">
-          <ExpandableText className="totp-card-issuer" text={e.issuer || e.account} />
-          <ExpandableText className="totp-card-account" text={e.account} />
-          {e.note?.trim() && (
-            <ExpandableText className="totp-card-note" text={clipNote(e.note)} full={e.note.trim()} />
+          <ExpandableText className="totp-card-issuer" text={title} />
+          {idn.subtitle && <ExpandableText className="totp-card-account" text={idn.subtitle} />}
+          {idn.note && (
+            <ExpandableText className="totp-card-note" text={clipNote(idn.note)} full={idn.note} />
           )}
         </div>
       </div>
