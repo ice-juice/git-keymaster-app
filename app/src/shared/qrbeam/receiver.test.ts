@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
+import { appendFileHeaderMetaToBuffer, createEncoder } from "luby-transform";
+import { QRBEAM_PREFIX, blockToFrame } from "./protocol.ts";
 import { createQrBeamReceiver, type QrBeamFeedResult } from "./receiver.ts";
 import { createQrBeamSender, takeQrBeamFrames } from "./sender.ts";
 
@@ -43,6 +45,29 @@ function completeOf(data: Uint8Array, filename: string, contentType: string, fra
 }
 
 describe("qrbeam receiver", () => {
+  test("旧喷泉码的 GKB1 帧仍能重组，不因度数高被丢掉", () => {
+    const data = payload("legacy-fountain-" + "q".repeat(300));
+    const merged = appendFileHeaderMetaToBuffer(data, {
+      filename: encodeURIComponent("legacy.txt"),
+      contentType: "text/plain",
+    });
+    const encoder = createEncoder(merged, 48, false);
+    const frames: string[] = [];
+    let n = 0;
+    for (const block of encoder.fountain()) {
+      const frame = blockToFrame(block);
+      assert.ok(frame.startsWith(QRBEAM_PREFIX));
+      frames.push(frame);
+      n += 1;
+      if (n >= encoder.k * 8) break;
+    }
+    const last = feedAll(frames);
+    assert.equal(last.status, "complete");
+    if (last.status !== "complete") throw new Error("unreachable");
+    assert.equal(last.file.filename, "legacy.txt");
+    assert.ok(bytesEq(last.file.data, data));
+  });
+
   test("往返：编码后重组还原数据与 meta", () => {
     const data = payload("御钥师 air-gap 往返测试 " + "x".repeat(800));
     const sender = createQrBeamSender(data, {

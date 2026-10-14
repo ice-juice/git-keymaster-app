@@ -4,7 +4,13 @@ import { useTranslation } from "react-i18next";
 import { copyWithClear } from "../lib/secretsUi";
 import { useOverlayBack } from "../shared/mobileBack";
 import { encodeQrSvg } from "../shared/qrEncode";
-import { pushQrGenHistory, pushQrScanHistory } from "../shared/qrHistory";
+import {
+  loadSyncedQrHistory,
+  pushQrGenHistory,
+  pushQrScanHistory,
+  type QrHistoryLists,
+} from "../shared/qrHistory";
+import { useApp } from "../store";
 import {
   DEFAULT_PASSWORD_OPTS,
   generatePassword,
@@ -14,6 +20,7 @@ import {
 import { PasswordRootControls, PasswordStrengthBar } from "../ui/PasswordGenerate";
 import { QrScannerDialog } from "../ui/QrScannerDialog";
 import { showAppToast } from "../ui/Toast";
+import { MobileQrHistory } from "./Overview.mobileQrHistory";
 import { FileBeamTool } from "./Overview.mobileFileBeam";
 import { ToolsCertsPage } from "./tools/ToolsCertsPage";
 import { ToolsCryptoPage } from "./tools/ToolsCryptoPage";
@@ -144,12 +151,53 @@ function PasswordTool() {
 
 function QrTool() {
   const { t } = useTranslation();
+  const dataVersion = useApp((s) => s.dataVersion);
   const [tab, setTab] = useState<QrTab>("scan");
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState("");
   const [text, setText] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLists, setHistoryLists] = useState<QrHistoryLists>({ scans: [], generations: [] });
+  const [historyReady, setHistoryReady] = useState(false);
+  const [historyError, setHistoryError] = useState(false);
   const lastGenRecorded = useRef("");
-  const svg = useMemo(() => (text.trim() ? encodeQrSvg(text.trim()) : ""), [text]);
+  const historyTicket = useRef(0);
+  const closeHistory = useCallback(() => setHistoryOpen(false), []);
+  const applyHistory = useCallback((data: QrHistoryLists) => {
+    historyTicket.current += 1;
+    setHistoryLists(data);
+    setHistoryReady(true);
+    setHistoryError(false);
+  }, []);
+  const svg = useMemo(() => {
+    const payload = text.trim();
+    if (!payload) return "";
+    try {
+      return encodeQrSvg(payload);
+    } catch {
+      return "";
+    }
+  }, [text]);
+
+  useEffect(() => {
+    const ticket = ++historyTicket.current;
+    let cancelled = false;
+    void loadSyncedQrHistory()
+      .then((data) => {
+        if (cancelled || ticket !== historyTicket.current) return;
+        setHistoryLists(data);
+        setHistoryReady(true);
+        setHistoryError(false);
+      })
+      .catch(() => {
+        if (cancelled || ticket !== historyTicket.current) return;
+        setHistoryError(true);
+        showAppToast(t("common.errorTitle"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataVersion, t]);
 
   useEffect(() => {
     const payload = text.trim();
@@ -159,10 +207,12 @@ function QrTool() {
       const latest = text.trim();
       if (!latest || lastGenRecorded.current === latest) return;
       lastGenRecorded.current = latest;
-      void pushQrGenHistory(latest).catch(() => showAppToast(t("common.errorTitle")));
+      void pushQrGenHistory(latest)
+        .then(applyHistory)
+        .catch(() => showAppToast(t("common.errorTitle")));
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [text, svg, t]);
+  }, [text, svg, t, applyHistory]);
 
   return (
     <div className="m-tool-stack">
@@ -187,6 +237,10 @@ function QrTool() {
         </button>
       </div>
 
+      <button type="button" className="btn m-qr-history-open" onClick={() => setHistoryOpen(true)}>
+        {t("tools.qrHistoryOpen")}
+      </button>
+
       {tab === "scan" ? (
         <>
           <button type="button" className="btn primary" onClick={() => setScanning(true)}>
@@ -204,7 +258,9 @@ function QrTool() {
               const joined = texts.filter(Boolean).join("\n");
               setScanned(joined);
               if (joined.trim()) {
-                void pushQrScanHistory(joined.trim()).catch(() => showAppToast(t("common.errorTitle")));
+                void pushQrScanHistory(joined.trim())
+                  .then(applyHistory)
+                  .catch(() => showAppToast(t("common.errorTitle")));
               }
             }}
             onClose={() => setScanning(false)}
@@ -228,6 +284,16 @@ function QrTool() {
             <div className="muted sm">{t("home.qrEmptyGen")}</div>
           )}
         </>
+      )}
+      {historyOpen && (
+        <MobileQrHistory
+          initialKind={tab}
+          lists={historyLists}
+          loading={!historyReady && !historyError}
+          loadError={historyError}
+          onClose={closeHistory}
+          onLists={applyHistory}
+        />
       )}
     </div>
   );

@@ -22,7 +22,7 @@ export type QrBeamFeedResult =
   | { status: "duplicate"; progress: QrBeamProgress; sessionKey: string }
   | { status: "progress"; progress: QrBeamProgress; sessionKey: string; switched: boolean }
   | { status: "complete"; progress: QrBeamProgress; sessionKey: string; file: QrBeamFile; switched: boolean }
-  | { status: "error"; message: string; progress: QrBeamProgress };
+  | { status: "error"; message: string; progress: QrBeamProgress; limitBytes?: number };
 
 function decodeFilename(name: string | undefined): string {
   if (!name) return "file";

@@ -5,7 +5,17 @@ import { useTranslation } from "react-i18next";
 import { api, entryAttachments, errMessage, type FileAttachment, type FileEntry } from "../../lib/ipc";
 import { isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
 import { useOverlayBack } from "../../shared/mobileBack";
-import { QRBEAM_DEFAULT_BLOCK_SIZE, QRBEAM_DEFAULT_FPS, estimateDurationSec } from "../../shared/qrbeam/protocol";
+import {
+  QRBEAM_BLOCK_STEP,
+  QRBEAM_DEFAULT_BLOCK_SIZE,
+  QRBEAM_DEFAULT_FPS,
+  QRBEAM_MAX_BLOCK_SIZE,
+  QRBEAM_MIN_BLOCK_SIZE,
+  QRBEAM_QUIET_MODULES,
+  QRBEAM_TOO_LARGE,
+  estimateDurationSec,
+  maxScannableFileBytes,
+} from "../../shared/qrbeam/protocol";
 import { decodeRasterFallback, exportQrBeamGif, gifDownloadName, receiveQrBeamGif } from "../../shared/qrbeam/gif";
 import { createQrBeamReceiver, type QrBeamFile } from "../../shared/qrbeam/receiver";
 import { createQrBeamSender, type QrBeamSender } from "../../shared/qrbeam/sender";
@@ -27,9 +37,9 @@ type PickedFile = {
 
 const MIN_FPS = 3;
 const MAX_FPS = 15;
-const MIN_BLOCK = 256;
-const MAX_BLOCK = 768;
-const BLOCK_STEP = 64;
+const MIN_BLOCK = QRBEAM_MIN_BLOCK_SIZE;
+const MAX_BLOCK = QRBEAM_MAX_BLOCK_SIZE;
+const BLOCK_STEP = QRBEAM_BLOCK_STEP;
 
 function fileNameFromPath(path: string): string {
   const trimmed = path.replace(/[/\\]+$/, "");
@@ -136,14 +146,20 @@ export function ToolsFileBeamPage() {
         error: "",
       };
     } catch (e) {
-      return { sender: null, error: errMessage(e) };
+      const raw = errMessage(e);
+      const limit = formatBytes(maxScannableFileBytes(blockSize));
+      return {
+        sender: null,
+        error: raw === QRBEAM_TOO_LARGE ? t("tools.fileBeamHardLimit", { limit }) : raw,
+      };
     }
-  }, [picked, blockSize]);
+  }, [picked, blockSize, t]);
 
   useEffect(() => {
     setFrameSvg("");
     setPlaying(!!sendReady.sender);
     if (sendReady.error) setErr(sendReady.error);
+    else if (sendReady.sender) setErr("");
   }, [sendReady.sender, sendReady.error]);
 
   useEffect(() => {
@@ -151,7 +167,7 @@ export function ToolsFileBeamPage() {
     if (!playing || !sender) return;
     const tick = () => {
       try {
-        setFrameSvg(encodeQrSvg(sender.nextFrame()));
+        setFrameSvg(encodeQrSvg(sender.nextFrame(), QRBEAM_QUIET_MODULES));
       } catch {
         setPlaying(false);
         setErr(t("tools.fileBeamError"));
@@ -301,7 +317,12 @@ export function ToolsFileBeamPage() {
     const result = receiverRef.current.feed(text);
     if (result.status === "ignored") return "ignored";
     if (result.status === "error") {
-      setErr(`${t("tools.fileBeamError")}: ${result.message}`);
+      const limit = formatBytes(result.limitBytes ?? maxScannableFileBytes(blockSize));
+      setErr(
+        result.message === QRBEAM_TOO_LARGE
+          ? t("tools.fileBeamHardLimit", { limit })
+          : `${t("tools.fileBeamError")}: ${result.message}`,
+      );
       return "accepted";
     }
     setErr("");
@@ -410,6 +431,7 @@ export function ToolsFileBeamPage() {
     setVaultSaved(null);
     setRecvProgress({ decoded: 0, k: 0, ratio: 0 });
     receiverRef.current.reset();
+    let tooLarge = false;
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const result = await receiveQrBeamGif(bytes, receiverRef.current, {
@@ -419,7 +441,13 @@ export function ToolsFileBeamPage() {
           const feed = progress.feed;
           if (!feed || feed.status === "ignored") return;
           if (feed.status === "error") {
-            setErr(`${t("tools.fileBeamError")}: ${feed.message}`);
+            if (feed.message === QRBEAM_TOO_LARGE) {
+              tooLarge = true;
+              const limit = formatBytes(feed.limitBytes ?? maxScannableFileBytes(blockSize));
+              setErr(t("tools.fileBeamHardLimit", { limit }));
+            } else {
+              setErr(`${t("tools.fileBeamError")}: ${feed.message}`);
+            }
             return;
           }
           setRecvProgress(feed.progress);
@@ -427,7 +455,7 @@ export function ToolsFileBeamPage() {
         },
       });
       if (result.file) setErr("");
-      else setErr(t("tools.fileBeamGifNoFrames"));
+      else if (!tooLarge) setErr(t("tools.fileBeamGifNoFrames"));
     } catch {
       setErr(t("tools.fileBeamGifNoFrames"));
     } finally {
@@ -437,6 +465,9 @@ export function ToolsFileBeamPage() {
   }
 
   const sender = sendReady.sender;
+  const scanLimit = formatBytes(maxScannableFileBytes(blockSize));
+  const overHard = !!picked && picked.bytes.byteLength > maxScannableFileBytes(blockSize);
+  const banner = overHard ? t("tools.fileBeamHardLimit", { limit: scanLimit }) : sendReady.error || err;
   const etaSec = sender ? Math.max(1, Math.ceil(estimateDurationSec(sender.k, fps))) : 0;
   const recvPct = Math.round(recvProgress.ratio * 100);
 
@@ -465,7 +496,7 @@ export function ToolsFileBeamPage() {
             </button>
           </div>
 
-          {err && <div className="callout danger sm">{err}</div>}
+          {banner && <div className="callout danger sm">{banner}</div>}
 
           {tab === "send" ? (
             <div className="tools-beam-send">
@@ -496,7 +527,10 @@ export function ToolsFileBeamPage() {
 
               {sender && (
                 <>
-                  {sender.overSoftLimit && <div className="callout warn sm">{t("tools.fileBeamSoftLimit")}</div>}
+                  <div className="muted sm">{t("tools.fileBeamDensity")}</div>
+                  {sender.overSoftLimit && !overHard && (
+                    <div className="callout warn sm">{t("tools.fileBeamSoftLimit")}</div>
+                  )}
                   <div className="tools-beam-stage">
                     {frameSvg ? (
                       <div className="tools-beam-qr" dangerouslySetInnerHTML={{ __html: frameSvg }} />
@@ -510,7 +544,7 @@ export function ToolsFileBeamPage() {
                         <button
                           type="button"
                           className="btn primary"
-                          disabled={!sender}
+                          disabled={!sender || overHard}
                           onClick={() => setPlaying((v) => !v)}
                         >
                           {playing ? t("tools.fileBeamPause") : t("tools.fileBeamPlay")}
@@ -519,7 +553,7 @@ export function ToolsFileBeamPage() {
                           {t("tools.fileBeamAdvanced")}
                         </button>
                       </div>
-                      <button type="button" className="btn sm" disabled={!sender || gifBusy} onClick={() => void exportGif()}>
+                      <button type="button" className="btn sm" disabled={!sender || overHard || gifBusy} onClick={() => void exportGif()}>
                         {gifBusy ? t("tools.fileBeamExportingGif") : t("tools.fileBeamExportGif")}
                       </button>
                       <label className="tools-beam-param">

@@ -480,7 +480,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       }
       canvas.width = fitted.width;
       canvas.height = fitted.height;
-      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingEnabled = false;
       ctx.drawImage(source, region.x, region.y, region.width, region.height, 0, 0, fitted.width, fitted.height);
       closeBitmap(source);
 
