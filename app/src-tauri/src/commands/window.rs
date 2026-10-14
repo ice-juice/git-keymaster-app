@@ -1,6 +1,6 @@
 //! 关闭确认、最小化到托盘、退出程序。
 
-use crate::commands::vault::{lock_in_memory, try_grace_unlock_silent};
+use crate::commands::vault::lock_in_memory;
 use crate::commands::{recover_lock, AppState};
 use crate::error::{AppError, Result};
 use std::sync::atomic::Ordering;
@@ -31,15 +31,12 @@ pub fn hide_to_tray(app: &AppHandle) {
     hide_main(app);
 }
 
-/// 从托盘恢复：先按免验证天数尝试静默解锁，再通知前端刷新。
+/// 从托盘恢复。免验证解锁交给前端的 `window-restored`（异步命令）。
+///
+/// 以前在窗口线程里直接解密身份库。托盘放久了文件是冷的，窗口一出来就是「未响应」。
 pub fn restore_from_tray(app: &AppHandle) {
-    let state = app.state::<AppState>();
-    let unlocked = try_grace_unlock_silent(&state);
     show_main(app);
     let _ = app.emit("window-restored", ());
-    if unlocked {
-        crate::commands::vault::schedule_after_unlock(app.clone());
-    }
 }
 
 pub fn quit_app(app: &AppHandle, state: &AppState) {

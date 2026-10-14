@@ -290,9 +290,8 @@ pub struct NoteAssetAddResult {
 
 #[tauri::command(async)]
 pub fn note_list(state: State<'_, AppState>) -> Result<NoteList> {
-    let vault = recover_lock(&state.vault);
-    let v = unlocked_vault(&vault)?;
-    let data = store::load_notes(v)?;
+    let v = crate::commands::clone_unlocked_vault(&state)?;
+    let data = store::load_notes(&v)?;
     Ok(NoteList {
         entries: data.entries,
         groups: data.groups,

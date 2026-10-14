@@ -80,13 +80,9 @@ fn now() -> String {
 
 #[tauri::command(async)]
 pub fn totp_list(state: State<'_, AppState>) -> Result<TotpList> {
-    let vault = recover_lock(&state.vault);
-    let v = vault.as_ref().ok_or(AppError::Locked)?;
-    if !v.is_unlocked() {
-        return Err(AppError::Locked);
-    }
-    let data = store::load_totp(v)?;
-    let secrets = store::load_secrets(v)?;
+    let v = crate::commands::clone_unlocked_vault(&state)?;
+    let data = store::load_totp(&v)?;
+    let secrets = store::load_secrets(&v)?;
     let entries = data
         .entries
         .into_iter()

@@ -6,8 +6,12 @@ import { bioNoun, bioVerb } from "../lib/biometricUi";
 import { resolvePlatform } from "../platform/resolve";
 import { useApp } from "../store";
 import { AppLogo } from "../ui/AppLogo";
+import { afterNextPaint } from "../shared/yieldToPaint";
 
 type Gate = "bio" | "password" | "recovery";
+
+/** 系统指纹框还在时，解锁页被卸下再挂上也不能再开一次。 */
+let bioUnlockInFlight = false;
 
 export function UnlockView() {
   const { t } = useTranslation();
@@ -61,8 +65,12 @@ export function UnlockView() {
   }
 
   async function unlockByFingerprint() {
+    if (bioUnlockInFlight) return;
+    bioUnlockInFlight = true;
     setErr("");
     setBusy(true);
+    // 先把「正在验证」画出来。派生和整库解密在后台，窗口线程不再跟着干等。
+    await afterNextPaint();
     try {
       await api.vaultUnlockBiometric();
       await afterUnlock();
@@ -71,12 +79,13 @@ export function UnlockView() {
         setErr(errMessage(e));
       }
     } finally {
+      bioUnlockInFlight = false;
       setBusy(false);
     }
   }
 
   useEffect(() => {
-    if (gate !== "bio" || !fingerprintReady || autoStarted.current) return;
+    if (gate !== "bio" || !fingerprintReady || autoStarted.current || bioUnlockInFlight) return;
     if (resolvePlatform() !== "mobile") return;
     autoStarted.current = true;
     void unlockByFingerprint();
@@ -85,6 +94,7 @@ export function UnlockView() {
   async function unlock() {
     setErr("");
     setBusy(true);
+    await afterNextPaint();
     try {
       if (gate === "recovery") {
         await api.vaultUnlockRecovery(recovery);

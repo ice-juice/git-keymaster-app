@@ -9,7 +9,12 @@ import {
   type UnlockAnimStyle,
 } from "./lib/prefs";
 import { forgetAgentStatus } from "./lib/agentCache";
+import { createLatestReader } from "./shared/latestRead";
 import { clearAllDrafts } from "./shared/noteDrafts";
+
+type StatusPull = { ok: true; status: VaultStatus } | { ok: false };
+
+const pullVaultStatus = createLatestReader<StatusPull>();
 
 interface AppStore {
   status: VaultStatus | null;
@@ -82,26 +87,36 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ theme: next });
   },
   refresh: async () => {
-    try {
-      const status = await api.vaultStatus();
-      set({
-        status,
-        loading: false,
-        statusError: false,
-        writesLocked: !!status.writesLocked,
-        startupNote: status.startupNote ?? "",
-      });
-    } catch {
-      // 读状态失败不能当成「未初始化」，否则会误进引导页。
-      set({ loading: false, statusError: true });
-    }
+    await pullVaultStatus(
+      async () => {
+        try {
+          return { ok: true, status: await api.vaultStatus() };
+        } catch {
+          // 读状态失败不能当成「未初始化」，否则会误进引导页。
+          return { ok: false };
+        }
+      },
+      (result) => {
+        if (!result.ok) {
+          set({ loading: false, statusError: true });
+          return;
+        }
+        set({
+          status: result.status,
+          loading: false,
+          statusError: false,
+          writesLocked: !!result.status.writesLocked,
+          startupNote: result.status.startupNote ?? "",
+        });
+      },
+    );
   },
   lock: async () => {
     await api.vaultLock();
     forgetAgentStatus();
     // 内存里的备忘录草稿也要丢，否则重新解锁还能读到上一个人没保存的正文。
     clearAllDrafts();
-    const status = await api.vaultStatus();
-    set({ status, writesLocked: false, startupNote: "", playUnlockAnim: false });
+    set({ playUnlockAnim: false, writesLocked: false, startupNote: "" });
+    await get().refresh();
   },
 }));

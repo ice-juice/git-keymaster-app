@@ -75,20 +75,18 @@ pub fn read_ssh_config(state: State<'_, AppState>, repair: Option<bool>) -> Resu
         );
     }
     if !sys::text_has_host_blocks(&raw) {
-        if let Ok(vault) = state.vault.lock() {
-            if let Some(v) = vault.as_ref().filter(|v| v.is_unlocked()) {
-                if let Ok(data) = crate::store::load_data(v) {
-                    if data.identities.iter().any(|id| !id.host_alias.trim().is_empty()) {
-                        diagnostics.insert(
-                            0,
-                            Diagnostic {
-                                severity: Severity::Error,
-                                code: "hosts-missing-after-restore".into(),
-                                message: "身份已在库中，但工作空间 ssh/config 没有 Host。请点刷新重试；若仍为空，检查本机是否拒绝写入 ~/.ssh 或工作空间 ssh 目录。".into(),
-                                host: None,
-                            },
-                        );
-                    }
+        if let Ok(v) = crate::commands::clone_unlocked_vault(&state) {
+            if let Ok(data) = crate::store::load_data(&v) {
+                if data.identities.iter().any(|id| !id.host_alias.trim().is_empty()) {
+                    diagnostics.insert(
+                        0,
+                        Diagnostic {
+                            severity: Severity::Error,
+                            code: "hosts-missing-after-restore".into(),
+                            message: "身份已在库中，但工作空间 ssh/config 没有 Host。请点刷新重试；若仍为空，检查本机是否拒绝写入 ~/.ssh 或工作空间 ssh 目录。".into(),
+                            host: None,
+                        },
+                    );
                 }
             }
         }
@@ -288,10 +286,9 @@ fn detect_git_ssh() -> Option<String> {
 /// 列出 vault 中已登记的密钥（需已解锁）。
 #[tauri::command(async)]
 pub fn list_keys(state: State<'_, AppState>) -> Result<Vec<KeyRecord>> {
-    let vault = recover_lock(&state.vault);
-    let v = vault.as_ref().ok_or(AppError::NotInitialized)?;
+    let v = crate::commands::clone_unlocked_vault(&state)?;
     let root = v.root().to_path_buf();
-    let mut keys = crate::store::load_data(v)?.keys;
+    let mut keys = crate::store::load_data(&v)?.keys;
     for key in &mut keys {
         if let Some(p) = &key.deployed_path {
             key.deployed_path = Some(sys::resolve_identity_file(p, &root));
@@ -303,9 +300,8 @@ pub fn list_keys(state: State<'_, AppState>) -> Result<Vec<KeyRecord>> {
 /// 列出 vault 中的身份（需已解锁）。
 #[tauri::command(async)]
 pub fn list_identities(state: State<'_, AppState>) -> Result<Vec<Identity>> {
-    let vault = recover_lock(&state.vault);
-    let v = vault.as_ref().ok_or(AppError::NotInitialized)?;
-    Ok(crate::store::load_data(v)?.identities)
+    let v = crate::commands::clone_unlocked_vault(&state)?;
+    Ok(crate::store::load_data(&v)?.identities)
 }
 
 #[derive(Serialize)]
@@ -319,12 +315,8 @@ pub struct WorkspaceNavCounts {
 /// 侧栏角标：只读加密库计数，不跑 git / ssh-agent。
 #[tauri::command(async)]
 pub fn workspace_nav_counts(state: State<'_, AppState>) -> Result<WorkspaceNavCounts> {
-    let vault = recover_lock(&state.vault);
-    let v = vault.as_ref().ok_or(AppError::NotInitialized)?;
-    if !v.is_unlocked() {
-        return Err(AppError::Locked);
-    }
-    let data = crate::store::load_data(v)?;
+    let v = crate::commands::clone_unlocked_vault(&state)?;
+    let data = crate::store::load_data(&v)?;
     let machine_id = crate::app_config::AppConfig::current_machine_id();
     Ok(WorkspaceNavCounts {
         identities: data.identities.len(),

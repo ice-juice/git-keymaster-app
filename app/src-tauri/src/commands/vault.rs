@@ -79,9 +79,13 @@ fn adopt_sandboxed_workspace_if_needed(state: &AppState) {
     }
 }
 
-/// 查询当前状态（前端启动时首先调用）。
-#[tauri::command]
-pub fn vault_status(state: State<AppState>) -> VaultStatus {
+/// 查询当前状态（前端启动、锁定、解锁后都会调用）。
+///
+/// 必须离开窗口线程 / 安卓 WebView 桥。这条命令要拿保险库锁；解锁时若把 Argon2
+/// 或整库解密放在同一把锁里，放置久了内存和页缓存变冷，状态查询会干等超过 5 秒，
+/// Windows 把窗口标成「未响应」，手机上则点按和返回都停住。
+#[tauri::command(async)]
+pub fn vault_status(state: State<'_, AppState>) -> VaultStatus {
     #[cfg(mobile)]
     adopt_sandboxed_workspace_if_needed(&state);
 
@@ -235,15 +239,22 @@ pub fn vault_unlock(app: AppHandle, state: State<'_, AppState>, password: String
         }
     }
     ensure_loaded(&state)?;
-    let mut vault = recover_lock(&state.vault);
-    let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
-    match v.unlock_with_password(&password) {
-        Ok(()) => {
-            drop(vault);
-            recover_lock(&state.unlock_guard).reset();
-            crate::commands::hydrate_config_secrets(&state);
-            grant_grace_if_configured(&state);
-            schedule_after_unlock(app);
+    // 先抄出信封和 KDF，再放开锁做 Argon2。派生要几十到几百 MiB，放置久了这些页会被系统收回，
+    // 耗时远超刚锁定时的热缓存。这段时间不能占着保险库锁。
+    let (envelope, kdf) = {
+        let vault = recover_lock(&state.vault);
+        let v = vault.as_ref().ok_or(AppError::NotInitialized)?;
+        (v.header().envelopes.password.clone(), v.kdf_params().clone())
+    };
+    crate::vault::kdf::ensure_affordable(&kdf)?;
+    match crate::vault::envelope::unwrap_with_password(&envelope, &password, &kdf) {
+        Ok(mk) => {
+            {
+                let mut vault = recover_lock(&state.vault);
+                let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
+                v.install_master_key(mk);
+            }
+            finish_unlock(&app, &state);
             Ok(())
         }
         Err(e) => {
@@ -265,9 +276,7 @@ pub fn vault_unlock_recovery(
     let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
     v.unlock_with_recovery(&recovery_key)?;
     drop(vault);
-    crate::commands::hydrate_config_secrets(&state);
-    grant_grace_if_configured(&state);
-    schedule_after_unlock(app);
+    finish_unlock(&app, &state);
     Ok(())
 }
 
@@ -285,14 +294,18 @@ pub fn vault_unlock_biometric(app: AppHandle, state: State<'_, AppState>) -> Res
     let workspace_id = resolve_workspace_id(&state).ok_or(AppError::NotInitialized)?;
     match crate::biometric::unlock_master_key(&workspace_id) {
         Ok(mk) => {
-            let mut vault = recover_lock(&state.vault);
-            let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
-            v.unlock_with_master_key(mk)?;
-            drop(vault);
-            recover_lock(&state.unlock_guard).reset();
-            crate::commands::hydrate_config_secrets(&state);
-            grant_grace_if_configured(&state);
-            schedule_after_unlock(app);
+            {
+                let mut vault = recover_lock(&state.vault);
+                let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
+                v.install_master_key(mk);
+            }
+            // 身份库校验会解密整份 identities.enc。放在保险库锁外面，避免和状态查询、
+            // 指纹框抢同一条窗口线程。钥匙不对就立刻锁回去，不把明文留在缓存里。
+            if let Err(e) = confirm_installed_key(&state) {
+                recover_lock(&state.unlock_guard).record_failure();
+                return Err(e);
+            }
+            finish_unlock(&app, &state);
             Ok(())
         }
         Err(AppError::BiometricCancelled) => Err(AppError::BiometricCancelled),
@@ -315,6 +328,7 @@ pub fn lock_in_memory(state: &AppState) {
     if let Some(v) = recover_lock(&state.vault).as_mut() {
         v.lock();
     }
+    crate::store::invalidate_plaintext_cache();
     {
         let mut cfg = recover_lock(&state.config);
         cfg.clear_runtime_secrets();
@@ -364,12 +378,36 @@ pub fn try_grace_unlock_silent(state: &AppState) -> bool {
         let Some(v) = vault.as_mut() else {
             return false;
         };
-        if v.unlock_with_master_key(MasterKey::from_bytes(mk)).is_err() {
-            return false;
-        }
+        v.install_master_key(MasterKey::from_bytes(mk));
+    }
+    if confirm_installed_key(state).is_err() {
+        return false;
     }
     crate::commands::hydrate_config_secrets(state);
+    crate::autolock::touch(state);
     true
+}
+
+/// 主密钥已经装上之后，在不持有保险库锁的情况下确认它能解开身份库。
+fn confirm_installed_key(state: &AppState) -> Result<()> {
+    let snap = crate::commands::clone_unlocked_vault(state)?;
+    if snap.master_key_opens_data().is_err() {
+        if let Some(v) = recover_lock(&state.vault).as_mut() {
+            v.lock();
+        }
+        crate::store::invalidate_plaintext_cache();
+        return Err(AppError::BadPassword);
+    }
+    Ok(())
+}
+
+fn finish_unlock(app: &AppHandle, state: &AppState) {
+    recover_lock(&state.unlock_guard).reset();
+    crate::commands::hydrate_config_secrets(state);
+    grant_grace_if_configured(state);
+    // 空闲计时从这次解锁起算。否则进后台前积下的空闲会在解锁成功后马上再锁一次。
+    crate::autolock::touch(state);
+    schedule_after_unlock(app.clone());
 }
 
 /// 当场校验访问密码（不吃免密查看窗口）。
@@ -543,50 +581,64 @@ pub fn vault_try_grace_unlock(app: AppHandle, state: State<'_, AppState>) -> Res
 /// 首启强制同步由调度器按配置级标记决定；之后的解锁不再立刻拉取。
 /// 锁屏、托盘都不会停掉定时器。
 pub(crate) fn schedule_after_unlock(app: AppHandle) {
-    crate::sync::scheduler::on_vault_unlocked(app.clone());
     let state = app.state::<AppState>();
-    if state
+    let start_bootstrap = !state
         .bootstrap_busy
-        .swap(true, std::sync::atomic::Ordering::SeqCst)
-    {
-        return;
-    }
-    std::thread::spawn(move || {
-        let state = app.state::<AppState>();
-        if let Some(p) = state
-            .config
-            .lock()
-            .ok()
-            .and_then(|c| c.workspace_path.clone())
-        {
-            let _ = crate::sys::adopt_ssh_config(std::path::Path::new(&p));
-        }
-        let vault_clone = match state.vault.lock() {
-            Ok(g) => g.as_ref().filter(|v| v.is_unlocked()).cloned(),
-            Err(_) => {
-                state
-                    .bootstrap_busy
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
+        .swap(true, std::sync::atomic::Ordering::SeqCst);
+    // 抓同步钥匙、补 SSH、加载 agent 都可能在冷磁盘上读很久。
+    // 解锁命令先返回，界面才能从解锁页切走；这些慢活不要占着调用线程。
+    let app_for_thread = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("gam-after-unlock".into())
+        .spawn(move || {
+            crate::sync::scheduler::on_vault_unlocked(app_for_thread.clone());
+            if !start_bootstrap {
                 return;
             }
-        };
-        if let Some(v) = vault_clone {
-            let _ = crate::commands::write::reconcile_ssh_hosts(&v);
+            let app = app_for_thread;
+            let state = app.state::<AppState>();
+            if let Some(p) = state
+                .config
+                .lock()
+                .ok()
+                .and_then(|c| c.workspace_path.clone())
+            {
+                let _ = crate::sys::adopt_ssh_config(std::path::Path::new(&p));
+            }
+            let vault_clone = match state.vault.lock() {
+                Ok(g) => g.as_ref().filter(|v| v.is_unlocked()).cloned(),
+                Err(_) => {
+                    state
+                        .bootstrap_busy
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    return;
+                }
+            };
+            if let Some(v) = vault_clone {
+                let _ = crate::commands::write::reconcile_ssh_hosts(&v);
+            }
+            load_agent_best_effort(&state);
+            state
+                .bootstrap_busy
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+            let still_unlocked = state
+                .vault
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(|v| v.is_unlocked()))
+                .unwrap_or(false);
+            if still_unlocked {
+                crate::update::scheduler::kick_after_unlock(app.clone());
+            }
+        });
+    if spawned.is_err() {
+        if start_bootstrap {
+            state
+                .bootstrap_busy
+                .store(false, std::sync::atomic::Ordering::SeqCst);
         }
-        load_agent_best_effort(&state);
-        state
-            .bootstrap_busy
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-        let still_unlocked = state
-            .vault
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(|v| v.is_unlocked()))
-            .unwrap_or(false);
-        if still_unlocked {
-            crate::update::scheduler::kick_after_unlock(app.clone());
-        }
-    });
+        crate::sync::scheduler::on_vault_unlocked(app);
+    }
 }
 
 #[tauri::command]
@@ -769,4 +821,23 @@ pub fn factory_reset(
     steps.push("已重置本机应用配置，程序回到未初始化状态".into());
 
     Ok(FactoryResetReport { steps })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn vault_status_leaves_the_window_thread() {
+        let src = include_str!("vault.rs");
+        let idx = src
+            .find("pub fn vault_status")
+            .expect("vault_status 应仍是同步函数，由 command(async) 挪出窗口线程");
+        let attr_at = src[..idx]
+            .rfind("#[tauri::command")
+            .expect("vault_status 缺少 command 属性");
+        let attr = src[attr_at..idx].lines().next().unwrap();
+        assert!(
+            attr.contains("async"),
+            "vault_status 必须是 async 命令，否则锁定后的状态刷新会堵在窗口线程上：{attr}"
+        );
+    }
 }

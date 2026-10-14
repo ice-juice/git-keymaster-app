@@ -23,6 +23,7 @@ pub mod window;
 pub mod write;
 
 use crate::app_config::AppConfig;
+use crate::error::{AppError, Result};
 use crate::vault::Vault;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, MutexGuard};
@@ -37,6 +38,19 @@ pub fn vault_is_unlocked(state: &AppState) -> bool {
     recover_lock(&state.vault)
         .as_ref()
         .is_some_and(|v| v.is_unlocked())
+}
+
+/// 复制一份已解锁的保险库后立刻放开进程锁。
+/// 解密大文件时不能占着这把锁：`vault_status` 在桌面跑在窗口线程、在安卓跑在 WebView 桥上。
+pub fn clone_unlocked_vault(state: &AppState) -> Result<Vault> {
+    let guard = recover_lock(&state.vault);
+    let Some(v) = guard.as_ref() else {
+        return Err(AppError::NotInitialized);
+    };
+    if !v.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    Ok(v.clone())
 }
 
 /// 解锁后把旧 config.json 明文迁进信封，并回填内存。失败不阻断解锁。

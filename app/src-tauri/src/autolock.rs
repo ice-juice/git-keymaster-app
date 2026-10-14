@@ -89,6 +89,42 @@ pub fn workstation_locked() -> Option<bool> {
     }
 }
 
+/// 一次巡检之后，下一次该记住的解锁态，以及这一次要不要真的锁。
+///
+/// 安卓把进程冻在后台时，这条线程会停在 `sleep` 里。回到前台的第一次采样
+/// 会看到「刚才还解锁着 + 空闲/休眠已经到点」并锁上。指纹比 10 秒巡检快，
+/// 用户会在下一次采样看到锁定之前就解锁。若锁完仍把 `was_unlocked` 留成 true，
+/// 空闲时钟还停在进后台之前，之后每个 tick 都会再锁一次，解锁页和指纹框就来回弹。
+///
+/// 锁完必须立刻记成「已经看到锁定」。下一次若又是解锁，先重新武装并清掉空闲，不能再锁。
+pub(crate) fn next_autolock_state(
+    was_unlocked: bool,
+    unlocked: bool,
+    should_lock: bool,
+) -> (bool, bool) {
+    if !unlocked {
+        return (false, false);
+    }
+    if !was_unlocked {
+        return (true, false);
+    }
+    if should_lock {
+        return (false, true);
+    }
+    (true, false)
+}
+
+/// 采样之后若解锁路径已经 `touch` 过，空闲锁定作废。休眠/系统锁屏不受影响。
+pub(crate) fn confirm_lock_reason(
+    reason: Option<LockReason>,
+    idle_still_due: bool,
+) -> Option<LockReason> {
+    match reason {
+        Some(LockReason::Idle) if !idle_still_due => None,
+        other => other,
+    }
+}
+
 /// 启动后台巡检线程。进程退出时随之结束，无需显式停止。
 pub fn start(app: AppHandle) {
     std::thread::spawn(move || {
@@ -116,41 +152,50 @@ pub fn start(app: AppHandle) {
             drop(vault_guard);
             if !unlocked {
                 LOCKED_BY_SCREEN.store(false, Ordering::SeqCst);
-                was_unlocked = false;
-                continue;
-            }
-            // 锁定期间累积的"空闲"不算数，否则刚解锁就会被立刻锁回去。
-            if !was_unlocked {
-                was_unlocked = true;
-                touch(&state);
-                continue;
             }
 
-            let (auto_lock_minutes, lock_on_sleep) = {
-                let cfg = recover_lock(&state.config);
-                (cfg.auto_lock_minutes, cfg.lock_on_sleep)
-            };
-
-            let idle = recover_lock(&state.last_activity).elapsed();
-
-            let reason = if lock_on_sleep && sleep_detected(false, elapsed_wall, TICK) {
-                Some(LockReason::Sleep)
-            } else if lock_on_sleep && workstation_locked() == Some(true) {
-                if LOCKED_BY_SCREEN.swap(true, Ordering::SeqCst) {
-                    None
+            let should_lock = if unlocked && was_unlocked {
+                let (auto_lock_minutes, lock_on_sleep) = {
+                    let cfg = recover_lock(&state.config);
+                    (cfg.auto_lock_minutes, cfg.lock_on_sleep)
+                };
+                let idle = recover_lock(&state.last_activity).elapsed();
+                let reason = if lock_on_sleep && sleep_detected(false, elapsed_wall, TICK) {
+                    Some(LockReason::Sleep)
+                } else if lock_on_sleep && workstation_locked() == Some(true) {
+                    if LOCKED_BY_SCREEN.swap(true, Ordering::SeqCst) {
+                        None
+                    } else {
+                        Some(LockReason::ScreenLock)
+                    }
+                } else if idle_should_lock(auto_lock_minutes, idle) {
+                    Some(LockReason::Idle)
                 } else {
-                    Some(LockReason::ScreenLock)
-                }
-            } else if idle_should_lock(auto_lock_minutes, idle) {
-                Some(LockReason::Idle)
+                    if workstation_locked() == Some(false) {
+                        LOCKED_BY_SCREEN.store(false, Ordering::SeqCst);
+                    }
+                    None
+                };
+                let idle_still_due = idle_should_lock(
+                    auto_lock_minutes,
+                    recover_lock(&state.last_activity).elapsed(),
+                );
+                confirm_lock_reason(reason, idle_still_due)
             } else {
-                if workstation_locked() == Some(false) {
-                    LOCKED_BY_SCREEN.store(false, Ordering::SeqCst);
-                }
                 None
             };
 
-            let Some(reason) = reason else { continue };
+            let (next_was, do_lock) =
+                next_autolock_state(was_unlocked, unlocked, should_lock.is_some());
+            let just_armed = unlocked && !was_unlocked && next_was;
+            was_unlocked = next_was;
+            // 锁定期间累积的"空闲"不算数，否则刚解锁就会被立刻锁回去。
+            if just_armed {
+                touch(&state);
+            }
+            let Some(reason) = should_lock.filter(|_| do_lock) else {
+                continue;
+            };
 
             crate::commands::vault::lock_in_memory(&state);
             log::info!("已自动锁定保险库，原因：{}", reason.as_str());
@@ -193,6 +238,51 @@ mod tests {
         assert!(wall_jump_means_sleep(waited, TICK));
         assert!(!sleep_detected(true, waited, TICK));
         assert!(sleep_detected(false, waited, TICK));
+    }
+
+    /// 后台冻结后第一次采样会锁上。指纹在下一次采样前解锁时，
+    /// 即使空闲条件仍为真，也必须先重新武装，不能再锁。
+    #[test]
+    fn fast_reunlock_after_background_does_not_lock_again() {
+        let (was, lock) = next_autolock_state(true, true, true);
+        assert!(lock, "回到前台时该锁");
+        assert!(!was, "锁完必须忘掉之前的解锁态");
+
+        let (was, lock) = next_autolock_state(was, true, true);
+        assert!(!lock, "重新解锁后的第一次采样不能再锁");
+        assert!(was);
+
+        let (was, lock) = next_autolock_state(was, true, false);
+        assert!(!lock);
+        assert!(was);
+
+        let (was, lock) = next_autolock_state(was, true, true);
+        assert!(lock, "重新武装之后空闲再次到期仍要锁");
+        assert!(!was);
+    }
+
+    #[test]
+    fn locked_sample_does_not_lock_again() {
+        let (was, lock) = next_autolock_state(true, false, true);
+        assert!(!lock);
+        assert!(!was);
+    }
+
+    #[test]
+    fn unlock_touch_cancels_pending_idle_relock_but_not_sleep() {
+        assert_eq!(confirm_lock_reason(Some(LockReason::Idle), false), None);
+        assert_eq!(
+            confirm_lock_reason(Some(LockReason::Idle), true),
+            Some(LockReason::Idle)
+        );
+        assert_eq!(
+            confirm_lock_reason(Some(LockReason::Sleep), false),
+            Some(LockReason::Sleep)
+        );
+        assert_eq!(
+            confirm_lock_reason(Some(LockReason::ScreenLock), false),
+            Some(LockReason::ScreenLock)
+        );
     }
 
     /// 只要求「不 panic 且语义自洽」：CI 跑在无交互会话里，返回值不可预设。

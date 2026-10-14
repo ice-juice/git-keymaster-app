@@ -50,14 +50,14 @@ pub fn agent_status(state: State<'_, AppState>) -> Result<AgentStatus> {
         }
     };
     let unify_status = unify::inspect(&env, true);
-    // 反查需要 vault 数据（若已解锁）。
-    let vault = recover_lock(&state.vault);
-    let resolved = match vault.as_ref() {
-        Some(v) if v.is_unlocked() => {
+    // 反查需要 vault 数据（若已解锁）。先复制再解密，ssh-add 的等待不占保险库锁。
+    let snap = crate::commands::clone_unlocked_vault(&state).ok();
+    let resolved = match snap.as_ref() {
+        Some(v) => {
             let data = store::load_data(v)?;
             agent::reverse_lookup(&agent_keys, &data.keys, &data.identities)
         }
-        _ => agent_keys
+        None => agent_keys
             .into_iter()
             .map(|ak| AgentKeyResolved {
                 agent: ak,
