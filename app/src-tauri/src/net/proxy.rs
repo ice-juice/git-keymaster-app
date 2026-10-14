@@ -721,6 +721,9 @@ mod tests {
                 Err(e) => panic!("accept: {e}"),
             }
         };
+        // Windows 上 accept 出来的套接字会继承监听端的非阻塞。
+        // 非阻塞时 read 会立刻返回，握手字节还没写到，测试就会看成空包。
+        sock.set_nonblocking(false).unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut buf = [0u8; 24];
         let n = sock.read(&mut buf).unwrap_or(0);
