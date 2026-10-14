@@ -3,7 +3,6 @@ import { listen } from "@tauri-apps/api/event";
 import { useTranslation } from "react-i18next";
 import { api, errMessage, type UpdateCheckResult, type UpdateProgress } from "../lib/ipc";
 import { UpdateNotesDialog } from "./UpdateNotesDialog";
-import { appUpdateNotes } from "../shared/updateNotes";
 
 export function UpdateToast() {
   const { t } = useTranslation();
@@ -11,6 +10,7 @@ export function UpdateToast() {
   const [notesOpen, setNotesOpen] = useState(false);
   const [progress, setProgress] = useState<UpdateProgress | null>(null);
   const [busy, setBusy] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const [err, setErr] = useState("");
 
   useEffect(() => {
@@ -40,13 +40,13 @@ export function UpdateToast() {
   }, []);
 
   async function install() {
-    setBusy(true);
+    setInstalling(true);
     setErr("");
     try {
       await api.downloadAndInstallUpdate();
     } catch (e) {
       setErr(errMessage(e));
-      setBusy(false);
+      setInstalling(false);
     }
   }
 
@@ -70,8 +70,6 @@ export function UpdateToast() {
     progress && progress.total && progress.total > 0
       ? Math.min(100, Math.round((progress.downloaded / progress.total) * 100))
       : null;
-
-  const notesText = appUpdateNotes(notice?.notes);
 
   if (!notice && !progress && !notesOpen) return null;
 
@@ -100,34 +98,35 @@ export function UpdateToast() {
               ? t("update.toastCanInstall")
               : t("update.toastManual")}
           </div>
-          {err && <div className="err-text">{err}</div>}
+          {err && !notesOpen && <div className="err-text">{err}</div>}
           <div className="row" style={{ flexWrap: "wrap", marginTop: 10 }}>
-            {(notice.selfUpdateSupported || notice.sideloadUpdateSupported) && (
-              <button type="button" className="btn primary sm" disabled={busy} onClick={install}>
-                {t("update.install")}
-              </button>
-            )}
-            {notice.downloadUrl && (
-              <button type="button" className="btn sm" onClick={() => api.openUrl(notice.downloadUrl!)}>
-                {t("update.manual")}
-              </button>
-            )}
-            {notesText && (
-              <button type="button" className="btn ghost sm" onClick={() => setNotesOpen(true)}>
-                {t("update.viewNotes")}
-              </button>
-            )}
-            <button type="button" className="btn ghost sm" disabled={busy} onClick={skip}>
-              {t("update.skipShort")}
+            <button type="button" className="btn primary sm" onClick={() => setNotesOpen(true)}>
+              {t("update.openUpdate")}
             </button>
           </div>
         </>
       ) : null}
-      {notesOpen && notice?.notes && (
+      {notesOpen && notice?.available && (
         <UpdateNotesDialog
           version={notice.latestVersion}
-          notes={notice.notes}
+          notes={notice.notes ?? ""}
           onClose={() => setNotesOpen(false)}
+          actions={{
+            canAuto: !!(notice.selfUpdateSupported || notice.sideloadUpdateSupported),
+            manualUrl: notice.downloadUrl,
+            installing,
+            busy,
+            error: err || undefined,
+            note:
+              notice.selfUpdateSupported || notice.sideloadUpdateSupported
+                ? undefined
+                : t("update.manualOnly"),
+            onAuto: () => void install(),
+            onManual: () => {
+              if (notice.downloadUrl) void api.openUrl(notice.downloadUrl);
+            },
+            onSkip: () => void skip(),
+          }}
         />
       )}
     </div>

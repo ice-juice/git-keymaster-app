@@ -5,6 +5,7 @@ import { api } from "../lib/ipc";
 import { useApp } from "../store";
 import { UpdateToast } from "./UpdateToast";
 import { NavIcon3D, type Nav3DIconName } from "./NavIcon3D";
+import { migrateLegacyQrHistory } from "../shared/qrHistory";
 import { afterNextPaint } from "../shared/yieldToPaint";
 
 interface NavItemDef {
@@ -27,6 +28,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const [accountCount, setAccountCount] = useState<number | null>(null);
   const [fileCount, setFileCount] = useState<number | null>(null);
   const [noteCount, setNoteCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    void migrateLegacyQrHistory().catch(() => {
+      /* 迁入失败时保留本地记录，下次进入再试 */
+    });
+  }, []);
 
   useEffect(() => {
     let unmounted = false;

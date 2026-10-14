@@ -391,6 +391,50 @@ pub struct NoteData {
     pub deleted_entries: HashMap<String, String>,
 }
 
+/// 每类二维码历史在本地界面上的上限。超出后丢掉最旧的，并打确定性墓碑，避免多端来回把被裁掉的记录写回来。
+pub const QR_HISTORY_LIMIT: usize = 80;
+/// 原文上限。二维码图片由原文重建，不进同步载荷。
+pub const QR_HISTORY_TEXT_MAX: usize = 256 * 1024;
+
+/// 扫描记录与生成记录分开存放。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QrHistoryKind {
+    Scan,
+    Generate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QrHistoryWriteError {
+    Empty,
+    TooLong,
+}
+
+/// 一条二维码历史。`text` 是复制与重新绘制二维码所需的原文，不保存图片。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QrHistoryEntry {
+    pub id: String,
+    pub text: String,
+    /// Unix 毫秒，界面展示用。
+    pub at: i64,
+    /// RFC3339，多端合并时较新的覆盖较旧的。
+    pub updated_at: String,
+}
+
+/// data/qr-history.enc，云端对象 `data/qr-history.json`。
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct QrHistoryData {
+    #[serde(default)]
+    pub scans: Vec<QrHistoryEntry>,
+    #[serde(default)]
+    pub generations: Vec<QrHistoryEntry>,
+    #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
+    pub deleted_scans: HashMap<String, String>,
+    #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
+    pub deleted_generations: HashMap<String, String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct AccountSecret {
@@ -704,6 +748,202 @@ pub fn merge_note_data(local: NoteData, remote: NoteData) -> NoteData {
         groups: merge_groups(local.groups, remote.groups),
         deleted_entries: deleted,
     }
+}
+
+fn qr_parts(
+    data: &mut QrHistoryData,
+    kind: QrHistoryKind,
+) -> (&mut Vec<QrHistoryEntry>, &mut HashMap<String, String>) {
+    match kind {
+        QrHistoryKind::Scan => (&mut data.scans, &mut data.deleted_scans),
+        QrHistoryKind::Generate => (&mut data.generations, &mut data.deleted_generations),
+    }
+}
+
+fn tombstone_covers(deleted: &HashMap<String, String>, entry: &QrHistoryEntry) -> bool {
+    match deleted.get(&entry.id) {
+        Some(ts) if timestamp_newer_or_eq(ts, &entry.updated_at) => true,
+        _ => false,
+    }
+}
+
+fn cmp_qr_newest(a: &QrHistoryEntry, b: &QrHistoryEntry) -> std::cmp::Ordering {
+    let time = match (parse_rfc3339(&a.updated_at), parse_rfc3339(&b.updated_at)) {
+        (Some(ta), Some(tb)) => tb.cmp(&ta),
+        _ => b.updated_at.cmp(&a.updated_at),
+    };
+    time.then(b.at.cmp(&a.at)).then(a.id.cmp(&b.id))
+}
+
+fn cap_qr_list(entries: &mut Vec<QrHistoryEntry>, deleted: &mut HashMap<String, String>) {
+    entries.retain(|entry| !tombstone_covers(deleted, entry));
+    entries.sort_by(cmp_qr_newest);
+    if entries.len() > QR_HISTORY_LIMIT {
+        // 墓碑时间用条目自己的 updated_at，两边裁切结果一致，不会因为「现在」不同而反复推送。
+        for extra in entries.split_off(QR_HISTORY_LIMIT) {
+            deleted.insert(extra.id, extra.updated_at);
+        }
+    }
+}
+
+/// 排序、丢掉已墓碑条目，并裁到上限。可重复调用。
+pub fn normalize_qr_history(data: &mut QrHistoryData) {
+    cap_qr_list(&mut data.scans, &mut data.deleted_scans);
+    cap_qr_list(&mut data.generations, &mut data.deleted_generations);
+}
+
+/// 扫描、生成各自按 id + updated_at 合并，墓碑传播删除。不会用一边的全量覆盖另一边。
+pub fn merge_qr_history(local: QrHistoryData, remote: QrHistoryData) -> QrHistoryData {
+    let deleted_scans = merge_tombstones(local.deleted_scans, remote.deleted_scans);
+    let deleted_generations = merge_tombstones(local.deleted_generations, remote.deleted_generations);
+    let mut data = QrHistoryData {
+        scans: merge_named_entries(
+            local.scans,
+            remote.scans,
+            &deleted_scans,
+            |e| e.id.as_str(),
+            |e| e.updated_at.as_str(),
+        ),
+        generations: merge_named_entries(
+            local.generations,
+            remote.generations,
+            &deleted_generations,
+            |e| e.id.as_str(),
+            |e| e.updated_at.as_str(),
+        ),
+        deleted_scans,
+        deleted_generations,
+    };
+    normalize_qr_history(&mut data);
+    data
+}
+
+pub fn qr_updated_at_from_unix_ms(at: i64) -> String {
+    let ms = at.max(0) as i128;
+    time::OffsetDateTime::from_unix_timestamp_nanos(ms.saturating_mul(1_000_000))
+        .ok()
+        .and_then(|dt| dt.format(&time::format_description::well_known::Rfc3339).ok())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn is_safe_qr_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 80
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+}
+
+/// 旧 localStorage 的 id 能直接用就保留，否则按内容生成稳定 id，避免每次迁入都变成新记录。
+pub fn canonical_qr_history_id(kind: &str, id: &str, at: i64, text: &str) -> String {
+    let id = id.trim();
+    if is_safe_qr_id(id) {
+        return id.to_string();
+    }
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(kind.as_bytes());
+    hasher.update([0xff]);
+    hasher.update(at.to_string().as_bytes());
+    hasher.update([0xff]);
+    hasher.update(text.trim().as_bytes());
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(32);
+    for byte in digest.iter().take(16) {
+        hex.push_str(&format!("{byte:02x}"));
+    }
+    format!("legacy-{hex}")
+}
+
+fn apply_legacy_qr(
+    entries: &mut Vec<QrHistoryEntry>,
+    deleted: &mut HashMap<String, String>,
+    incoming: Vec<QrHistoryEntry>,
+) {
+    for mut item in incoming {
+        item.text = item.text.trim().to_string();
+        if item.text.is_empty() || item.text.chars().count() > QR_HISTORY_TEXT_MAX || item.id.is_empty() {
+            continue;
+        }
+        if let Some(ts) = deleted.get(&item.id) {
+            if timestamp_newer_or_eq(ts, &item.updated_at) {
+                continue;
+            }
+            deleted.remove(&item.id);
+        }
+        if let Some(existing) = entries.iter_mut().find(|entry| entry.id == item.id) {
+            if timestamp_newer_or_eq(&existing.updated_at, &item.updated_at) {
+                continue;
+            }
+            *existing = item;
+        } else {
+            entries.push(item);
+        }
+    }
+}
+
+/// 把仅本地的旧记录并进同步数据。已存在且不更旧的 id、以及墓碑盖住的 id 不会再次插入。
+pub fn import_legacy_qr_history(
+    data: &mut QrHistoryData,
+    scans: Vec<QrHistoryEntry>,
+    generations: Vec<QrHistoryEntry>,
+) -> bool {
+    let before = data.clone();
+    apply_legacy_qr(&mut data.scans, &mut data.deleted_scans, scans);
+    apply_legacy_qr(&mut data.generations, &mut data.deleted_generations, generations);
+    normalize_qr_history(data);
+    *data != before
+}
+
+pub fn insert_qr_history(
+    data: &mut QrHistoryData,
+    kind: QrHistoryKind,
+    mut entry: QrHistoryEntry,
+) -> Result<(), QrHistoryWriteError> {
+    entry.text = entry.text.trim().to_string();
+    if entry.text.is_empty() {
+        return Err(QrHistoryWriteError::Empty);
+    }
+    if entry.text.chars().count() > QR_HISTORY_TEXT_MAX {
+        return Err(QrHistoryWriteError::TooLong);
+    }
+    {
+        let (entries, deleted) = qr_parts(data, kind);
+        deleted.remove(&entry.id);
+        entries.retain(|item| item.id != entry.id);
+        entries.push(entry);
+    }
+    normalize_qr_history(data);
+    Ok(())
+}
+
+pub fn delete_qr_history(data: &mut QrHistoryData, kind: QrHistoryKind, id: &str, now: &str) -> bool {
+    let removed = {
+        let (entries, deleted) = qr_parts(data, kind);
+        let before = entries.len();
+        entries.retain(|entry| entry.id != id);
+        if entries.len() == before {
+            false
+        } else {
+            deleted.insert(id.to_string(), now.to_string());
+            true
+        }
+    };
+    if removed {
+        normalize_qr_history(data);
+    }
+    removed
+}
+
+pub fn clear_qr_history(data: &mut QrHistoryData, kind: QrHistoryKind, now: &str) {
+    {
+        let (entries, deleted) = qr_parts(data, kind);
+        for entry in entries.drain(..) {
+            deleted.insert(entry.id, now.to_string());
+        }
+    }
+    normalize_qr_history(data);
 }
 
 /// 当前元数据仍引用的 blob 哈希（文件内容 + 备忘录正文/图片 + 账号附件图）。
@@ -1473,5 +1713,96 @@ mod tests {
         };
         remap_entry_group(&mut group, &clear);
         assert_eq!(group, None);
+    }
+
+    fn qr_entry(id: &str, text: &str, at: i64) -> QrHistoryEntry {
+        QrHistoryEntry {
+            id: id.into(),
+            text: text.into(),
+            at,
+            updated_at: qr_updated_at_from_unix_ms(at),
+        }
+    }
+
+    #[test]
+    fn merge_qr_history_keeps_both_kinds_and_newer_text() {
+        let local = QrHistoryData {
+            scans: vec![qr_entry("a", "scan-new", 2_000)],
+            generations: vec![qr_entry("a", "gen-local", 2_000)],
+            deleted_scans: HashMap::from([("c".into(), qr_updated_at_from_unix_ms(5_000))]),
+            ..QrHistoryData::default()
+        };
+        let remote = QrHistoryData {
+            scans: vec![
+                qr_entry("a", "scan-old", 1_000),
+                qr_entry("c", "scan-deleted", 1_000),
+                qr_entry("d", "scan-remote", 3_000),
+            ],
+            generations: vec![qr_entry("g", "gen-remote", 3_000)],
+            ..QrHistoryData::default()
+        };
+        let merged = merge_qr_history(local, remote);
+        let scans: HashMap<_, _> = merged.scans.iter().map(|e| (e.id.as_str(), e.text.as_str())).collect();
+        assert_eq!(scans.get("a"), Some(&"scan-new"));
+        assert_eq!(scans.get("d"), Some(&"scan-remote"));
+        assert!(!scans.contains_key("c"));
+        assert!(merged.deleted_scans.contains_key("c"));
+        let gens: HashMap<_, _> = merged
+            .generations
+            .iter()
+            .map(|e| (e.id.as_str(), e.text.as_str()))
+            .collect();
+        assert_eq!(gens.get("a"), Some(&"gen-local"));
+        assert_eq!(gens.get("g"), Some(&"gen-remote"));
+    }
+
+    #[test]
+    fn qr_history_cap_tombstone_is_stable() {
+        let mut data = QrHistoryData::default();
+        for i in 0..81 {
+            data.scans.push(qr_entry(&format!("s{i:03}"), &format!("t{i}"), 1_700_000_000_000 + i * 1000));
+        }
+        normalize_qr_history(&mut data);
+        assert_eq!(data.scans.len(), QR_HISTORY_LIMIT);
+        assert!(data.scans.iter().all(|e| e.id != "s000"));
+        let tomb = data.deleted_scans.get("s000").cloned().unwrap();
+        assert_eq!(tomb, qr_updated_at_from_unix_ms(1_700_000_000_000));
+        let again = data.clone();
+        normalize_qr_history(&mut data);
+        assert_eq!(data, again);
+        assert!(data.generations.is_empty());
+        let bytes = serde_json::to_vec(&data).unwrap();
+        let back: QrHistoryData = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(serde_json::to_vec(&back).unwrap(), bytes);
+    }
+
+    #[test]
+    fn import_legacy_qr_history_is_idempotent_and_honors_tombstone() {
+        let mut data = QrHistoryData::default();
+        let scan = qr_entry("scan-1", " https://example.test ", 1_710_000_000_000);
+        let gen = qr_entry("gen-1", "wifi:example", 1_710_000_100_000);
+        assert!(import_legacy_qr_history(&mut data, vec![scan.clone()], vec![gen.clone()]));
+        assert_eq!(data.scans.len(), 1);
+        assert_eq!(data.scans[0].text, "https://example.test");
+        assert_eq!(data.generations[0].text, "wifi:example");
+        assert!(!import_legacy_qr_history(&mut data, vec![scan.clone()], vec![gen]));
+        assert!(delete_qr_history(&mut data, QrHistoryKind::Scan, "scan-1", &qr_updated_at_from_unix_ms(1_720_000_000_000)));
+        assert!(!import_legacy_qr_history(&mut data, vec![scan], vec![]));
+        assert!(data.scans.is_empty());
+        assert_eq!(data.generations.len(), 1);
+    }
+
+    #[test]
+    fn canonical_qr_history_id_keeps_safe_and_stabilizes_unsafe() {
+        assert_eq!(canonical_qr_history_id("scan", "ab-12", 1, "x"), "ab-12");
+        let a = canonical_qr_history_id("scan", "../evil", 10, "same");
+        let b = canonical_qr_history_id("scan", "../evil", 10, "same");
+        let c = canonical_qr_history_id("generate", "../evil", 10, "same");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(a.starts_with("legacy-"));
+        let rest = &a["legacy-".len()..];
+        assert_eq!(rest.len(), 32);
+        assert!(rest.bytes().all(|b| b.is_ascii_hexdigit()));
     }
 }

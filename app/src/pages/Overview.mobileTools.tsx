@@ -1,51 +1,51 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Hash, QrCode, ScanLine, Sparkles, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ChevronLeft, Hash, QrCode, ScanLine, ShieldCheck, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { copyWithClear } from "../lib/secretsUi";
-import { md5, sha256Hex } from "../shared/hash";
 import { useOverlayBack } from "../shared/mobileBack";
 import { encodeQrSvg } from "../shared/qrEncode";
+import { pushQrGenHistory, pushQrScanHistory } from "../shared/qrHistory";
 import {
   DEFAULT_PASSWORD_OPTS,
   generatePassword,
   passwordRootTooLong,
   type GeneratePasswordOpts,
 } from "../shared/password";
-import { generateRsaPem, type RsaModulus, type RsaPemPair } from "../shared/rsaKeygen";
 import { PasswordRootControls, PasswordStrengthBar } from "../ui/PasswordGenerate";
 import { QrScannerDialog } from "../ui/QrScannerDialog";
+import { showAppToast } from "../ui/Toast";
 import { FileBeamTool } from "./Overview.mobileFileBeam";
+import { ToolsCertsPage } from "./tools/ToolsCertsPage";
+import { ToolsCryptoPage } from "./tools/ToolsCryptoPage";
+import { ToolEmbed } from "./tools/ToolsShared";
 
-type ToolId = "password" | "crypto" | "qr" | "filebeam";
-type CryptoKind = "hash" | "rsa";
+type ToolId = "password" | "crypto" | "qr" | "certs" | "filebeam";
 type QrTab = "scan" | "generate";
 
-const CRYPTO_KINDS: { id: CryptoKind; labelKey: "home.cryptoHash" | "home.cryptoRsa" }[] = [
-  { id: "hash", labelKey: "home.cryptoHash" },
-  { id: "rsa", labelKey: "home.cryptoRsa" },
-];
-
-function ToolOverlay({
+function ToolSubpage({
   title,
   onClose,
+  beam = false,
   children,
 }: {
   title: string;
   onClose: () => void;
+  beam?: boolean;
   children: ReactNode;
 }) {
   const { t } = useTranslation();
+  useOverlayBack(true, onClose);
   return (
-    <div className="wizard-overlay" onClick={onClose}>
-      <div className="card dialog-card m-tool-dialog" onClick={(e) => e.stopPropagation()}>
-        <div className="card-head">
-          <div className="card-title">{title}</div>
-          <button type="button" className="btn ghost sm" onClick={onClose} aria-label={t("common.close")}>
-            <X size={16} />
-          </button>
-        </div>
-        <div className="card-body m-tool-dialog-body">{children}</div>
-      </div>
+    <div className="m-subpage-stage m-tool-subpage">
+      <header className="m-subpage-nav">
+        <button type="button" className="m-subpage-nav-back" aria-label={t("common.back")} onClick={onClose}>
+          <ChevronLeft size={22} />
+          <span>{t("common.back")}</span>
+        </button>
+        <h1 className="m-subpage-nav-title">{title}</h1>
+        <span className="m-subpage-nav-balance" aria-hidden="true" />
+      </header>
+      <main className={"m-subpage-content" + (beam ? " is-beam" : "")}>{children}</main>
     </div>
   );
 }
@@ -107,17 +107,6 @@ function PasswordTool() {
 
   return (
     <div className="m-tool-stack">
-      <label className="m-tool-range">
-        <span>{t("home.pwLength")}</span>
-        <input
-          type="range"
-          min={8}
-          max={64}
-          value={opts.length}
-          onChange={(e) => patch({ length: Number(e.target.value) })}
-        />
-        <strong>{opts.length}</strong>
-      </label>
       <PasswordRootControls layout="mobile" opts={opts} onChange={patch} />
       <label className="m-tool-check">
         <input type="checkbox" checked={opts.lower} onChange={(e) => patch({ lower: e.target.checked })} />
@@ -153,125 +142,27 @@ function PasswordTool() {
   );
 }
 
-function HashPanel() {
-  const { t } = useTranslation();
-  const [text, setText] = useState("");
-  const [md5Out, setMd5Out] = useState("");
-  const [shaOut, setShaOut] = useState("");
-
-  useEffect(() => {
-    if (!text) {
-      setMd5Out("");
-      setShaOut("");
-      return;
-    }
-    setMd5Out(md5(text));
-    let cancelled = false;
-    sha256Hex(text).then((hex) => {
-      if (!cancelled) setShaOut(hex);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [text]);
-
-  return (
-    <div className="m-tool-stack">
-      <label className="m-tool-field">
-        <span>{t("home.hashInput")}</span>
-        <textarea
-          className="input"
-          rows={4}
-          value={text}
-          placeholder={t("home.hashInputPh")}
-          onChange={(e) => setText(e.target.value)}
-        />
-      </label>
-      {text ? (
-        <>
-          <CopyField label={t("home.hashMd5")} value={md5Out} />
-          <CopyField label={t("home.hashSha256")} value={shaOut} />
-        </>
-      ) : (
-        <div className="muted sm">{t("home.hashEmpty")}</div>
-      )}
-    </div>
-  );
-}
-
-function RsaPanel() {
-  const { t } = useTranslation();
-  const [bits, setBits] = useState<RsaModulus>(2048);
-  const [pair, setPair] = useState<RsaPemPair | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  async function run() {
-    setBusy(true);
-    setErr("");
-    try {
-      setPair(await generateRsaPem(bits));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="m-tool-stack">
-      <p className="muted sm">{t("home.rsaHint")}</p>
-      <label className="m-tool-field">
-        <span>{t("home.rsaBits")}</span>
-        <select className="input" value={bits} onChange={(e) => setBits(Number(e.target.value) as RsaModulus)}>
-          <option value={2048}>2048</option>
-          <option value={4096}>4096</option>
-        </select>
-      </label>
-      <button type="button" className="btn primary" disabled={busy} onClick={() => void run()}>
-        {busy ? t("home.rsaGenerating") : t("home.rsaGenerate")}
-      </button>
-      {err && <div className="hint">{err}</div>}
-      {pair ? (
-        <>
-          <CopyField label={t("home.rsaPublic")} value={pair.publicPem} />
-          <CopyField label={t("home.rsaPrivate")} value={pair.privatePem} secret />
-        </>
-      ) : (
-        <div className="muted sm">{t("home.rsaEmpty")}</div>
-      )}
-    </div>
-  );
-}
-
-function CryptoTool() {
-  const { t } = useTranslation();
-  const [kind, setKind] = useState<CryptoKind>("hash");
-
-  return (
-    <div className="m-tool-stack">
-      <label className="m-tool-field">
-        <span>{t("home.cryptoType")}</span>
-        <select className="input" value={kind} onChange={(e) => setKind(e.target.value as CryptoKind)}>
-          {CRYPTO_KINDS.map((item) => (
-            <option key={item.id} value={item.id}>
-              {t(item.labelKey)}
-            </option>
-          ))}
-        </select>
-      </label>
-      {kind === "hash" ? <HashPanel /> : <RsaPanel />}
-    </div>
-  );
-}
-
 function QrTool() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<QrTab>("scan");
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState("");
   const [text, setText] = useState("");
+  const lastGenRecorded = useRef("");
   const svg = useMemo(() => (text.trim() ? encodeQrSvg(text.trim()) : ""), [text]);
+
+  useEffect(() => {
+    const payload = text.trim();
+    if (!payload || !svg) return;
+    if (lastGenRecorded.current === payload) return;
+    const timer = window.setTimeout(() => {
+      const latest = text.trim();
+      if (!latest || lastGenRecorded.current === latest) return;
+      lastGenRecorded.current = latest;
+      void pushQrGenHistory(latest).catch(() => showAppToast(t("common.errorTitle")));
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [text, svg, t]);
 
   return (
     <div className="m-tool-stack">
@@ -310,7 +201,11 @@ function QrTool() {
             open={scanning}
             onScan={(texts) => {
               setScanning(false);
-              setScanned(texts.filter(Boolean).join("\n"));
+              const joined = texts.filter(Boolean).join("\n");
+              setScanned(joined);
+              if (joined.trim()) {
+                void pushQrScanHistory(joined.trim()).catch(() => showAppToast(t("common.errorTitle")));
+              }
             }}
             onClose={() => setScanning(false)}
           />
@@ -341,7 +236,7 @@ function QrTool() {
 export function OverviewMobileTools() {
   const { t } = useTranslation();
   const [open, setOpen] = useState<ToolId | null>(null);
-  useOverlayBack(open !== null, () => setOpen(null));
+  const close = useCallback(() => setOpen(null), []);
 
   const cards: { id: ToolId; title: string; desc: string; icon: ReactNode }[] = [
     {
@@ -361,6 +256,12 @@ export function OverviewMobileTools() {
       title: t("home.toolQr"),
       desc: t("home.toolQrDesc"),
       icon: <QrCode size={18} />,
+    },
+    {
+      id: "certs",
+      title: t("tools.certsTitle"),
+      desc: t("tools.certsDesc"),
+      icon: <ShieldCheck size={18} />,
     },
     {
       id: "filebeam",
@@ -384,24 +285,33 @@ export function OverviewMobileTools() {
       </div>
 
       {open === "password" && (
-        <ToolOverlay title={t("home.toolPassword")} onClose={() => setOpen(null)}>
+        <ToolSubpage title={t("home.toolPassword")} onClose={close}>
           <PasswordTool />
-        </ToolOverlay>
+        </ToolSubpage>
       )}
       {open === "crypto" && (
-        <ToolOverlay title={t("home.toolCrypto")} onClose={() => setOpen(null)}>
-          <CryptoTool />
-        </ToolOverlay>
+        <ToolSubpage title={t("home.toolCrypto")} onClose={close}>
+          <ToolEmbed>
+            <ToolsCryptoPage />
+          </ToolEmbed>
+        </ToolSubpage>
       )}
       {open === "qr" && (
-        <ToolOverlay title={t("home.toolQr")} onClose={() => setOpen(null)}>
+        <ToolSubpage title={t("home.toolQr")} onClose={close}>
           <QrTool />
-        </ToolOverlay>
+        </ToolSubpage>
+      )}
+      {open === "certs" && (
+        <ToolSubpage title={t("tools.certsTitle")} onClose={close}>
+          <ToolEmbed>
+            <ToolsCertsPage />
+          </ToolEmbed>
+        </ToolSubpage>
       )}
       {open === "filebeam" && (
-        <ToolOverlay title={t("tools.fileBeamTitle")} onClose={() => setOpen(null)}>
+        <ToolSubpage title={t("tools.fileBeamTitle")} onClose={close} beam>
           <FileBeamTool />
-        </ToolOverlay>
+        </ToolSubpage>
       )}
     </section>
   );

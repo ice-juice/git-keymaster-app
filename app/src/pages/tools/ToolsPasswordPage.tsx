@@ -39,17 +39,6 @@ export function ToolsPasswordPage() {
     <ToolSubPage title={t("home.toolPassword")} desc={t("home.toolPasswordDesc")}>
       <Card>
         <div className="stack">
-          <label className="pw-gen-row">
-            <span>{t("home.pwLength")}</span>
-            <input
-              type="range"
-              min={8}
-              max={64}
-              value={opts.length}
-              onChange={(e) => patch({ length: Number(e.target.value) })}
-            />
-            <strong>{opts.length}</strong>
-          </label>
           <PasswordRootControls layout="desktop" opts={opts} onChange={patch} />
           <div className="tools-checks">
             <label className="pw-gen-check">

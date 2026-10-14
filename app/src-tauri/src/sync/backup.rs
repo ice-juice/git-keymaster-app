@@ -6,7 +6,8 @@
 
 use crate::error::{AppError, Result};
 use crate::model::{
-    collect_blob_hashes_all, AccountData, FileData, KeyRecord, NoteData, Secrets, TotpData, VaultData,
+    collect_blob_hashes_all, AccountData, FileData, KeyRecord, NoteData, QrHistoryData, Secrets, TotpData,
+    VaultData,
 };
 use crate::store::blob;
 use crate::platform::PlatformOps;
@@ -44,6 +45,9 @@ pub struct BackupPayload {
     pub file_data: FileData,
     #[serde(default)]
     pub note_data: NoteData,
+    /// 旧备份没有这份字段时为 None，导入时不拿空列表清掉本机二维码历史。
+    #[serde(default)]
+    pub qr_history: Option<QrHistoryData>,
     /// sha256 -> base64(明文 blob)
     #[serde(default)]
     pub blobs: HashMap<String, String>,
@@ -114,6 +118,7 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
     let account_data = store::load_accounts(vault).unwrap_or_default();
     let file_data = store::load_files(vault).unwrap_or_default();
     let note_data = store::load_notes(vault).unwrap_or_default();
+    let qr_history = store::load_qr_history(vault).unwrap_or_default();
     let mut icons = HashMap::new();
     for hash in store::list_icon_hashes(vault) {
         if let Ok(raw) = store::load_icon(vault, &hash) {
@@ -142,6 +147,7 @@ pub fn export_backup(vault: &Vault, dest_path: &Path, password: &str) -> Result<
         icons,
         file_data,
         note_data,
+        qr_history: Some(qr_history),
         blobs,
     };
 
@@ -307,6 +313,14 @@ pub fn import_backup(
         vault,
         &crate::model::merge_note_data(current_notes, payload.note_data.clone()),
     )?;
+    if let Some(remote_qr) = payload.qr_history.clone() {
+        let current_qr = if merge {
+            store::load_qr_history(vault).unwrap_or_default()
+        } else {
+            QrHistoryData::default()
+        };
+        store::save_qr_history(vault, &crate::model::merge_qr_history(current_qr, remote_qr))?;
+    }
     for (hash, b64) in &payload.blobs {
         if let Ok(bytes) = B64.decode(b64) {
             if let Err(e) = blob::write_blob(vault, std::io::Cursor::new(bytes)) {

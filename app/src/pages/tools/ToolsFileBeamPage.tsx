@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api, entryAttachments, errMessage, type FileAttachment, type FileEntry } from "../../lib/ipc";
 import { isNeedReauth, tryBiometricReauth } from "../../lib/secretsUi";
@@ -93,6 +94,7 @@ async function chooseAndWriteBytes(
 
 export function ToolsFileBeamPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<BeamTab>("send");
   const [picked, setPicked] = useState<PickedFile | null>(null);
   const [fps, setFps] = useState(QRBEAM_DEFAULT_FPS);
@@ -114,6 +116,7 @@ export function ToolsFileBeamPage() {
   const [received, setReceived] = useState<QrBeamFile | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [vaultSaved, setVaultSaved] = useState<{ id: string; name: string } | null>(null);
   const [folderErr, setFolderErr] = useState("");
   const [gifBusy, setGifBusy] = useState(false);
   const [gifImporting, setGifImporting] = useState(false);
@@ -287,32 +290,43 @@ export function ToolsFileBeamPage() {
       setRecvProgress({ decoded: 0, k: 0, ratio: 0 });
     }
     setScanning(true);
+    setVaultSaved(null);
   }
 
   function stopScan() {
     setScanning(false);
   }
 
-  function onBeamFrame(text: string) {
+  function onBeamFrame(text: string): "accepted" | "ignored" {
     const result = receiverRef.current.feed(text);
-    if (result.status === "ignored") return;
+    if (result.status === "ignored") return "ignored";
     if (result.status === "error") {
       setErr(`${t("tools.fileBeamError")}: ${result.message}`);
-      return;
+      return "accepted";
     }
+    setErr("");
     setRecvProgress(result.progress);
     if (result.status === "complete") {
       setReceived(result.file);
+      setVaultSaved(null);
       setScanning(false);
     }
+    return "accepted";
   }
+
+  const scanHint =
+    err ||
+    (recvProgress.k > 0
+      ? t("tools.fileBeamScanProgress", { decoded: recvProgress.decoded, k: recvProgress.k })
+      : t("tools.fileBeamScanHint"));
 
   async function saveToVault() {
     if (!received) return;
     setSaving(true);
     setErr("");
     try {
-      await api.fileAddBytes(received.filename || "file", Array.from(received.data));
+      const entry = await api.fileAddBytes(received.filename || "file", Array.from(received.data));
+      setVaultSaved({ id: entry.id, name: entry.name || received.filename || "file" });
       showAppToast(t("tools.fileBeamSaved"));
     } catch (e) {
       setErr(errMessage(e));
@@ -393,6 +407,7 @@ export function ToolsFileBeamPage() {
     setGifImporting(true);
     setGifRecognized(0);
     setReceived(null);
+    setVaultSaved(null);
     setRecvProgress({ decoded: 0, k: 0, ratio: 0 });
     receiverRef.current.reset();
     try {
@@ -593,20 +608,35 @@ export function ToolsFileBeamPage() {
                     })}
                   </div>
                   <div className="row">
-                    <button type="button" className="btn primary" disabled={saving} onClick={() => void saveToVault()}>
+                    <button type="button" className="btn primary" disabled={saving || !!vaultSaved} onClick={() => void saveToVault()}>
                       {t("tools.fileBeamSaveVault")}
                     </button>
                     <button type="button" className="btn" disabled={saving} onClick={() => void exportToDisk()}>
                       {t("tools.fileBeamExportDisk")}
                     </button>
                   </div>
+                  {vaultSaved && (
+                    <div className="stack">
+                      <div className="callout good sm">{t("tools.fileBeamSavedVaultBody", { name: vaultSaved.name })}</div>
+                      <div>
+                        <button
+                          type="button"
+                          className="btn sm"
+                          onClick={() => navigate(`/files?focus=${encodeURIComponent(vaultSaved.id)}`)}
+                        >
+                          {t("tools.fileBeamOpenVault")}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
               <QrScannerDialog
                 open={scanning}
                 title={t("tools.fileBeamReceive")}
-                hint={t("tools.fileBeamScanHint")}
+                hint={scanHint}
                 continuous
+                beamProgress={{ value: recvProgress.decoded, max: recvProgress.k, ratio: recvProgress.ratio }}
                 onFrame={onBeamFrame}
                 onScan={() => {}}
                 onClose={stopScan}

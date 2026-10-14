@@ -6,6 +6,14 @@ import { pickQrFromGallery } from "../lib/qrCapture";
 import { api } from "../lib/ipc";
 import { i18n, displayNameForLocale } from "../lib/i18n";
 import { isIOS, isMobilePlatform } from "../lib/platform";
+import {
+  centerSquareCrop,
+  fitMaxSide,
+  looksLikeBlankFrame,
+  shouldRunPixelFallback,
+  takeNewFrameTexts,
+  viewfinderSourceCrop,
+} from "./qrScanFrame";
 
 function attachInlineVideo(video: HTMLVideoElement, stream: MediaStream) {
   video.setAttribute("playsinline", "true");
@@ -20,17 +28,21 @@ async function openUserMedia(opts: {
   deviceId?: string | null;
   mobile: boolean;
   ios: boolean;
+  /** 光传帧模块密，需要比普通扫码更高的采样分辨率。 */
+  highRes?: boolean;
 }): Promise<MediaStream> {
+  const idealW = opts.highRes ? 1920 : 1280;
+  const idealH = opts.highRes ? 1080 : 720;
   const attempts: MediaStreamConstraints[] = [];
   if (opts.deviceId) {
     attempts.push({
-      video: { deviceId: { exact: opts.deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { deviceId: { exact: opts.deviceId }, width: { ideal: idealW }, height: { ideal: idealH } },
       audio: false,
     });
   } else if (opts.mobile) {
     // iOS Safari / WKWebView：exact facingMode 经常 OverconstrainedError，只用 ideal。
     attempts.push({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { facingMode: { ideal: "environment" }, width: { ideal: idealW }, height: { ideal: idealH } },
       audio: false,
     });
     if (opts.ios) {
@@ -39,7 +51,7 @@ async function openUserMedia(opts: {
     }
   } else {
     attempts.push({
-      video: { facingMode: { ideal: "user" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+      video: { facingMode: { ideal: "user" }, width: { ideal: idealW }, height: { ideal: idealH } },
       audio: false,
     });
   }
@@ -63,8 +75,10 @@ export interface QrScannerDialogProps {
   onClose: () => void;
   /** 连续扫描：命中后不关镜头、不调 onScan，只回调 onFrame 并继续循环。 */
   continuous?: boolean;
-  /** 连续模式下每帧新文本（相邻重复帧已去重）。 */
-  onFrame?: (text: string) => void;
+  /** 连续模式下每帧新文本（相邻重复帧已去重）。返回 ignored 表示这不是当前接收器要的码。 */
+  onFrame?: (text: string) => void | "accepted" | "ignored";
+  /** 连续扫码时画在镜头界面上的进度。max 为 0 表示还不知道总帧数。 */
+  beamProgress?: { value: number; max: number; ratio: number } | null;
 }
 
 export const QrScannerDialog: FC<QrScannerDialogProps> = ({
@@ -75,12 +89,14 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
   onClose,
   continuous = false,
   onFrame,
+  beamProgress = null,
 }) => {
   const brand = displayNameForLocale(i18n.language);
   const dialogTitle = title ?? i18n.t("qrscan.title");
   const dialogHint = hint ?? i18n.t("qrscan.hint");
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -88,6 +104,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [loadingCamera, setLoadingCamera] = useState(true);
+  const [scanDetail, setScanDetail] = useState<"" | "stalled" | "foreign" | "blank">("");
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const mobile = isMobilePlatform();
@@ -142,6 +159,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         deviceId: preferredId ?? deviceId,
         mobile,
         ios,
+        highRes: continuousRef.current,
       });
       streamRef.current = stream;
 
@@ -156,6 +174,13 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
         const capabilities = (videoTrack as any).getCapabilities?.();
         if (capabilities && "torch" in capabilities) {
           setTorchAvailable(true);
+        }
+        if (continuousRef.current) {
+          try {
+            await (videoTrack as any).applyConstraints({ advanced: [{ focusMode: "continuous" }] });
+          } catch {
+            // 部分机型不支持连续对焦，保持系统默认
+          }
         }
         const currentId = videoTrack.getSettings().deviceId;
         if (currentId) setDeviceId(currentId);
@@ -235,20 +260,114 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
     let detected = false;
     let frames = 0;
     let lastFrameText = "";
+    let accepted = 0;
+    let foreign = 0;
+    let blanks = 0;
+    let detail: "" | "stalled" | "foreign" | "blank" = "";
+    const startedAt = performance.now();
+    setScanDetail("");
 
-    /** 单帧：停扫并返回 true。连续：去重后 onFrame，返回 false 以继续循环。 */
-    const applyHit = (texts: string[]): boolean => {
-      if (continuousRef.current) {
-        for (const raw of texts) {
-          if (!raw || raw === lastFrameText) continue;
-          lastFrameText = raw;
-          onFrameRef.current?.(raw);
+    type FrameGrabber = { grabFrame: () => Promise<ImageBitmap> };
+    const grabCache: { track: MediaStreamTrack | null; grabber: FrameGrabber | null; fails: number } = {
+      track: null,
+      grabber: null,
+      fails: 0,
+    };
+
+    const withTimeout = <T,>(p: Promise<T>, ms: number): Promise<T> =>
+      new Promise((resolve, reject) => {
+        const id = window.setTimeout(() => reject(new Error("timeout")), ms);
+        p.then(
+          (value) => {
+            window.clearTimeout(id);
+            resolve(value);
+          },
+          (err) => {
+            window.clearTimeout(id);
+            reject(err);
+          },
+        );
+      });
+
+    const canvasToBlob = (canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob | null> =>
+      new Promise((resolve) => {
+        let settled = false;
+        const finish = (blob: Blob | null) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(id);
+          resolve(blob);
+        };
+        const id = window.setTimeout(() => finish(null), 700);
+        try {
+          canvas.toBlob((blob) => finish(blob), type, quality);
+        } catch {
+          finish(null);
         }
-        return false;
-      }
+      });
+
+    const closeBitmap = (source: CanvasImageSource) => {
+      if (typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap) source.close();
+    };
+
+    const setDetail = (next: typeof detail) => {
+      if (detail === next) return;
+      detail = next;
+      setScanDetail(next);
+    };
+
+    const refreshDetail = () => {
+      if (!continuousRef.current) return;
+      if (accepted > 0) setDetail("");
+      else if (blanks >= 4) setDetail("blank");
+      else if (foreign > 0) setDetail("foreign");
+      else if (performance.now() - startedAt > 4500) setDetail("stalled");
+    };
+
+    /** 单次扫码：命中后停镜头。连续光传不走这里。 */
+    const applyHit = (texts: string[]): boolean => {
       detected = true;
       handleSuccess(texts);
       return true;
+    };
+
+    const deliverContinuous = (texts: string[]): boolean => {
+      const taken = takeNewFrameTexts(texts, lastFrameText);
+      lastFrameText = taken.last;
+      if (taken.fresh.length === 0) return false;
+      for (const text of taken.fresh) {
+        const mark = onFrameRef.current?.(text);
+        if (mark === "ignored") foreign += 1;
+        else accepted += 1;
+      }
+      blanks = 0;
+      refreshDetail();
+      return true;
+    };
+
+    const captureSource = async (video: HTMLVideoElement): Promise<CanvasImageSource> => {
+      const track = streamRef.current?.getVideoTracks()[0];
+      if (track && grabCache.fails < 2 && "ImageCapture" in window) {
+        if (grabCache.track !== track) {
+          grabCache.track = track;
+          grabCache.grabber = null;
+          try {
+            const Ctor = (window as unknown as { ImageCapture: new (track: MediaStreamTrack) => FrameGrabber }).ImageCapture;
+            grabCache.grabber = new Ctor(track);
+          } catch {
+            grabCache.grabber = null;
+            grabCache.fails = 2;
+          }
+        }
+        if (grabCache.grabber) {
+          try {
+            return await withTimeout(grabCache.grabber.grabFrame(), 450);
+          } catch {
+            grabCache.fails += 1;
+          }
+        }
+      }
+      return video;
     };
 
     if ("BarcodeDetector" in window && !detectorRef.current) {
@@ -276,79 +395,148 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
     document.addEventListener("visibilitychange", onVis);
     window.addEventListener("pageshow", onVis);
 
-    const scanFrame = async () => {
-      if (cancelled || detected) return;
-
+    const scanOnce = async (): Promise<boolean> => {
       const video = videoRef.current;
       const canvas = canvasRef.current;
+      if (!video || !canvas || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return false;
+      let hitThisFrame = false;
 
-      if (video && canvas && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-        let hitThisFrame = false;
-
-        // 1. 优先复用 BarcodeDetector（iOS 17+ / Android Chromium 有则用）
-        if (detectorRef.current) {
-          try {
-            const codes = await detectorRef.current.detect(video);
-            if (codes && codes.length > 0) {
-              const rawValues = codes.map((c) => c.rawValue).filter(Boolean) as string[];
-              if (rawValues.length > 0) {
-                if (applyHit(rawValues)) return;
-                hitThisFrame = true;
-              }
-            }
-          } catch {
-            // fallback
+      if (detectorRef.current) {
+        try {
+          const codes = await detectorRef.current.detect(video);
+          if (codes && codes.length > 0) {
+            const rawValues = codes.map((c) => c.rawValue).filter(Boolean) as string[];
+            if (rawValues.length > 0) return applyHit(rawValues);
           }
-        }
-
-        // 2. 备用 jsQR 解析（本帧已命中则跳过，避免连续模式重复解码）
-        if (!hitThisFrame) {
-          try {
-            const vw = video.videoWidth || 640;
-            const vh = video.videoHeight || 480;
-            const maxDim = ios ? 480 : 640;
-            const scale = Math.min(1, maxDim / Math.max(vw, vh));
-            const cw = Math.round(vw * scale);
-            const ch = Math.round(vh * scale);
-
-            canvas.width = cw;
-            canvas.height = ch;
-            const ctx = canvas.getContext("2d", { willReadFrequently: true });
-            if (ctx) {
-              ctx.drawImage(video, 0, 0, cw, ch);
-              const imgData = ctx.getImageData(0, 0, cw, ch);
-              const code = jsQR(imgData.data, cw, ch, { inversionAttempts: "attemptBoth" });
-              if (code && code.data && code.data.trim()) {
-                if (applyHit([code.data.trim()])) return;
-                hitThisFrame = true;
-              }
-
-              // 3. 隔若干帧再走 rqrr，避免每帧打 IPC
-              if (!hitThisFrame) {
-                frames += 1;
-                if (frames % 12 === 0) {
-                  const blob = await new Promise<Blob | null>((resolve) => {
-                    canvas.toBlob((b) => resolve(b), "image/jpeg", 0.85);
-                  });
-                  if (blob) {
-                    const bytes = new Uint8Array(await blob.arrayBuffer());
-                    const texts = await api.decodeQrFromImage(Array.from(bytes));
-                    if (texts && texts.length > 0) {
-                      if (applyHit(texts)) return;
-                    }
-                  }
-                }
-              }
-            }
-          } catch {
-            // ignore frame error
-          }
+        } catch {
+          // fallback
         }
       }
 
-      if (!cancelled && !detected) {
-        timer = window.setTimeout(scanFrame, ios ? 160 : 120);
+      try {
+        const vw = video.videoWidth || 640;
+        const vh = video.videoHeight || 480;
+        const maxDim = ios ? 480 : 640;
+        const scale = Math.min(1, maxDim / Math.max(vw, vh));
+        const cw = Math.round(vw * scale);
+        const ch = Math.round(vh * scale);
+        canvas.width = cw;
+        canvas.height = ch;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true });
+        if (!ctx) return false;
+        ctx.drawImage(video, 0, 0, cw, ch);
+        const imgData = ctx.getImageData(0, 0, cw, ch);
+        const code = jsQR(imgData.data, cw, ch, { inversionAttempts: "attemptBoth" });
+        if (code && code.data && code.data.trim()) return applyHit([code.data.trim()]);
+
+        frames += 1;
+        if (frames % 12 === 0) {
+          const blob = await canvasToBlob(canvas, "image/jpeg", 0.85);
+          if (blob) {
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            const texts = await api.decodeQrFromImage(Array.from(bytes));
+            if (texts && texts.length > 0) return applyHit(texts);
+          }
+        }
+      } catch {
+        // ignore frame error
       }
+      return hitThisFrame;
+    };
+
+    const scanContinuous = async () => {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      const source = await captureSource(video);
+      if (cancelled) {
+        closeBitmap(source);
+        return;
+      }
+      const size =
+        source instanceof HTMLVideoElement
+          ? { width: source.videoWidth || 0, height: source.videoHeight || 0 }
+          : typeof ImageBitmap !== "undefined" && source instanceof ImageBitmap
+            ? { width: source.width, height: source.height }
+            : {
+                width: (source as { width?: number }).width || video.videoWidth || 0,
+                height: (source as { height?: number }).height || video.videoHeight || 0,
+              };
+      const display = video.getBoundingClientRect();
+      const box = boxRef.current?.getBoundingClientRect();
+      const region =
+        (box ? viewfinderSourceCrop(size.width, size.height, display, box) : null) ??
+        centerSquareCrop(size.width, size.height) ?? {
+          x: 0,
+          y: 0,
+          width: size.width,
+          height: size.height,
+        };
+      const fitted = fitMaxSide(region.width, region.height, 960);
+      const ctx = canvas.getContext("2d", { willReadFrequently: true });
+      if (!ctx || fitted.width < 2 || fitted.height < 2 || region.width < 2 || region.height < 2) {
+        closeBitmap(source);
+        return;
+      }
+      canvas.width = fitted.width;
+      canvas.height = fitted.height;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(source, region.x, region.y, region.width, region.height, 0, 0, fitted.width, fitted.height);
+      closeBitmap(source);
+
+      const imgData = ctx.getImageData(0, 0, fitted.width, fitted.height);
+      if (looksLikeBlankFrame(imgData.data, fitted.width, fitted.height)) {
+        blanks += 1;
+        refreshDetail();
+        return;
+      }
+      blanks = 0;
+
+      let delivered = false;
+      if (detectorRef.current) {
+        try {
+          const codes = await withTimeout(detectorRef.current.detect(canvas), 350);
+          const rawValues = (codes ?? []).map((c) => c.rawValue).filter(Boolean) as string[];
+          if (rawValues.length > 0) delivered = deliverContinuous(rawValues);
+        } catch {
+          // 像素解码兜底
+        }
+      }
+      if (shouldRunPixelFallback(delivered)) {
+        try {
+          const code = jsQR(imgData.data, fitted.width, fitted.height, {
+            inversionAttempts: frames % 3 === 2 ? "attemptBoth" : "dontInvert",
+          });
+          if (code?.data?.trim()) delivered = deliverContinuous([code.data]);
+          if (!delivered) {
+            frames += 1;
+            if (frames % 4 === 0) {
+              const blob = await canvasToBlob(canvas, "image/png");
+              if (blob && !cancelled) {
+                const bytes = new Uint8Array(await blob.arrayBuffer());
+                const texts = await withTimeout(api.decodeQrFromImage(Array.from(bytes)), 800).catch(() => [] as string[]);
+                if (texts.length > 0) deliverContinuous(texts);
+              }
+            }
+          } else {
+            frames = 0;
+          }
+        } catch {
+          // 继续下一帧
+        }
+      }
+      refreshDetail();
+    };
+
+    const scanFrame = async () => {
+      if (cancelled || detected) return;
+      const started = performance.now();
+      const stop = continuousRef.current ? false : await scanOnce();
+      if (continuousRef.current) await scanContinuous();
+      if (cancelled || detected || stop) return;
+      const elapsed = performance.now() - started;
+      const minGap = continuousRef.current ? 70 : ios ? 160 : 120;
+      timer = window.setTimeout(scanFrame, Math.max(16, minGap - elapsed));
     };
 
     timer = window.setTimeout(scanFrame, 300);
@@ -400,7 +588,7 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       {/* 取景扫描蒙层与扫描框 */}
       {!cameraError && (
         <div className="qr-scanner-mask">
-          <div className="qr-scanner-box">
+          <div className={"qr-scanner-box" + (continuous ? " is-continuous" : "")} ref={boxRef}>
             {/* 四个高亮角标 */}
             <div className="qr-scanner-corner tl" />
             <div className="qr-scanner-corner tr" />
@@ -451,9 +639,30 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
 
       {/* 底部功能栏 */}
       <footer className="qr-scanner-foot">
+        {continuous && beamProgress && !loadingCamera && !cameraError && (
+          <div
+            className="qr-scanner-progress"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuenow={beamProgress.max > 0 ? beamProgress.value : undefined}
+            aria-valuemax={beamProgress.max > 0 ? beamProgress.max : undefined}
+            aria-label={dialogHint}
+          >
+            <i style={{ width: `${Math.round(Math.min(1, Math.max(0, beamProgress.ratio)) * 100)}%` }} />
+          </div>
+        )}
         <div className="qr-scanner-hint">
           {loadingCamera ? i18n.t("qrscan.starting") : dialogHint}
         </div>
+        {continuous && scanDetail === "stalled" && (
+          <div className="qr-scanner-hint is-sub">{i18n.t("qrscan.beamStalled")}</div>
+        )}
+        {continuous && scanDetail === "foreign" && (
+          <div className="qr-scanner-hint is-sub">{i18n.t("qrscan.beamNotFrame")}</div>
+        )}
+        {continuous && scanDetail === "blank" && (
+          <div className="qr-scanner-hint is-sub">{i18n.t("qrscan.beamBlank")}</div>
+        )}
 
         <div className="qr-scanner-actions">
           {cameras.length > 1 && (

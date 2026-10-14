@@ -743,6 +743,15 @@ export const api = {
   fileSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
     invoke<void>("file_save_groups", { groups, remap: remap ?? null }),
 
+  qrHistoryList: () => invoke<QrHistoryList>("qr_history_list"),
+  qrHistoryAdd: (kind: "scan" | "generate", text: string) =>
+    invoke<QrHistoryList>("qr_history_add", { kind, text }),
+  qrHistoryDelete: (kind: "scan" | "generate", id: string) =>
+    invoke<QrHistoryList>("qr_history_delete", { kind, id }),
+  qrHistoryClear: (kind: "scan" | "generate") => invoke<QrHistoryList>("qr_history_clear", { kind }),
+  qrHistoryImportLegacy: (scans: QrHistoryLegacyItem[], generations: QrHistoryLegacyItem[]) =>
+    invoke<QrHistoryList>("qr_history_import_legacy", { scans, generations }),
+
   noteList: () => invoke<NoteList>("note_list"),
   noteGetBody: (id: string) => invoke<NoteBody>("note_get_body", { id }),
   noteUpsert: (args: NoteUpsertArgs) => invoke<NoteEntry>("note_upsert", { args }),
@@ -929,6 +938,24 @@ export interface NoteEntry {
 export interface NoteList {
   entries: NoteEntry[];
   groups: GroupMeta[];
+}
+
+export interface QrHistoryRecord {
+  id: string;
+  at: number;
+  text: string;
+  updatedAt: string;
+}
+
+export interface QrHistoryList {
+  scans: QrHistoryRecord[];
+  generations: QrHistoryRecord[];
+}
+
+export interface QrHistoryLegacyItem {
+  id: string;
+  at: number;
+  text: string;
 }
 
 export interface NoteBody {

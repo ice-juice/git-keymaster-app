@@ -4,7 +4,7 @@
 pub mod blob;
 
 use crate::error::{AppError, Result};
-use crate::model::{AccountData, FileData, NoteData, Secrets, TotpData, VaultData};
+use crate::model::{AccountData, FileData, NoteData, QrHistoryData, Secrets, TotpData, VaultData};
 use crate::vault::atomic_write;
 use crate::vault::crypto::{self, KEY_LEN, LABEL_KEYFILE, LABEL_METADATA, XNONCE_LEN};
 use crate::vault::Vault;
@@ -75,6 +75,9 @@ fn files_path(vault: &Vault) -> PathBuf {
 fn notes_path(vault: &Vault) -> PathBuf {
     vault.root().join("data").join("notes.enc")
 }
+fn qr_history_path(vault: &Vault) -> PathBuf {
+    vault.root().join("data").join("qr-history.enc")
+}
 fn icon_path(vault: &Vault, hash: &str) -> Result<PathBuf> {
     // 图标哈希同样从云端逻辑路径 `icons/{hash}.webp` 里切出来。
     if !crate::store::blob::is_sha256_hex(hash) {
@@ -103,6 +106,7 @@ static CACHE_TOTP: Mutex<Option<PlainCache<TotpData>>> = Mutex::new(None);
 static CACHE_ACCOUNTS: Mutex<Option<PlainCache<AccountData>>> = Mutex::new(None);
 static CACHE_FILES: Mutex<Option<PlainCache<FileData>>> = Mutex::new(None);
 static CACHE_NOTES: Mutex<Option<PlainCache<NoteData>>> = Mutex::new(None);
+static CACHE_QR_HISTORY: Mutex<Option<PlainCache<QrHistoryData>>> = Mutex::new(None);
 
 fn cache_lock<T>(slot: &Mutex<Option<PlainCache<T>>>) -> MutexGuard<'_, Option<PlainCache<T>>> {
     slot.lock().unwrap_or_else(|e| e.into_inner())
@@ -117,6 +121,7 @@ pub fn invalidate_plaintext_cache() {
     *cache_lock(&CACHE_ACCOUNTS) = None;
     *cache_lock(&CACHE_FILES) = None;
     *cache_lock(&CACHE_NOTES) = None;
+    *cache_lock(&CACHE_QR_HISTORY) = None;
 }
 
 fn load_cached<T: Clone + Default + DeserializeOwned>(
@@ -324,6 +329,21 @@ pub fn save_notes(vault: &Vault, data: &NoteData) -> Result<()> {
     let json = serde_json::to_vec(data)?;
     let sealed = seal(&key, &json)?;
     atomic_write(&notes_path(vault), &sealed)?;
+    invalidate_plaintext_cache();
+    Ok(())
+}
+
+pub fn load_qr_history(vault: &Vault) -> Result<QrHistoryData> {
+    load_cached(vault, qr_history_path(vault), &CACHE_QR_HISTORY)
+}
+
+pub fn save_qr_history(vault: &Vault, data: &QrHistoryData) -> Result<()> {
+    let mut data = data.clone();
+    crate::model::normalize_qr_history(&mut data);
+    let key = vault.subkey(LABEL_METADATA)?;
+    let json = serde_json::to_vec(&data)?;
+    let sealed = seal(&key, &json)?;
+    atomic_write(&qr_history_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -630,6 +650,29 @@ mod tests {
         let raw = std::fs::read(notes_path(&v)).unwrap();
         assert!(!String::from_utf8_lossy(&raw).contains("私密备忘"));
         assert_eq!(load_notes(&v).unwrap().entries, notes.entries);
+
+        let mut qr = QrHistoryData::default();
+        qr.scans.push(crate::model::QrHistoryEntry {
+            id: "scan-1".into(),
+            text: "otpauth://totp/qr-secret-payload".into(),
+            at: 1_710_000_000_000,
+            updated_at: "2026-03-01T00:00:00Z".into(),
+        });
+        qr.generations.push(crate::model::QrHistoryEntry {
+            id: "gen-1".into(),
+            text: "https://example.test/qr-gen-secret".into(),
+            at: 1_710_000_100_000,
+            updated_at: "2026-03-01T00:01:00Z".into(),
+        });
+        save_qr_history(&v, &qr).unwrap();
+        let raw = std::fs::read(qr_history_path(&v)).unwrap();
+        let disk = String::from_utf8_lossy(&raw);
+        assert!(!disk.contains("qr-secret-payload"));
+        assert!(!disk.contains("qr-gen-secret"));
+        assert!(!disk.contains("otpauth"));
+        let loaded = load_qr_history(&v).unwrap();
+        assert_eq!(loaded.scans[0].text, "otpauth://totp/qr-secret-payload");
+        assert_eq!(loaded.generations[0].text, "https://example.test/qr-gen-secret");
         std::fs::remove_dir_all(&root).ok();
     }
 

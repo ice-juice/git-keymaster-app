@@ -10,8 +10,7 @@
 use crate::error::{AppError, Result};
 use crate::model::{
     collect_blob_hashes, collect_blob_hashes_all, collect_note_body_hashes, AccountData, FileData, NoteData,
-    Secrets,
-    TotpData, VaultData,
+    QrHistoryData, Secrets, TotpData, VaultData,
 };
 use crate::store::blob;
 use crate::store;
@@ -668,6 +667,7 @@ pub fn push_to_cloud_with(
     let account_data = store::load_accounts(vault)?;
     let file_data = store::load_files(vault).unwrap_or_default();
     let note_data = store::load_notes(vault).unwrap_or_default();
+    let qr_history = store::load_qr_history(vault).unwrap_or_default();
     let remote_manifest = fetch_remote_manifest(vault, s3).ok().flatten();
     if crate::model::secrets_incomplete_for_entries(&secrets, &totp_data, &account_data) {
         if let Some(manifest) = &remote_manifest {
@@ -729,6 +729,7 @@ pub fn push_to_cloud_with(
     logical_objects.insert("data/accounts.json".into(), serde_json::to_vec(&account_data)?);
     logical_objects.insert("data/files.json".into(), serde_json::to_vec(&file_data)?);
     logical_objects.insert("data/notes.json".into(), serde_json::to_vec(&note_data)?);
+    logical_objects.insert("data/qr-history.json".into(), serde_json::to_vec(&qr_history)?);
     for hash in store::list_icon_hashes(vault) {
         if let Ok(bytes) = store::load_icon(vault, &hash) {
             logical_objects.insert(format!("icons/{hash}.webp"), bytes);
@@ -887,6 +888,7 @@ fn pull_from_cloud_inner(
     let mut remote_account_snap: Option<crate::model::AccountData> = None;
     let mut remote_file_snap: Option<FileData> = None;
     let mut remote_note_snap: Option<NoteData> = None;
+    let mut remote_qr_snap: Option<QrHistoryData> = None;
     let mut remote_ssh_snap: Option<String> = None;
     let mut pulled_key_ids: Vec<String> = Vec::new();
 
@@ -933,6 +935,11 @@ fn pull_from_cloud_inner(
             remote_note_snap = Some(
                 serde_json::from_slice(&plain)
                     .map_err(|e| AppError::Invalid(format!("解析云端备忘录数据失败: {e}")))?,
+            );
+        } else if logical_path == "data/qr-history.json" {
+            remote_qr_snap = Some(
+                serde_json::from_slice(&plain)
+                    .map_err(|e| AppError::Invalid(format!("解析云端二维码历史失败: {e}")))?,
             );
         } else if let Some(hash) = logical_path
             .strip_prefix("icons/")
@@ -994,12 +1001,19 @@ fn pull_from_cloud_inner(
     } else {
         local_notes
     };
+    let local_qr = store::load_qr_history(vault).unwrap_or_default();
+    let merged_qr = if let Some(remote_qr) = remote_qr_snap.clone() {
+        crate::model::merge_qr_history(local_qr, remote_qr)
+    } else {
+        local_qr
+    };
     // 先落机密与身份，再写 SSH。~/.ssh 被拒绝写入时不能把已拉下来的身份一起丢掉。
     store::save_secrets(vault, &current_secrets)?;
     store::save_totp(vault, &merged_totp)?;
     store::save_accounts(vault, &merged_acc)?;
     store::save_files(vault, &merged_files)?;
     store::save_notes(vault, &merged_notes)?;
+    store::save_qr_history(vault, &merged_qr)?;
     store::save_data(vault, &current_data)?;
     transferred_count += pull_missing_blobs(
         vault,
@@ -1043,6 +1057,7 @@ fn pull_from_cloud_inner(
             remote_account_snap.as_ref().unwrap_or(&crate::model::AccountData::default()),
             remote_file_snap.as_ref().unwrap_or(&FileData::default()),
             remote_note_snap.as_ref().unwrap_or(&NoteData::default()),
+            remote_qr_snap.as_ref().unwrap_or(&QrHistoryData::default()),
         )),
         None => None,
     };
@@ -1056,6 +1071,7 @@ fn pull_from_cloud_inner(
                 &merged_acc,
                 &merged_files,
                 &merged_notes,
+                &merged_qr,
             )
         }
         None => local_has_syncable_assets(vault)?,
@@ -1137,6 +1153,9 @@ struct SnapshotPayload {
     pub file_data: FileData,
     #[serde(default)]
     pub note_data: NoteData,
+    /// 旧快照没有这份数据时保持 None，恢复时不拿空列表覆盖本机二维码历史。
+    #[serde(default)]
+    pub qr_history: Option<QrHistoryData>,
     #[serde(default)]
     pub note_bodies: HashMap<String, String>,
     #[serde(default)]
@@ -1338,6 +1357,7 @@ fn retain_push_snapshot(
     crate::sys::portableize_vault_data(&mut snap_data);
     let file_data = store::load_files(vault).unwrap_or_default();
     let note_data = store::load_notes(vault).unwrap_or_default();
+    let qr_history = store::load_qr_history(vault).unwrap_or_default();
     let account_data = store::load_accounts(vault).unwrap_or_default();
     let blob_hashes: Vec<String> =
         collect_blob_hashes_all(&file_data, &note_data, &account_data).into_iter().collect();
@@ -1361,6 +1381,7 @@ fn retain_push_snapshot(
         icons: collect_icons(vault),
         file_data,
         note_data,
+        qr_history: Some(qr_history),
         note_bodies,
         blob_hashes,
     };
@@ -1432,6 +1453,9 @@ pub fn restore_snapshot(vault: &Vault, s3: &S3Client, snapshot_id: &str) -> Resu
     store::save_accounts(vault, &payload.account_data)?;
     store::save_files(vault, &payload.file_data)?;
     store::save_notes(vault, &payload.note_data)?;
+    if let Some(qr_history) = &payload.qr_history {
+        store::save_qr_history(vault, qr_history)?;
+    }
     for body in payload.note_bodies.values() {
         let _ = blob::write_blob(vault, std::io::Cursor::new(body.as_bytes()));
     }
@@ -1638,10 +1662,12 @@ fn extra_objects_diverged(vault: &Vault, manifest: &SyncManifest) -> bool {
     let accounts = store::load_accounts(vault).unwrap_or_default();
     let files = store::load_files(vault).unwrap_or_default();
     let notes = store::load_notes(vault).unwrap_or_default();
+    let qr_history = store::load_qr_history(vault).unwrap_or_default();
     let totp_hash = sha256_hex(&serde_json::to_vec(&totp).unwrap_or_default());
     let acc_hash = sha256_hex(&serde_json::to_vec(&accounts).unwrap_or_default());
     let files_hash = sha256_hex(&serde_json::to_vec(&files).unwrap_or_default());
     let notes_hash = sha256_hex(&serde_json::to_vec(&notes).unwrap_or_default());
+    let qr_hash = sha256_hex(&serde_json::to_vec(&qr_history).unwrap_or_default());
     let remote_totp = manifest
         .objects
         .get("data/totp.json")
@@ -1662,6 +1688,15 @@ fn extra_objects_diverged(vault: &Vault, manifest: &SyncManifest) -> bool {
         .get("data/notes.json")
         .map(|e| e.sha256.as_str())
         .unwrap_or("");
+    let remote_qr = manifest
+        .objects
+        .get("data/qr-history.json")
+        .map(|e| e.sha256.as_str())
+        .unwrap_or("");
+    let qr_nonempty = !qr_history.scans.is_empty()
+        || !qr_history.generations.is_empty()
+        || !qr_history.deleted_scans.is_empty()
+        || !qr_history.deleted_generations.is_empty();
     let needed = collect_blob_hashes_all(&files, &notes, &accounts);
     let blobs_missing_or_changed = needed.iter().any(|sha| {
         manifest
@@ -1674,10 +1709,12 @@ fn extra_objects_diverged(vault: &Vault, manifest: &SyncManifest) -> bool {
         || (!accounts.entries.is_empty() && acc_hash != remote_acc)
         || (!files.entries.is_empty() && files_hash != remote_files)
         || (!notes.entries.is_empty() && notes_hash != remote_notes)
+        || (qr_nonempty && qr_hash != remote_qr)
         || (manifest.objects.contains_key("data/totp.json") && totp_hash != remote_totp)
         || (manifest.objects.contains_key("data/accounts.json") && acc_hash != remote_acc)
         || (manifest.objects.contains_key("data/files.json") && files_hash != remote_files)
         || (manifest.objects.contains_key("data/notes.json") && notes_hash != remote_notes)
+        || (manifest.objects.contains_key("data/qr-history.json") && qr_hash != remote_qr)
         || blobs_missing_or_changed
 }
 
@@ -1691,6 +1728,23 @@ fn collect_icons(vault: &Vault) -> HashMap<String, String> {
     out
 }
 
+fn qr_state_json(data: &QrHistoryData) -> serde_json::Value {
+    let mut scans = data.scans.clone();
+    scans.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut generations = data.generations.clone();
+    generations.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut deleted_scans: Vec<_> = data.deleted_scans.iter().collect();
+    deleted_scans.sort_by(|a, b| a.0.cmp(b.0));
+    let mut deleted_generations: Vec<_> = data.deleted_generations.iter().collect();
+    deleted_generations.sort_by(|a, b| a.0.cmp(b.0));
+    serde_json::json!({
+        "scans": scans,
+        "generations": generations,
+        "deletedScans": deleted_scans,
+        "deletedGenerations": deleted_generations,
+    })
+}
+
 fn stable_state_hash(
     data: &VaultData,
     secrets: &Secrets,
@@ -1699,6 +1753,7 @@ fn stable_state_hash(
     accounts: &crate::model::AccountData,
     files: &FileData,
     notes: &NoteData,
+    qr_history: &QrHistoryData,
 ) -> String {
     let mut identities: Vec<&_> = data.identities.iter().collect();
     identities.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1741,6 +1796,7 @@ fn stable_state_hash(
         "accountEntries": account_entries,
         "fileEntries": file_entries,
         "noteEntries": note_entries,
+        "qrHistory": qr_state_json(qr_history),
         "blobHashes": blob_hashes,
         "ssh": crate::sys::canonical_ssh_for_sync(ssh),
     });
@@ -1753,13 +1809,18 @@ fn local_has_syncable_assets(vault: &Vault) -> Result<bool> {
     let accounts = store::load_accounts(vault).unwrap_or_default();
     let files = store::load_files(vault).unwrap_or_default();
     let notes = store::load_notes(vault).unwrap_or_default();
+    let qr_history = store::load_qr_history(vault).unwrap_or_default();
     Ok(!data.identities.is_empty()
         || !data.keys.is_empty()
         || !data.repos.is_empty()
         || !totp.entries.is_empty()
         || !accounts.entries.is_empty()
         || !files.entries.is_empty()
-        || !notes.entries.is_empty())
+        || !notes.entries.is_empty()
+        || !qr_history.scans.is_empty()
+        || !qr_history.generations.is_empty()
+        || !qr_history.deleted_scans.is_empty()
+        || !qr_history.deleted_generations.is_empty())
 }
 
 /// 合并结果和云端不一致才上传。
@@ -1909,6 +1970,43 @@ mod tests {
 
         let dec = decrypt_payload(&enc_key, &enc).unwrap();
         assert_eq!(dec, plain);
+    }
+
+    #[test]
+    fn qr_history_sync_payload_is_encrypted() {
+        let mk = MasterKey::random();
+        let enc_key = mk.subkey(LABEL_SYNC_OBJECT);
+        let name = mk.object_name("data/qr-history.json");
+        assert!(!name.contains("qr-history"), "对象名不能带出逻辑路径");
+        assert!(!name.contains("secret-plain"));
+
+        let data = QrHistoryData {
+            scans: vec![crate::model::QrHistoryEntry {
+                id: "s1".into(),
+                text: "otpauth://totp/secret-plain".into(),
+                at: 1,
+                updated_at: "2026-01-01T00:00:00Z".into(),
+            }],
+            generations: vec![crate::model::QrHistoryEntry {
+                id: "g1".into(),
+                text: "生成原文 secret-plain".into(),
+                at: 2,
+                updated_at: "2026-01-01T00:00:01Z".into(),
+            }],
+            ..QrHistoryData::default()
+        };
+        let plain = serde_json::to_vec(&data).unwrap();
+        assert!(plain.windows(12).any(|w| w == b"secret-plain"));
+        let enc = encrypt_payload(&enc_key, &plain).unwrap();
+        let enc_text = String::from_utf8_lossy(&enc);
+        assert!(!enc_text.contains("secret-plain"));
+        assert!(!enc_text.contains("otpauth"));
+        assert!(!enc_text.contains("qr-history"));
+        let back: QrHistoryData = serde_json::from_slice(&decrypt_payload(&enc_key, &enc).unwrap()).unwrap();
+        assert_eq!(back.scans[0].text, "otpauth://totp/secret-plain");
+        assert_eq!(back.generations[0].text, "生成原文 secret-plain");
+        assert_eq!(back.scans.len(), 1);
+        assert_eq!(back.generations.len(), 1);
     }
 
     fn meta(id: &str, created_at: &str) -> SnapshotMeta {

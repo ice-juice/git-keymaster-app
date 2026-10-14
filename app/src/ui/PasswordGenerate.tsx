@@ -154,6 +154,67 @@ const ROOT_PLACE_KEY: Record<PasswordRootPosition, "tools.passwordRootHead" | "t
   mid: "tools.passwordRootMid",
 };
 
+/** 工具页滑块与 +/− 共用的长度范围。生成函数内部另有更宽的夹取。 */
+const PASSWORD_LENGTH_MIN = 8;
+const PASSWORD_LENGTH_MAX = 64;
+
+function PasswordLengthRow({
+  length,
+  onChange,
+  layout,
+}: {
+  length: number;
+  onChange: (length: number) => void;
+  layout: "desktop" | "mobile";
+}) {
+  const { t } = useTranslation();
+  const inputId = layout === "desktop" ? "pw-length-desktop" : "pw-length-mobile";
+  const atMin = length <= PASSWORD_LENGTH_MIN;
+  const atMax = length >= PASSWORD_LENGTH_MAX;
+
+  function setLength(next: number) {
+    const clamped = Math.min(PASSWORD_LENGTH_MAX, Math.max(PASSWORD_LENGTH_MIN, Math.round(next)));
+    if (clamped !== length) onChange(clamped);
+  }
+
+  const rowClass = layout === "mobile" ? "m-tool-range" : "pw-gen-row";
+
+  return (
+    <div className={rowClass}>
+      <label htmlFor={inputId}>{t("home.pwLength")}</label>
+      <input
+        id={inputId}
+        type="range"
+        min={PASSWORD_LENGTH_MIN}
+        max={PASSWORD_LENGTH_MAX}
+        value={Math.min(PASSWORD_LENGTH_MAX, Math.max(PASSWORD_LENGTH_MIN, length))}
+        onChange={(e) => setLength(Number(e.target.value))}
+      />
+      <span className="pw-len-step">
+        <button
+          type="button"
+          className="btn sm pw-len-step-btn"
+          aria-label={t("home.pwLengthDecrease")}
+          disabled={atMin}
+          onClick={() => setLength(length - 1)}
+        >
+          −
+        </button>
+        <strong>{length}</strong>
+        <button
+          type="button"
+          className="btn sm pw-len-step-btn"
+          aria-label={t("home.pwLengthIncrease")}
+          disabled={atMax}
+          onClick={() => setLength(length + 1)}
+        >
+          +
+        </button>
+      </span>
+    </div>
+  );
+}
+
 export function PasswordRootControls({
   opts,
   onChange,
@@ -192,6 +253,9 @@ export function PasswordRootControls({
     />
   );
   const note = passwordRootTooLong(opts) ? <div className="muted sm">{t("tools.passwordRootTooLong")}</div> : null;
+  const lengthRow = (
+    <PasswordLengthRow length={opts.length} layout={layout} onChange={(length) => onChange({ length })} />
+  );
 
   if (layout === "mobile") {
     return (
@@ -200,6 +264,7 @@ export function PasswordRootControls({
           <span>{t("tools.passwordRoot")}</span>
           {rootInput}
         </label>
+        {lengthRow}
         <div className="m-tool-tabs" role="radiogroup" aria-label={t("tools.passwordRoot")}>
           {buttons}
         </div>
@@ -216,6 +281,7 @@ export function PasswordRootControls({
         </label>
         {rootInput}
       </div>
+      {lengthRow}
       <div className="view-switcher" role="radiogroup" aria-label={t("tools.passwordRoot")}>
         {buttons}
       </div>

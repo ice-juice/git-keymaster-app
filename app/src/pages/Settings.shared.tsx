@@ -49,7 +49,6 @@ import {
 import { clampMaskKeep, MAX_MASK_KEEP, MIN_MASK_KEEP } from "../shared/maskAccount";
 import { PageHead, Card, FieldLabel, Badge, ErrorDialog } from "../ui/common";
 import { UpdateNotesDialog } from "../ui/UpdateNotesDialog";
-import { appUpdateNotes } from "../shared/updateNotes";
 import { PatGuideDialog } from "../ui/PatGuideDialog";
 import { ReauthDialog } from "../ui/ReauthDialog";
 import { LanguageCard } from "../ui/LanguageCard";
@@ -1014,7 +1013,7 @@ export function AboutUpdateCard() {
       setResult(r);
       setVersion(r.currentVersion);
       setLastCheck(await api.getLastUpdateCheck());
-      setNotesOpen(!!r.available && !!appUpdateNotes(r.notes));
+      setNotesOpen(!!r.available);
       setMsg(r.available ? t("update.found", { version: r.latestVersion }) : t("update.latest"));
     } catch (e) {
       setErr(errMessage(e));
@@ -1044,6 +1043,7 @@ export function AboutUpdateCard() {
     setBusy(true);
     try {
       await api.skipUpdateVersion(ver);
+      setNotesOpen(false);
       setMsg(t("update.skipped", { version: ver }));
     } catch (e) {
       setErr(errMessage(e));
@@ -1052,9 +1052,8 @@ export function AboutUpdateCard() {
     }
   }
 
-  const showInstall = !!result?.available && result.selfUpdateSupported;
-  const showManualOnly = !!result?.available && !result.selfUpdateSupported;
-  const notesText = appUpdateNotes(result?.notes);
+  const canAuto = !!result?.available && !!result.selfUpdateSupported;
+  const manualUrl = result?.downloadUrl ?? null;
 
   return (
     <div className="stack-lg">
@@ -1087,42 +1086,31 @@ export function AboutUpdateCard() {
                 <strong>{t("update.newVersion", { version: result.latestVersion })}</strong>
                 {result.pubDate ? ` · ${formatWhen(result.pubDate, t("update.never"))}` : ""}
               </div>
-              {showManualOnly && (
-                <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-                  {t("update.manualOnly")}
-                </div>
-              )}
-              <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
-                {showInstall && (
-                  <button type="button" className="btn primary sm" disabled={installing} onClick={install}>
-                    {installing ? t("update.installing") : t("update.install")}
-                  </button>
-                )}
-                {notesText && (
-                  <button type="button" className="btn sm" onClick={() => setNotesOpen(true)}>
-                    {t("update.openNotes")}
-                  </button>
-                )}
-                <button type="button" className="btn sm" disabled={busy} onClick={skip}>
-                  {t("update.skip")}
+              <div className="row" style={{ marginTop: 8 }}>
+                <button type="button" className="btn primary sm" onClick={() => setNotesOpen(true)}>
+                  {t("update.openUpdate")}
                 </button>
-                {result.downloadUrl && (
-                  <button
-                    type="button"
-                    className="btn ghost sm"
-                    onClick={() => api.openUrl(result.downloadUrl!)}
-                  >
-                    {t("update.manual")}
-                  </button>
-                )}
               </div>
             </div>
           )}
-          {notesOpen && result?.notes && (
+          {notesOpen && result?.available && (
             <UpdateNotesDialog
               version={result.latestVersion}
-              notes={result.notes}
+              notes={result.notes ?? ""}
               onClose={() => setNotesOpen(false)}
+              actions={{
+                canAuto,
+                manualUrl,
+                installing,
+                busy,
+                error: err || undefined,
+                note: canAuto ? undefined : t("update.manualOnly"),
+                onAuto: () => void install(),
+                onManual: () => {
+                  if (manualUrl) void api.openUrl(manualUrl);
+                },
+                onSkip: () => void skip(),
+              }}
             />
           )}
         </div>

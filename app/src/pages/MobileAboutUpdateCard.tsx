@@ -11,7 +11,6 @@ import {
 import { isAndroid, isIOS } from "../lib/platform";
 import { Card, ErrorDialog, FieldLabel } from "../ui/common";
 import { UpdateNotesDialog } from "../ui/UpdateNotesDialog";
-import { appUpdateNotes } from "../shared/updateNotes";
 import { NetworkProxyCard } from "./Settings.shared";
 
 const DEFAULT_UPDATE_REPO = "ice-juice/git-keymaster-app";
@@ -132,7 +131,7 @@ export function MobileAboutUpdateCard() {
       setResult(r);
       setVersion(r.currentVersion);
       setLastCheck(await api.getLastUpdateCheck());
-      setNotesOpen(!!r.available && !!appUpdateNotes(r.notes));
+      setNotesOpen(!!r.available);
       setMsg(r.available ? t("update.found", { version: r.latestVersion }) : t("update.latest"));
     } catch (e) {
       setErr(errMessage(e));
@@ -163,6 +162,7 @@ export function MobileAboutUpdateCard() {
     setBusy(true);
     try {
       await api.skipUpdateVersion(ver);
+      setNotesOpen(false);
       setMsg(t("update.skipped", { version: ver }));
     } catch (e) {
       setErr(errMessage(e));
@@ -171,8 +171,8 @@ export function MobileAboutUpdateCard() {
     }
   }
 
-  const canSideload = !!result?.available && !!result.sideloadUpdateSupported && android && !ios;
-  const notesText = appUpdateNotes(result?.notes);
+  const canAuto = !!result?.available && !!result.sideloadUpdateSupported && android && !ios;
+  const manualUrl = result?.downloadUrl && !ios ? result.downloadUrl : null;
 
   return (
     <div className="stack-lg">
@@ -208,37 +208,31 @@ export function MobileAboutUpdateCard() {
                 {result.pubDate ? ` · ${formatWhen(result.pubDate, t("update.never"))}` : ""}
               </div>
               {ios && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>{t("update.iosStoreSoon")}</div>}
-              <div className="row" style={{ flexWrap: "wrap", marginTop: 8 }}>
-                {canSideload && (
-                  <button type="button" className="btn primary sm" disabled={installing} onClick={install}>
-                    {installing ? t("update.installing") : t("update.install")}
-                  </button>
-                )}
-                {notesText && (
-                  <button type="button" className="btn sm" onClick={() => setNotesOpen(true)}>
-                    {t("update.openNotes")}
-                  </button>
-                )}
-                <button type="button" className="btn sm" disabled={busy} onClick={skip}>
-                  {t("update.skip")}
+              <div className="row" style={{ marginTop: 8 }}>
+                <button type="button" className="btn primary sm" onClick={() => setNotesOpen(true)}>
+                  {t("update.openUpdate")}
                 </button>
-                {result.downloadUrl && !ios && (
-                  <button
-                    type="button"
-                    className="btn ghost sm"
-                    onClick={() => api.openUrl(result.downloadUrl!)}
-                  >
-                    {t("update.manual")}
-                  </button>
-                )}
               </div>
             </div>
           )}
-          {notesOpen && result?.notes && (
+          {notesOpen && result?.available && (
             <UpdateNotesDialog
               version={result.latestVersion}
-              notes={result.notes}
+              notes={result.notes ?? ""}
               onClose={() => setNotesOpen(false)}
+              actions={{
+                canAuto,
+                manualUrl,
+                installing,
+                busy,
+                error: err || undefined,
+                note: ios ? t("update.iosStoreSoon") : !canAuto ? t("update.manualOnly") : undefined,
+                onAuto: () => void install(),
+                onManual: () => {
+                  if (manualUrl) void api.openUrl(manualUrl);
+                },
+                onSkip: () => void skip(),
+              }}
             />
           )}
         </div>

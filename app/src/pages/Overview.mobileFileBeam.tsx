@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { api, entryAttachments, errMessage, type FileEntry } from "../lib/ipc";
 import { isNeedReauth, tryBiometricReauth } from "../lib/secretsUi";
@@ -69,6 +70,7 @@ function toNumberArray(data: Uint8Array): number[] {
 
 export function FileBeamTool() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const bumpData = useApp((s) => s.bumpData);
   const writesLocked = useApp((s) => s.writesLocked);
   const [tab, setTab] = useState<BeamTab>("send");
@@ -91,6 +93,7 @@ export function FileBeamTool() {
   const [progress, setProgress] = useState({ decoded: 0, k: 0, ratio: 0 });
   const [received, setReceived] = useState<QrBeamFile | null>(null);
   const [saved, setSaved] = useState(false);
+  const [savedWhere, setSavedWhere] = useState<{ id: string; name: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [gifBusy, setGifBusy] = useState(false);
   const [gifImporting, setGifImporting] = useState(false);
@@ -244,21 +247,30 @@ export function FileBeamTool() {
     }
   }
 
-  function onFrame(text: string) {
+  function onFrame(text: string): "accepted" | "ignored" {
     const result = receiverRef.current.feed(text);
-    if (result.status === "ignored") return;
+    if (result.status === "ignored") return "ignored";
     if (result.status === "error") {
       setErr(t("tools.fileBeamError") + (result.message ? `: ${result.message}` : ""));
-      return;
+      return "accepted";
     }
+    setErr("");
     setProgress(result.progress);
     if (result.status === "complete") {
       setReceived(result.file);
       setSaved(false);
+      setSavedWhere(null);
       setScanning(false);
       setErr("");
     }
+    return "accepted";
   }
+
+  const scanHint =
+    err ||
+    (progress.k > 0
+      ? t("tools.fileBeamScanProgress", { decoded: progress.decoded, k: progress.k })
+      : t("tools.fileBeamWaiting"));
 
   function startScan() {
     setErr("");
@@ -274,9 +286,10 @@ export function FileBeamTool() {
     setBusy(true);
     setErr("");
     try {
-      await api.fileAddBytes(received.filename, toNumberArray(received.data), { name: received.filename });
+      const entry = await api.fileAddBytes(received.filename, toNumberArray(received.data), { name: received.filename });
       bumpData();
       setSaved(true);
+      setSavedWhere({ id: entry.id, name: entry.name || received.filename });
     } catch (e) {
       setErr(t("tools.fileBeamError") + `: ${errMessage(e)}`);
     } finally {
@@ -312,10 +325,11 @@ export function FileBeamTool() {
     gifLock.current = true;
     setScanning(false);
     setErr("");
-    setSaved(false);
     setGifImporting(true);
     setGifRecognized(0);
     setReceived(null);
+    setSaved(false);
+    setSavedWhere(null);
     setProgress({ decoded: 0, k: 0, ratio: 0 });
     receiverRef.current.reset();
     try {
@@ -524,15 +538,27 @@ export function FileBeamTool() {
               <div className="muted sm">
                 {received.filename} · {formatBytes(received.data.byteLength)}
               </div>
-              <button
-                type="button"
-                className="btn primary"
-                disabled={busy || writesLocked || saved}
-                onClick={() => void saveVault()}
-              >
-                {busy ? t("common.busy") : t("tools.fileBeamSaveVault")}
-              </button>
-              {saved && <div className="callout good sm">{t("tools.fileBeamSaved")}</div>}
+              {saved && savedWhere ? (
+                <div className="stack">
+                  <div className="callout good sm">{t("tools.fileBeamSavedVaultBody", { name: savedWhere.name })}</div>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    onClick={() => navigate(`/files?focus=${encodeURIComponent(savedWhere.id)}`)}
+                  >
+                    {t("tools.fileBeamOpenVault")}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={busy || writesLocked}
+                  onClick={() => void saveVault()}
+                >
+                  {busy ? t("common.busy") : t("tools.fileBeamSaveVault")}
+                </button>
+              )}
             </>
           ) : progress.k > 0 || gifImporting || gifRecognized > 0 ? (
             <>
@@ -560,8 +586,9 @@ export function FileBeamTool() {
 
       <QrScannerDialog
         open={scanning}
-        hint={t("tools.fileBeamWaiting")}
+        hint={scanHint}
         continuous
+        beamProgress={{ value: progress.decoded, max: progress.k, ratio: progress.ratio }}
         onFrame={onFrame}
         onScan={() => {}}
         onClose={() => setScanning(false)}

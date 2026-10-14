@@ -6,15 +6,17 @@ import { encodeQrDataUrl, encodeQrSvg } from "../../shared/qrEncode";
 import {
   clearQrGenHistory,
   clearQrScanHistory,
-  listQrGenHistory,
-  listQrScanHistory,
+  loadSyncedQrHistory,
   pushQrGenHistory,
   pushQrScanHistory,
+  readLegacyQrHistory,
   removeQrGenHistory,
   removeQrScanHistory,
   type QrGenHistoryEntry,
+  type QrHistoryLists,
   type QrScanHistoryEntry,
 } from "../../shared/qrHistory";
+import { useApp } from "../../store";
 import { QrScannerDialog } from "../../ui/QrScannerDialog";
 import { showAppToast } from "../../ui/Toast";
 import { CopyField, ToolSubPage, formatToolTime } from "./ToolsShared";
@@ -215,12 +217,13 @@ function HistoryList({
 
 export function ToolsQrPage() {
   const { t } = useTranslation();
+  const dataVersion = useApp((s) => s.dataVersion);
   const [tab, setTab] = useState<QrTab>("scan");
   const [scanning, setScanning] = useState(false);
   const [scanned, setScanned] = useState("");
   const [text, setText] = useState("");
-  const [scanHistory, setScanHistory] = useState(listQrScanHistory);
-  const [genHistory, setGenHistory] = useState(listQrGenHistory);
+  const [scanHistory, setScanHistory] = useState(() => readLegacyQrHistory().scans);
+  const [genHistory, setGenHistory] = useState(() => readLegacyQrHistory().generations);
   const [openId, setOpenId] = useState<string | null>(null);
   const svg = useMemo(() => {
     const payload = text.trim();
@@ -235,10 +238,24 @@ export function ToolsQrPage() {
   const history = tab === "scan" ? scanHistory : genHistory;
   const selected = history.find((entry) => entry.id === openId) ?? null;
 
-  function refreshHistory() {
-    setScanHistory(listQrScanHistory());
-    setGenHistory(listQrGenHistory());
+  function applyHistory(data: QrHistoryLists) {
+    setScanHistory(data.scans);
+    setGenHistory(data.generations);
   }
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadSyncedQrHistory()
+      .then((data) => {
+        if (!cancelled) applyHistory(data);
+      })
+      .catch(() => {
+        if (!cancelled) showAppToast(t("common.errorTitle"));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataVersion, t]);
 
   function toggleOpen(id: string) {
     setOpenId((cur) => (cur === id ? null : id));
@@ -255,8 +272,7 @@ export function ToolsQrPage() {
       const pending = text.trim();
       if (pending && svg && lastGenRecorded.current !== pending) {
         lastGenRecorded.current = pending;
-        pushQrGenHistory(pending);
-        refreshHistory();
+        void pushQrGenHistory(pending).then(applyHistory).catch(() => showAppToast(t("common.errorTitle")));
       }
       setText("");
     }
@@ -271,11 +287,10 @@ export function ToolsQrPage() {
       const latest = text.trim();
       if (!latest || lastGenRecorded.current === latest) return;
       lastGenRecorded.current = latest;
-      pushQrGenHistory(latest);
-      refreshHistory();
+      void pushQrGenHistory(latest).then(applyHistory).catch(() => showAppToast(t("common.errorTitle")));
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [text, svg]);
+  }, [text, svg, t]);
 
   return (
     <ToolSubPage title={t("home.toolQr")} desc={t("home.toolQrDesc")}>
@@ -365,13 +380,11 @@ export function ToolsQrPage() {
                   onToggle={toggleOpen}
                   onRemove={(id) => {
                     if (openId === id) setOpenId(null);
-                    removeQrScanHistory(id);
-                    refreshHistory();
+                    void removeQrScanHistory(id).then(applyHistory).catch(() => showAppToast(t("common.errorTitle")));
                   }}
                   onClear={() => {
                     setOpenId(null);
-                    clearQrScanHistory();
-                    refreshHistory();
+                    void clearQrScanHistory().then(applyHistory).catch(() => showAppToast(t("common.errorTitle")));
                   }}
                 />
               ) : (
@@ -382,13 +395,11 @@ export function ToolsQrPage() {
                   onToggle={toggleOpen}
                   onRemove={(id) => {
                     if (openId === id) setOpenId(null);
-                    removeQrGenHistory(id);
-                    refreshHistory();
+                    void removeQrGenHistory(id).then(applyHistory).catch(() => showAppToast(t("common.errorTitle")));
                   }}
                   onClear={() => {
                     setOpenId(null);
-                    clearQrGenHistory();
-                    refreshHistory();
+                    void clearQrGenHistory().then(applyHistory).catch(() => showAppToast(t("common.errorTitle")));
                   }}
                 />
               )}
@@ -402,8 +413,7 @@ export function ToolsQrPage() {
             const joined = texts.filter(Boolean).join("\n");
             setScanned(joined);
             if (joined.trim()) {
-              pushQrScanHistory(joined.trim());
-              refreshHistory();
+              void pushQrScanHistory(joined.trim()).then(applyHistory).catch(() => showAppToast(t("common.errorTitle")));
             }
           }}
           onClose={() => setScanning(false)}
