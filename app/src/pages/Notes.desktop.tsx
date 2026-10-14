@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from "react";
 import { CheckSquare, ChevronLeft, Download, PanelLeft, Plus } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { PageHead } from "../ui/common";
+import { PageHead, SecurityNote } from "../ui/common";
 import { useNotesModel } from "../shared/hooks/useNotesModel";
 import {
   NoteEditorCard,
@@ -104,7 +104,22 @@ export function NotesDesktop() {
     >
       <div className="notes-page-chrome">
         <div className="notes-page-chrome-inner" ref={chromeInnerRef}>
-          <PageHead title={t("pages.notesTitle")} desc={t("pages.notesDesc")} />
+          <PageHead
+            title={t("pages.notesTitle")}
+            desc={t("pages.notesDesc")}
+            note={
+              <SecurityNote>
+                <span>
+                  <strong>{t("notes.securityTitle")}</strong>
+                  {t("notes.securityBody")}
+                </span>
+                <div className="security-banner-pills">
+                  <span className="sec-pill purple">{t("notes.pillBody")}</span>
+                  <span className="sec-pill purple">{t("notes.pillImages")}</span>
+                </div>
+              </SecurityNote>
+            }
+          />
           <NotesFilters m={m} />
         </div>
       </div>

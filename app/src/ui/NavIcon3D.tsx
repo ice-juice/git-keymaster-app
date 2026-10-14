@@ -12,6 +12,7 @@ export type Nav3DIconName =
   | "files"
   | "sync"
   | "settings"
+  | "tools"
   | "lock";
 
 interface NavIcon3DProps {
@@ -365,6 +366,45 @@ export function NavIcon3D({ name, size = 18, className = "" }: NavIcon3DProps): 
             <path d="M5.5 3.5C4 4.5 3 6.5 3.5 8.5C3.8 9.7 4.6 10.8 5.7 11.5L15 20.8C15.6 21.4 16.5 21.4 17.1 20.8L19.8 18.1C20.4 17.5 20.4 16.6 19.8 16L10.5 6.7C10.2 5.5 9.2 4.2 7.8 3.6C6.5 3 5 3.5 5.5 3.5Z" fill={`url(#${wrenchGrad})`} />
             <line x1="4.5" y1="19.5" x2="12" y2="12" stroke="#e2e8f0" strokeWidth="2.2" strokeLinecap="round" />
             <rect x="2.5" y="16.5" width="7" height="3" rx="1.5" fill={`url(#${toolHandle})`} transform="rotate(-45 6 18)" />
+          </svg>
+        </span>
+      );
+    }
+
+    case "tools": {
+      const boxFace = `toolsBox_${rawId}`;
+      const boxDepth = `toolsDepth_${rawId}`;
+      const handle = `toolsHandle_${rawId}`;
+      return (
+        <span className={`nav-icon-3d ${className}`} style={style} aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="100%" height="100%" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id={boxFace} x1="3" y1="8" x2="21" y2="21" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#fdba74" />
+                <stop offset="45%" stopColor="#f97316" />
+                <stop offset="100%" stopColor="#c2410c" />
+              </linearGradient>
+              <linearGradient id={boxDepth} x1="3" y1="10" x2="21" y2="22" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#9a3412" />
+                <stop offset="100%" stopColor="#7c2d12" />
+              </linearGradient>
+              <linearGradient id={handle} x1="8" y1="3" x2="16" y2="9" gradientUnits="userSpaceOnUse">
+                <stop offset="0%" stopColor="#fff7ed" />
+                <stop offset="100%" stopColor="#fdba74" />
+              </linearGradient>
+            </defs>
+            <rect x="2.6" y="9.4" width="18.8" height="11.4" rx="2.4" fill={`url(#${boxDepth})`} transform="translate(0, 1.1)" />
+            <rect x="2.6" y="8.6" width="18.8" height="11.6" rx="2.4" fill={`url(#${boxFace})`} />
+            <path d="M4.2 9.6H19.6" stroke="#ffedd5" strokeWidth="1" strokeLinecap="round" />
+            <path d="M2.8 13.4H21.2" stroke="#9a3412" strokeWidth="1.15" />
+            <path
+              d="M8.4 8.7V6.3C8.4 4.6 9.8 3.4 12 3.4C14.2 3.4 15.6 4.6 15.6 6.3V8.7"
+              stroke={`url(#${handle})`}
+              strokeWidth="2.1"
+              strokeLinecap="round"
+            />
+            <rect x="10.2" y="11.5" width="3.6" height="3.5" rx="0.7" fill="#fff7ed" />
+            <rect x="11.55" y="12.5" width="0.9" height="1.6" rx="0.3" fill="#9a3412" />
           </svg>
         </span>
       );

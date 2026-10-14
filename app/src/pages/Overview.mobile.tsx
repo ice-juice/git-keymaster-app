@@ -1,8 +1,11 @@
-import { Check, Copy, Edit3, KeyRound, Shield } from "lucide-react";
+import { Check, Copy, Edit3, FileText, FolderLock, Lock, Shield } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Badge, Empty } from "../ui/common";
+import { formatHomeStat, useHomeStats } from "../shared/hooks/useHomeStats";
 import { useOverviewModel } from "../shared/hooks/useOverviewModel";
 import { OverviewIdentityDialogs } from "./Overview.modals";
+import { OverviewMobileTools } from "./Overview.mobileTools";
 import { useItemFocus } from "../shared/hooks/useItemFocus";
 
 function getAvatarBg(name: string): string {
@@ -23,37 +26,60 @@ function getAvatarBg(name: string): string {
 
 export function OverviewMobile() {
   const { t } = useTranslation();
+  const nav = useNavigate();
   const m = useOverviewModel();
+  const home = useHomeStats();
   useItemFocus(m.identities.length > 0);
 
   return (
     <div className="stack-lg">
-      {/* 顶部统计卡片 */}
       <div className="stat-card-row">
-        <div className="stat-card">
+        <button type="button" className="stat-card stat-card-nav" onClick={() => nav("/totp")}>
           <div className="stat-card-title">
             <Shield size={14} style={{ color: "var(--accent)" }} />
-            <span>{t("pages.idCount")}</span>
+            <span>{t("home.statTotp")}</span>
           </div>
           <div className="stat-card-body">
-            <div className="stat-card-val">{m.stats.totalIdentities}</div>
-            <div className="stat-card-sub">{t("pages.idRegistered")}</div>
+            <div className="stat-card-val">{formatHomeStat(home.totp)}</div>
+            <div className="stat-card-sub">{t("home.statTotpSub")}</div>
           </div>
-        </div>
+        </button>
 
-        <div className="stat-card">
+        <button type="button" className="stat-card stat-card-nav" onClick={() => nav("/accounts")}>
           <div className="stat-card-title">
-            <KeyRound size={14} style={{ color: "var(--amber)" }} />
-            <span>{t("pages.keyCount")}</span>
+            <Lock size={14} style={{ color: "var(--amber)" }} />
+            <span>{t("home.statAccounts")}</span>
           </div>
           <div className="stat-card-body">
-            <div className="stat-card-val">{m.stats.totalKeys}</div>
-            <div className="stat-card-sub" style={{ color: "var(--green)" }}>
-              {t("pages.allEncrypted")}
-            </div>
+            <div className="stat-card-val">{formatHomeStat(home.account)}</div>
+            <div className="stat-card-sub">{t("home.statAccountsSub")}</div>
           </div>
-        </div>
+        </button>
+
+        <button type="button" className="stat-card stat-card-nav" onClick={() => nav("/notes")}>
+          <div className="stat-card-title">
+            <FileText size={14} style={{ color: "var(--green)" }} />
+            <span>{t("home.statNotes")}</span>
+          </div>
+          <div className="stat-card-body">
+            <div className="stat-card-val">{formatHomeStat(home.note)}</div>
+            <div className="stat-card-sub">{t("home.statNotesSub")}</div>
+          </div>
+        </button>
+
+        <button type="button" className="stat-card stat-card-nav" onClick={() => nav("/files")}>
+          <div className="stat-card-title">
+            <FolderLock size={14} style={{ color: "var(--accent)" }} />
+            <span>{t("home.statFiles")}</span>
+          </div>
+          <div className="stat-card-body">
+            <div className="stat-card-val">{formatHomeStat(home.file)}</div>
+            <div className="stat-card-sub">{t("home.statFilesSub")}</div>
+          </div>
+        </button>
       </div>
+
+      <OverviewMobileTools />
 
       {m.identities.length === 0 ? (
         <div className="card" style={{ padding: "30px 10px" }}>

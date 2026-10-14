@@ -61,6 +61,10 @@ export interface QrScannerDialogProps {
   hint?: string;
   onScan: (texts: string[]) => void;
   onClose: () => void;
+  /** 连续扫描：命中后不关镜头、不调 onScan，只回调 onFrame 并继续循环。 */
+  continuous?: boolean;
+  /** 连续模式下每帧新文本（相邻重复帧已去重）。 */
+  onFrame?: (text: string) => void;
 }
 
 export const QrScannerDialog: FC<QrScannerDialogProps> = ({
@@ -69,6 +73,8 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
   hint,
   onScan,
   onClose,
+  continuous = false,
+  onFrame,
 }) => {
   const brand = displayNameForLocale(i18n.language);
   const dialogTitle = title ?? i18n.t("qrscan.title");
@@ -87,6 +93,10 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
   const mobile = isMobilePlatform();
   const ios = isIOS();
   const detectorRef = useRef<{ detect: (source: CanvasImageSource) => Promise<Array<{ rawValue?: string }>> } | null>(null);
+  const continuousRef = useRef(continuous);
+  const onFrameRef = useRef(onFrame);
+  continuousRef.current = continuous;
+  onFrameRef.current = onFrame;
 
   // 停止所有摄像头轨道
   const stopStream = () => {
@@ -224,6 +234,22 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
     let timer: number | null = null;
     let detected = false;
     let frames = 0;
+    let lastFrameText = "";
+
+    /** 单帧：停扫并返回 true。连续：去重后 onFrame，返回 false 以继续循环。 */
+    const applyHit = (texts: string[]): boolean => {
+      if (continuousRef.current) {
+        for (const raw of texts) {
+          if (!raw || raw === lastFrameText) continue;
+          lastFrameText = raw;
+          onFrameRef.current?.(raw);
+        }
+        return false;
+      }
+      detected = true;
+      handleSuccess(texts);
+      return true;
+    };
 
     if ("BarcodeDetector" in window && !detectorRef.current) {
       try {
@@ -257,6 +283,8 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
       const canvas = canvasRef.current;
 
       if (video && canvas && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+        let hitThisFrame = false;
+
         // 1. 优先复用 BarcodeDetector（iOS 17+ / Android Chromium 有则用）
         if (detectorRef.current) {
           try {
@@ -264,9 +292,8 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
             if (codes && codes.length > 0) {
               const rawValues = codes.map((c) => c.rawValue).filter(Boolean) as string[];
               if (rawValues.length > 0) {
-                detected = true;
-                handleSuccess(rawValues);
-                return;
+                if (applyHit(rawValues)) return;
+                hitThisFrame = true;
               }
             }
           } catch {
@@ -274,47 +301,48 @@ export const QrScannerDialog: FC<QrScannerDialogProps> = ({
           }
         }
 
-        // 2. 备用 jsQR 解析
-        try {
-          const vw = video.videoWidth || 640;
-          const vh = video.videoHeight || 480;
-          const maxDim = ios ? 480 : 640;
-          const scale = Math.min(1, maxDim / Math.max(vw, vh));
-          const cw = Math.round(vw * scale);
-          const ch = Math.round(vh * scale);
+        // 2. 备用 jsQR 解析（本帧已命中则跳过，避免连续模式重复解码）
+        if (!hitThisFrame) {
+          try {
+            const vw = video.videoWidth || 640;
+            const vh = video.videoHeight || 480;
+            const maxDim = ios ? 480 : 640;
+            const scale = Math.min(1, maxDim / Math.max(vw, vh));
+            const cw = Math.round(vw * scale);
+            const ch = Math.round(vh * scale);
 
-          canvas.width = cw;
-          canvas.height = ch;
-          const ctx = canvas.getContext("2d", { willReadFrequently: true });
-          if (ctx) {
-            ctx.drawImage(video, 0, 0, cw, ch);
-            const imgData = ctx.getImageData(0, 0, cw, ch);
-            const code = jsQR(imgData.data, cw, ch, { inversionAttempts: "attemptBoth" });
-            if (code && code.data && code.data.trim()) {
-              detected = true;
-              handleSuccess([code.data.trim()]);
-              return;
-            }
+            canvas.width = cw;
+            canvas.height = ch;
+            const ctx = canvas.getContext("2d", { willReadFrequently: true });
+            if (ctx) {
+              ctx.drawImage(video, 0, 0, cw, ch);
+              const imgData = ctx.getImageData(0, 0, cw, ch);
+              const code = jsQR(imgData.data, cw, ch, { inversionAttempts: "attemptBoth" });
+              if (code && code.data && code.data.trim()) {
+                if (applyHit([code.data.trim()])) return;
+                hitThisFrame = true;
+              }
 
-            // 3. 隔若干帧再走 rqrr，避免每帧打 IPC
-            frames += 1;
-            if (frames % 12 === 0) {
-              const blob = await new Promise<Blob | null>((resolve) => {
-                canvas.toBlob((b) => resolve(b), "image/jpeg", 0.85);
-              });
-              if (blob) {
-                const bytes = new Uint8Array(await blob.arrayBuffer());
-                const texts = await api.decodeQrFromImage(Array.from(bytes));
-                if (texts && texts.length > 0) {
-                  detected = true;
-                  handleSuccess(texts);
-                  return;
+              // 3. 隔若干帧再走 rqrr，避免每帧打 IPC
+              if (!hitThisFrame) {
+                frames += 1;
+                if (frames % 12 === 0) {
+                  const blob = await new Promise<Blob | null>((resolve) => {
+                    canvas.toBlob((b) => resolve(b), "image/jpeg", 0.85);
+                  });
+                  if (blob) {
+                    const bytes = new Uint8Array(await blob.arrayBuffer());
+                    const texts = await api.decodeQrFromImage(Array.from(bytes));
+                    if (texts && texts.length > 0) {
+                      if (applyHit(texts)) return;
+                    }
+                  }
                 }
               }
             }
+          } catch {
+            // ignore frame error
           }
-        } catch {
-          // ignore frame error
         }
       }
 

@@ -107,15 +107,54 @@ export function PageHead({
   );
 }
 
+function placeSecurityPop(btn: HTMLElement, pop: HTMLElement) {
+  const r = btn.getBoundingClientRect();
+  const pad = 10;
+  const gap = 6;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const pw = pop.offsetWidth;
+  const ph = pop.offsetHeight;
+  let left = r.left;
+  if (left + pw > vw - pad) left = Math.max(pad, vw - pad - pw);
+  let top = r.bottom + gap;
+  if (top + ph > vh - pad && r.top - gap - ph >= pad) top = r.top - gap - ph;
+  pop.style.top = `${Math.round(top)}px`;
+  pop.style.left = `${Math.round(left)}px`;
+}
+
 export function SecurityNote({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const btn = btnRef.current;
+    const pop = popRef.current;
+    if (!btn || !pop) return;
+    placeSecurityPop(btn, pop);
+    const onMove = () => {
+      if (btnRef.current && popRef.current) placeSecurityPop(btnRef.current, popRef.current);
+    };
+    window.addEventListener("resize", onMove);
+    window.addEventListener("scroll", onMove, true);
+    return () => {
+      window.removeEventListener("resize", onMove);
+      window.removeEventListener("scroll", onMove, true);
+    };
+  }, [open, children]);
 
   useEffect(() => {
     if (!open) return;
     function onPointer(ev: PointerEvent) {
-      if (rootRef.current && ev.target instanceof Node && !rootRef.current.contains(ev.target)) setOpen(false);
+      const target = ev.target;
+      if (!(target instanceof Node)) return;
+      if (rootRef.current?.contains(target)) return;
+      if (popRef.current?.contains(target)) return;
+      setOpen(false);
     }
     function onKey(ev: KeyboardEvent) {
       if (ev.key === "Escape") setOpen(false);
@@ -131,6 +170,7 @@ export function SecurityNote({ children }: { children: ReactNode }) {
   return (
     <div className={"security-note" + (open ? " is-open" : "")} ref={rootRef}>
       <button
+        ref={btnRef}
         type="button"
         className="security-note-toggle"
         aria-expanded={open}
@@ -140,7 +180,13 @@ export function SecurityNote({ children }: { children: ReactNode }) {
         <span>{t("common.securityNote")}</span>
         <ChevronDown size={13} aria-hidden />
       </button>
-      {open && <div className="security-note-pop">{children}</div>}
+      {open &&
+        createPortal(
+          <div ref={popRef} className="security-note-pop">
+            {children}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  adoptGeneratedTotp,
+  startTotpLiveClock,
+  totpTimeStep,
+  type TotpLiveCode,
+} from "../totpTime";
+import {
   api,
   errMessage,
   type AccountEntry,
@@ -83,7 +89,12 @@ export function useAccountsModel() {
   const [editingPlatformModal, setEditingPlatformModal] = useState<null | { platform: string; icon?: string }>(null);
   const [historyFor, setHistoryFor] = useState<null | { id: string; items: HistoryMeta[]; shown?: Record<number, string> }>(null);
   const [pwShown, setPwShown] = useState<Record<string, string>>({});
-  const [totpShown, setTotpShown] = useState<Record<string, { code: string; remain: number; period: number }>>({});
+  const [totpShown, setTotpShown] = useState<Record<string, TotpLiveCode>>({});
+  const totpShownRef = useRef<Record<string, TotpLiveCode>>({});
+  const writeTotpShown = useCallback((next: Record<string, TotpLiveCode>) => {
+    totpShownRef.current = next;
+    setTotpShown(next);
+  }, []);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [groupDlg, setGroupDlg] = useState<GroupDialogState | null>(null);
   const [pendingDeleteGroup, setPendingDeleteGroup] = useState<string | null>(null);
@@ -120,37 +131,12 @@ export function useAccountsModel() {
   }, []);
 
   useEffect(() => {
-    const t = window.setInterval(() => {
-      setTotpShown((prev) => {
-        let changed = false;
-        const next = { ...prev };
-        for (const id of Object.keys(next)) {
-          const item = next[id];
-          if (item.remain <= 1) {
-            api
-              .totpGenerateCode(id)
-              .then((c) => {
-                setTotpShown((cur) => ({
-                  ...cur,
-                  [id]: { code: c.code, remain: c.remainingSeconds, period: c.period },
-                }));
-              })
-              .catch(() => {
-                setTotpShown((cur) => {
-                  const { [id]: _, ...rest } = cur;
-                  return rest;
-                });
-              });
-          } else {
-            next[id] = { ...item, remain: item.remain - 1 };
-            changed = true;
-          }
-        }
-        return changed ? next : prev;
-      });
-    }, 1000);
-    return () => window.clearInterval(t);
-  }, []);
+    return startTotpLiveClock({
+      read: () => totpShownRef.current,
+      write: writeTotpShown,
+      refresh: (id) => api.totpGenerateCode(id),
+    });
+  }, [writeTotpShown]);
 
   function triggerCopied(key: string) {
     setCopiedKey(key);
@@ -311,17 +297,18 @@ export function useAccountsModel() {
   }
 
   async function revealLinkedTotp(totpId: string) {
-    const c = await withAuth((p) => api.totpGenerateCode(totpId, p));
-    if (c) setTotpShown((m) => ({ ...m, [totpId]: { code: c.code, remain: c.remainingSeconds, period: c.period } }));
+    const packed = await withAuth((p) => adoptGeneratedTotp(() => api.totpGenerateCode(totpId, p)));
+    if (packed) writeTotpShown({ ...totpShownRef.current, [totpId]: packed });
   }
 
   async function copyLinkedTotp(totpId: string) {
-    let item = totpShown[totpId];
-    if (!item) {
-      const c = await withAuth((p) => api.totpGenerateCode(totpId, p));
-      if (!c) return;
-      item = { code: c.code, remain: c.remainingSeconds, period: c.period };
-      setTotpShown((m) => ({ ...m, [totpId]: item }));
+    let item = totpShownRef.current[totpId];
+    const now = Date.now();
+    if (!item || item.step !== totpTimeStep(item.period, now)) {
+      const packed = await withAuth((p) => adoptGeneratedTotp(() => api.totpGenerateCode(totpId, p)));
+      if (!packed) return;
+      item = packed;
+      writeTotpShown({ ...totpShownRef.current, [totpId]: packed });
     }
     try {
       await copyWithClear(item.code.replace(/\s/g, ""));

@@ -14,6 +14,7 @@ import { loadAgentStatus } from "../../lib/agentCache";
 import { writeClipboard } from "../../lib/clipboard";
 import { useApp } from "../../store";
 import { resolvePlatform } from "../../platform/resolve";
+import { afterNextPaint } from "../yieldToPaint";
 
 const AVATAR_COLORS = [
   "linear-gradient(135deg, #6366f1, #4f46e5)",
@@ -65,22 +66,21 @@ export function useOverviewModel() {
   const loadData = async () => {
     try {
       setErr("");
+      await afterNextPaint();
+      const [ids, ks] = await Promise.all([api.listIdentities(), api.listKeys()]);
+      setIdentities(ids);
+      setKeys(ks);
       if (skipLocalGit) {
-        const [ids, ks] = await Promise.all([api.listIdentities(), api.listKeys()]);
-        setIdentities(ids);
-        setKeys(ks);
         setAgentStatus(null);
         setConfigView(null);
         return;
       }
-      const [ids, ks, ag, cfg] = await Promise.all([
-        api.listIdentities(),
-        api.listKeys(),
+      // ssh-add 在放置久了的套接字上可能要几十秒。身份列表先出来，探测放下一拍。
+      await afterNextPaint();
+      const [ag, cfg] = await Promise.all([
         loadAgentStatus().catch(() => null),
         api.readSshConfig().catch(() => null),
       ]);
-      setIdentities(ids);
-      setKeys(ks);
       setAgentStatus(ag);
       setConfigView(cfg);
     } catch (e) {
@@ -94,12 +94,23 @@ export function useOverviewModel() {
 
   useEffect(() => {
     if (writesLocked) return;
-    Promise.all([api.listIdentities(), api.listKeys()])
-      .then(([ids, ks]) => {
-        setIdentities(ids);
-        setKeys(ks);
-      })
-      .catch(() => {});
+    let cancelled = false;
+    void (async () => {
+      await afterNextPaint();
+      if (cancelled) return;
+      try {
+        const [ids, ks] = await Promise.all([api.listIdentities(), api.listKeys()]);
+        if (!cancelled) {
+          setIdentities(ids);
+          setKeys(ks);
+        }
+      } catch {
+        /* 写入锁刚解开时的补读失败留到下一次 dataVersion */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [writesLocked]);
 
   const handleCopyPublic = async (keyId: string | null) => {

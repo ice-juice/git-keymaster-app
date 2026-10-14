@@ -1,3 +1,6 @@
+export const PASSWORD_ROOT_POSITIONS = ["head", "tail", "mid"] as const;
+export type PasswordRootPosition = (typeof PASSWORD_ROOT_POSITIONS)[number];
+
 export type GeneratePasswordOpts = {
   length: number;
   lower: boolean;
@@ -5,6 +8,10 @@ export type GeneratePasswordOpts = {
   digits: boolean;
   symbols: boolean;
   excludeAmbiguous: boolean;
+  /** 原样拼入。空或纯空白时忽略，不改写非空词根。 */
+  root?: string;
+  /** 默认开头。 */
+  rootPosition?: PasswordRootPosition;
 };
 
 export const DEFAULT_PASSWORD_OPTS: GeneratePasswordOpts = {
@@ -14,6 +21,8 @@ export const DEFAULT_PASSWORD_OPTS: GeneratePasswordOpts = {
   digits: true,
   symbols: true,
   excludeAmbiguous: true,
+  root: "",
+  rootPosition: "head",
 };
 
 const LOWER_ALL = "abcdefghijklmnopqrstuvwxyz";
@@ -46,8 +55,23 @@ export function unbiasedInt(maxExclusive: number): number {
   }
 }
 
-export function generatePassword(opts: GeneratePasswordOpts): string {
-  const length = Math.max(4, Math.min(128, Math.floor(opts.length) || 0));
+function clampPasswordLength(length: number): number {
+  return Math.max(4, Math.min(128, Math.floor(length) || 0));
+}
+
+/** 纯空白视为未设置；其余字符（含首尾空格）原样保留。 */
+export function passwordRootText(root: string | undefined): string {
+  if (!root || root.trim() === "") return "";
+  return root;
+}
+
+export function passwordRootTooLong(opts: Pick<GeneratePasswordOpts, "length" | "root">): boolean {
+  const root = passwordRootText(opts.root);
+  if (!root) return false;
+  return root.length >= clampPasswordLength(opts.length);
+}
+
+function fillPassword(length: number, opts: GeneratePasswordOpts): string {
   const pools = passwordPools(opts);
   const alphabet = pools.join("");
   if (!alphabet) {
@@ -69,4 +93,23 @@ export function generatePassword(opts: GeneratePasswordOpts): string {
     chars[j] = tmp;
   }
   return chars.join("");
+}
+
+function placePasswordRoot(randomPart: string, root: string, position: PasswordRootPosition): string {
+  if (position === "tail") return randomPart + root;
+  if (position === "mid") {
+    const front = Math.ceil(randomPart.length / 2);
+    return randomPart.slice(0, front) + root + randomPart.slice(front);
+  }
+  return root + randomPart;
+}
+
+export function generatePassword(opts: GeneratePasswordOpts): string {
+  const length = clampPasswordLength(opts.length);
+  const root = passwordRootText(opts.root);
+  if (!root) return fillPassword(length, opts);
+
+  const randomLen = Math.max(0, length - root.length);
+  if (randomLen === 0) return root;
+  return placePasswordRoot(fillPassword(randomLen, opts), root, opts.rootPosition ?? "head");
 }

@@ -6,7 +6,10 @@ import { pwStrengthKey } from "../shared/hooks/useInitModel";
 import {
   DEFAULT_PASSWORD_OPTS,
   generatePassword,
+  PASSWORD_ROOT_POSITIONS,
+  passwordRootTooLong,
   type GeneratePasswordOpts,
+  type PasswordRootPosition,
 } from "../shared/password";
 
 export function PasswordStrengthBar({ password }: { password: string }) {
@@ -141,6 +144,82 @@ export function PasswordGenerateControls({
       </div>
       {hint && <div className="hint">{hint}</div>}
       <PasswordStrengthBar password={password} />
+    </div>
+  );
+}
+
+const ROOT_PLACE_KEY: Record<PasswordRootPosition, "tools.passwordRootHead" | "tools.passwordRootTail" | "tools.passwordRootMid"> = {
+  head: "tools.passwordRootHead",
+  tail: "tools.passwordRootTail",
+  mid: "tools.passwordRootMid",
+};
+
+export function PasswordRootControls({
+  opts,
+  onChange,
+  layout,
+}: {
+  opts: GeneratePasswordOpts;
+  onChange: (partial: Partial<GeneratePasswordOpts>) => void;
+  layout: "desktop" | "mobile";
+}) {
+  const { t } = useTranslation();
+  const position = opts.rootPosition ?? "head";
+  const buttonClass = layout === "mobile" ? "m-tool-tab" : "view-btn";
+  const buttons = PASSWORD_ROOT_POSITIONS.map((id) => (
+    <button
+      key={id}
+      type="button"
+      role="radio"
+      aria-checked={position === id}
+      className={buttonClass + (position === id ? " on" : "")}
+      onClick={() => onChange({ rootPosition: id })}
+    >
+      {t(ROOT_PLACE_KEY[id])}
+    </button>
+  ));
+  const rootInput = (
+    <input
+      id={layout === "desktop" ? "pw-root-desktop" : undefined}
+      className="input"
+      value={opts.root ?? ""}
+      placeholder={t("tools.passwordRootPh")}
+      autoComplete="off"
+      autoCapitalize="off"
+      autoCorrect="off"
+      spellCheck={false}
+      onChange={(e) => onChange({ root: e.target.value })}
+    />
+  );
+  const note = passwordRootTooLong(opts) ? <div className="muted sm">{t("tools.passwordRootTooLong")}</div> : null;
+
+  if (layout === "mobile") {
+    return (
+      <>
+        <label className="m-tool-field">
+          <span>{t("tools.passwordRoot")}</span>
+          {rootInput}
+        </label>
+        <div className="m-tool-tabs" role="radiogroup" aria-label={t("tools.passwordRoot")}>
+          {buttons}
+        </div>
+        {note}
+      </>
+    );
+  }
+
+  return (
+    <div className="stack">
+      <div className="field">
+        <label className="field-label" htmlFor="pw-root-desktop">
+          {t("tools.passwordRoot")}
+        </label>
+        {rootInput}
+      </div>
+      <div className="view-switcher" role="radiogroup" aria-label={t("tools.passwordRoot")}>
+        {buttons}
+      </div>
+      {note}
     </div>
   );
 }

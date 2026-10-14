@@ -5,6 +5,7 @@ import { api } from "../lib/ipc";
 import { useApp } from "../store";
 import { UpdateToast } from "./UpdateToast";
 import { NavIcon3D, type Nav3DIconName } from "./NavIcon3D";
+import { afterNextPaint } from "../shared/yieldToPaint";
 
 interface NavItemDef {
   to: string;
@@ -29,19 +30,25 @@ export function Layout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let unmounted = false;
-    (async () => {
+    void (async () => {
+      // 先让解锁后的壳画出来，再分两拍读计数。一次把五份冷文件的 JSON 倒进主线程会卡住。
+      await afterNextPaint();
+      if (unmounted) return;
       try {
-        const [counts, totp, accounts, files, notes] = await Promise.all([
-          api.workspaceNavCounts(),
+        const counts = await api.workspaceNavCounts();
+        if (unmounted) return;
+        setIdCount(counts.identities);
+        setKeyCount(counts.keys);
+        setRepoCount(counts.repos);
+        await afterNextPaint();
+        if (unmounted) return;
+        const [totp, accounts, files, notes] = await Promise.all([
           api.totpList(),
           api.accountList(),
           api.fileList(),
           api.noteList(),
         ]);
         if (!unmounted) {
-          setIdCount(counts.identities);
-          setKeyCount(counts.keys);
-          setRepoCount(counts.repos);
           setTotpCount(totp.entries.length);
           setAccountCount(accounts.entries.length);
           setFileCount(files.entries.length);
@@ -77,6 +84,8 @@ export function Layout({ children }: { children: ReactNode }) {
     { to: "/files", label: t("nav.files"), icon: "files", badge: fileCount },
   ];
 
+  const TOOL_NAV: NavItemDef[] = [{ to: "/tools", label: t("nav.tools"), icon: "tools" }];
+
   function renderNavItem(n: NavItemDef) {
     const customActive = n.isCustomActive ? n.isCustomActive(location.pathname) : undefined;
     return (
@@ -110,6 +119,11 @@ export function Layout({ children }: { children: ReactNode }) {
             {t("nav.groupVault")}
           </div>
           {VAULT_NAV.map(renderNavItem)}
+
+          <div className="nav-group" style={{ marginTop: 6 }}>
+            {t("nav.groupTools")}
+          </div>
+          {TOOL_NAV.map(renderNavItem)}
 
           <div className="grow" />
           <div className="side-foot">

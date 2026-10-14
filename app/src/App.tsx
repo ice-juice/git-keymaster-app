@@ -20,6 +20,7 @@ import { TotpPage } from "./pages/Totp";
 import { AccountsPage } from "./pages/Accounts";
 import { FilesPage } from "./pages/Files";
 import { NotesPage } from "./pages/Notes";
+import { ToolsPage } from "./pages/Tools";
 import { NoteMobileEditorPreview } from "./pages/NoteMobileEditor.preview";
 import { CloseConfirmHost } from "./ui/CloseConfirm";
 import { showAppToast, ToastHost } from "./ui/Toast";
@@ -272,6 +273,7 @@ export default function App() {
             <Route path="/accounts" element={<AccountsPage />} />
             <Route path="/files" element={<FilesPage />} />
             <Route path="/notes" element={<NotesPage />} />
+            {!compact && <Route path="/tools/*" element={<ToolsPage />} />}
             <Route path="/sync" element={<SyncPage />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
