@@ -67,6 +67,44 @@ export function FilesFilters({ m, hideSearch }: { m: FilesModel; hideSearch?: bo
   );
 }
 
+function FileEntryActions({ e, m, layout }: { e: FileEntry; m: FilesModel; layout: "card" | "table" }) {
+  const { t } = useTranslation();
+  return (
+    <div className={layout === "card" ? "file-card-actions" : "file-table-actions"}>
+      <button
+        type="button"
+        className="file-icon-btn"
+        title={t("files.actionExport")}
+        aria-label={t("files.actionExport")}
+        disabled={!!m.exportingId}
+        onClick={() => void m.exportFile(e)}
+      >
+        <Download size={14} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="file-icon-btn"
+        title={t("files.actionEdit")}
+        aria-label={t("files.actionEdit")}
+        disabled={m.writesLocked}
+        onClick={() => void m.openExistingEditor(editFromEntry(e))}
+      >
+        <Pencil size={14} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="file-icon-btn danger"
+        title={t("files.actionDelete")}
+        aria-label={t("files.actionDelete")}
+        disabled={m.writesLocked}
+        onClick={() => m.setPendingDelete(e)}
+      >
+        <Trash2 size={14} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 export function FileCard({ e, m }: { e: FileEntry; m: FilesModel }) {
   const { t } = useTranslation();
   const color = m.groups.find((g) => g.name === e.group)?.color;
@@ -95,17 +133,7 @@ export function FileCard({ e, m }: { e: FileEntry; m: FilesModel }) {
           {e.note}
         </div>
       )}
-      <div className="file-card-actions">
-        <button type="button" className="btn sm primary" disabled={!!m.exportingId} onClick={() => void m.exportFile(e)}>
-          <Download size={13} /> {t("files.actionExport")}
-        </button>
-        <button type="button" className="btn sm" disabled={m.writesLocked} onClick={() => void m.openExistingEditor(editFromEntry(e))}>
-          <Pencil size={13} /> {t("files.actionEdit")}
-        </button>
-        <button type="button" className="btn sm danger" disabled={m.writesLocked} onClick={() => m.setPendingDelete(e)}>
-          <Trash2 size={13} /> {t("files.actionDelete")}
-        </button>
-      </div>
+      <FileEntryActions e={e} m={m} layout="card" />
     </div>
   );
 }
@@ -123,46 +151,46 @@ export function FilesTable({ m }: { m: FilesModel }) {
       <table className="file-table">
         <thead>
           <tr>
-            <th>{col("name", t("files.colName"))}</th>
-            <th>{t("files.colGroup")}</th>
-            <th>{col("size", t("files.colSize"))}</th>
-            <th>{col("updated", t("files.colUpdated"))}</th>
-            <th>{t("files.colNote")}</th>
-            <th style={{ width: 180 }}>{t("files.colActions")}</th>
+            <th className="file-col-name">{col("name", t("files.colName"))}</th>
+            <th className="file-col-fit">{t("files.colGroup")}</th>
+            <th className="file-col-fit">{col("size", t("files.colSize"))}</th>
+            <th className="file-col-fit">{col("updated", t("files.colUpdated"))}</th>
+            <th className="file-col-note">{t("files.colNote")}</th>
+            <th className="file-col-fit">{t("files.colActions")}</th>
           </tr>
         </thead>
         <tbody>
-          {m.filteredEntries.map((e) => (
-            <tr key={e.id} data-focus-id={e.id}>
-              <td>
-                <div className="file-card-name" title={e.name}>
-                  {e.name}
-                </div>
-                <div className="file-card-orig" title={attachmentSummary(e, t)}>
-                  {attachmentSummary(e, t)}
-                </div>
-              </td>
-              <td>{e.group || t("files.ungrouped")}</td>
-              <td>{formatBytes(e.size)}</td>
-              <td>{formatUpdatedAt(e.updatedAt)}</td>
-              <td className="file-card-note" title={e.note || ""}>
-                {e.note || t("common.emDash")}
-              </td>
-              <td>
-                <div className="row" style={{ gap: 4 }}>
-                  <button type="button" className="btn ghost sm" disabled={!!m.exportingId} onClick={() => void m.exportFile(e)}>
-                    {t("files.actionExport")}
-                  </button>
-                  <button type="button" className="btn ghost sm" disabled={m.writesLocked} onClick={() => void m.openExistingEditor(editFromEntry(e))}>
-                    {t("files.actionEdit")}
-                  </button>
-                  <button type="button" className="btn ghost sm" disabled={m.writesLocked} onClick={() => m.setPendingDelete(e)}>
-                    {t("files.actionDelete")}
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
+          {m.filteredEntries.map((e) => {
+            const group = e.group || t("files.ungrouped");
+            const note = e.note?.trim() || "";
+            return (
+              <tr key={e.id} data-focus-id={e.id}>
+                <td className="file-col-name">
+                  <div className="file-card-name" title={e.name}>
+                    {e.name}
+                  </div>
+                  <div className="file-card-orig" title={attachmentSummary(e, t)}>
+                    {attachmentSummary(e, t)}
+                  </div>
+                </td>
+                <td className="file-col-fit">
+                  <span className="file-table-group" title={group}>
+                    {group}
+                  </span>
+                </td>
+                <td className="file-col-fit">{formatBytes(e.size)}</td>
+                <td className="file-col-fit">{formatUpdatedAt(e.updatedAt)}</td>
+                <td className="file-col-note">
+                  <div className="file-table-note" title={note || undefined}>
+                    {note || t("common.emDash")}
+                  </div>
+                </td>
+                <td className="file-col-fit">
+                  <FileEntryActions e={e} m={m} layout="table" />
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -316,6 +344,7 @@ export function FilesDialogs({ m, skipEditor }: { m: FilesModel; skipEditor?: bo
   const { t } = useTranslation();
   useOverlayBack(!skipEditor && !!m.editor, () => m.setEditor(null));
   useOverlayBack(!!m.exportPick, () => m.setExportPick(null));
+  useOverlayBack(!!m.exportedPath, () => m.dismissExportedPath());
   useOverlayBack(!!m.pendingDelete, () => m.setPendingDelete(null));
   useOverlayBack(!!m.reauth, () => m.reauthCancel.current?.());
   useOverlayBack(!!m.groupDlg, () => m.setGroupDlg(null));
@@ -364,6 +393,29 @@ export function FilesDialogs({ m, skipEditor }: { m: FilesModel; skipEditor?: bo
             <div className="card-foot" style={{ justifyContent: "flex-end" }}>
               <button type="button" className="btn ghost sm" onClick={() => m.setExportPick(null)}>
                 {t("common.cancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {m.exportedPath && (
+        <div className="wizard-overlay">
+          <div className="card tools-beam-saved" role="dialog" aria-labelledby="files-export-saved-title">
+            <div className="card-head">
+              <div className="card-title" id="files-export-saved-title">
+                {t("files.exportSavedTitle")}
+              </div>
+            </div>
+            <div className="card-body stack">
+              <p className="tools-beam-saved-path">{t("files.exportSavedBody", { path: m.exportedPath })}</p>
+              {m.exportFolderErr && <div className="callout danger sm">{m.exportFolderErr}</div>}
+            </div>
+            <div className="card-foot" style={{ justifyContent: "flex-end" }}>
+              <button type="button" className="btn primary sm" onClick={() => void m.openExportedFolder()}>
+                {t("tools.fileBeamOpenFolder")}
+              </button>
+              <button type="button" className="btn ghost sm" onClick={() => m.dismissExportedPath()}>
+                {t("common.close")}
               </button>
             </div>
           </div>

@@ -8,6 +8,7 @@ import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { applyGroupOrder, removeGroupMeta, renameGroupMeta, sortGroups } from "../../ui/groupOrder";
 import type { GroupDialogState } from "../../ui/GroupDialog";
 import { showAppToast } from "../../ui/Toast";
+import { canRevealSavedPath, revealSavedPath } from "../../lib/revealPath";
 import { i18n } from "../../lib/i18n";
 import { useApp } from "../../store";
 
@@ -111,6 +112,8 @@ export function useFilesModel() {
   const [pendingDeleteGroup, setPendingDeleteGroup] = useState<string | null>(null);
   const [sheetEntry, setSheetEntry] = useState<FileEntry | null>(null);
   const [exportPick, setExportPick] = useState<FileEntry | null>(null);
+  const [exportedPath, setExportedPath] = useState<string | null>(null);
+  const [exportFolderErr, setExportFolderErr] = useState("");
   const [revealCfg, setRevealCfg] = useState({ grace: 5, clip: 20 });
   const searchRef = useRef<HTMLInputElement | null>(null);
 
@@ -414,14 +417,34 @@ export function useFilesModel() {
       setExportingId(entry.id);
       const ok = await withAuth((pw) => api.fileExport(entry.id, dest, pw, att.id));
       if (ok !== undefined) {
-        showAppToast(i18n.t("files.toastExported", { path: dest }));
         setSheetEntry(null);
         setExportPick(null);
+        if (canRevealSavedPath(dest)) {
+          setExportFolderErr("");
+          setExportedPath(dest);
+        } else {
+          showAppToast(i18n.t("files.toastExported", { path: dest }));
+        }
       }
     } catch (e) {
       setErr(errMessage(e));
     } finally {
       setExportingId(null);
+    }
+  }
+
+  function dismissExportedPath() {
+    setExportedPath(null);
+    setExportFolderErr("");
+  }
+
+  async function openExportedFolder() {
+    if (!exportedPath) return;
+    setExportFolderErr("");
+    try {
+      await revealSavedPath(exportedPath);
+    } catch (e) {
+      setExportFolderErr(errMessage(e));
     }
   }
 
@@ -520,6 +543,10 @@ export function useFilesModel() {
     setSheetEntry,
     exportPick,
     setExportPick,
+    exportedPath,
+    exportFolderErr,
+    dismissExportedPath,
+    openExportedFolder,
     searchRef,
     load,
     startUpload,

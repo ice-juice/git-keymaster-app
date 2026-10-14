@@ -731,6 +731,15 @@ export const api = {
       password: password ?? null,
       attachmentId: attachmentId ?? null,
     }),
+  fileReadBytes: (id: string, attachmentId?: string, password?: string) =>
+    invoke<number[]>("file_read_bytes", {
+      id,
+      attachmentId: attachmentId ?? null,
+      password: password ?? null,
+    }),
+  readPathBytes: (path: string) => invoke<number[]>("read_path_bytes", { path }),
+  writePathBytes: (path: string, bytes: number[]) => invoke<void>("write_path_bytes", { path, bytes }),
+  revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   fileSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
     invoke<void>("file_save_groups", { groups, remap: remap ?? null }),
 

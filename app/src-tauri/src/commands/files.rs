@@ -276,9 +276,8 @@ pub struct FileUpdateArgs {
 
 #[tauri::command(async)]
 pub fn file_list(state: State<'_, AppState>) -> Result<FileList> {
-    let vault = recover_lock(&state.vault);
-    let v = unlocked_vault(&vault)?;
-    let mut data = store::load_files(v)?;
+    let v = crate::commands::clone_unlocked_vault(&state)?;
+    let mut data = store::load_files(&v)?;
     for e in &mut data.entries {
         if e.attachments.is_empty() {
             e.attachments = e.resolved_attachments();
@@ -510,6 +509,146 @@ pub fn file_export(
     }
 }
 
+#[tauri::command(async)]
+pub fn file_read_bytes(
+    state: State<'_, AppState>,
+    id: String,
+    attachment_id: Option<String>,
+    password: Option<String>,
+) -> Result<Vec<u8>> {
+    ensure_reveal_authorized(&state, password.as_deref())?;
+    let vault = recover_lock(&state.vault);
+    let v = unlocked_vault(&vault)?;
+    let data = store::load_files(v)?;
+    let entry = data
+        .entries
+        .iter()
+        .find(|e| e.id == id)
+        .ok_or_else(|| AppError::Invalid("文件不存在".into()))?;
+    let atts = entry.resolved_attachments();
+    if atts.is_empty() {
+        return Err(AppError::Invalid("该条目没有可导出的附件".into()));
+    }
+    let picked = if let Some(aid) = attachment_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        atts.iter()
+            .find(|a| attachment_matches(a, aid))
+            .ok_or_else(|| AppError::Invalid("找不到要导出的附件".into()))?
+    } else if atts.len() == 1 {
+        &atts[0]
+    } else {
+        return Err(AppError::Invalid("请选择要导出的附件".into()));
+    };
+    let sha = picked.sha256.clone();
+    let mut out = Cursor::new(Vec::new());
+    blob::read_blob(v, &sha, &mut out)?;
+    util::audit(v.root(), &format!("读取保险库文件字节 id={id}"));
+    Ok(out.into_inner())
+}
+
+/// 把用户选中的磁盘路径读进内存。未装 `@tauri-apps/plugin-fs`，给光传等工具用。
+#[tauri::command(async)]
+pub fn read_path_bytes(path: String) -> Result<Vec<u8>> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(AppError::Invalid("请选择文件".into()));
+    }
+    Ok(std::fs::read(path)?)
+}
+
+/// 把原始字节写到调用方给出的绝对路径。
+/// 不限制扩展名，不进保险库，不触发同步。
+/// 调用方只能传入保存对话框返回的路径，不要自行拼系统目录。
+fn write_user_path_bytes(path: &str, bytes: &[u8]) -> Result<()> {
+    let raw = path.trim();
+    if raw.is_empty() {
+        return Err(AppError::Invalid("请选择保存路径".into()));
+    }
+    let dest = PathBuf::from(raw);
+    if !dest.is_absolute() {
+        return Err(AppError::Invalid("请选择保存路径".into()));
+    }
+    if dest.file_name().is_none() || dest.is_dir() {
+        return Err(AppError::Invalid("请选择文件而不是文件夹".into()));
+    }
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(dest, bytes)?;
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn write_path_bytes(path: String, bytes: Vec<u8>) -> Result<()> {
+    write_user_path_bytes(&path, &bytes)
+}
+
+/// 用系统文件管理器打开该文件所在目录。Windows 会选中这个文件。
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<()> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = path;
+        return Err(AppError::Unsupported("打开所在文件夹"));
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let raw = path.trim();
+        if raw.is_empty() {
+            return Err(AppError::Invalid("请选择文件".into()));
+        }
+        reveal_saved_path(Path::new(raw))
+    }
+}
+
+#[cfg(windows)]
+fn reveal_saved_path(path: &Path) -> Result<()> {
+    use std::os::windows::process::CommandExt;
+    let shown = path.display().to_string().replace('"', "");
+    let mut cmd = std::process::Command::new("explorer");
+    // explorer 自行解析命令行，引号只能包住路径：`/select,"C:\a b\f.json"`。
+    cmd.raw_arg(format!("/select,\"{shown}\""));
+    cmd.spawn()
+        .map_err(|e| AppError::Io(format!("打开目录失败：{e}")))?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn reveal_saved_path(path: &Path) -> Result<()> {
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .map_err(|e| AppError::Io(format!("打开目录失败：{e}")))?;
+    Ok(())
+}
+
+#[cfg(all(
+    unix,
+    not(target_os = "macos"),
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+fn reveal_saved_path(path: &Path) -> Result<()> {
+    let dir = if path.is_dir() {
+        path.to_path_buf()
+    } else {
+        path.parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .ok_or_else(|| AppError::Invalid("目录不存在，无法打开".into()))?
+    };
+    if !dir.is_dir() {
+        return Err(AppError::Invalid("目录不存在，无法打开".into()));
+    }
+    std::process::Command::new("xdg-open")
+        .arg(&dir)
+        .spawn()
+        .map_err(|e| AppError::Io(format!("打开目录失败：{e}")))?;
+    Ok(())
+}
+
 #[tauri::command]
 pub fn file_save_groups(
     app: AppHandle,
@@ -579,5 +718,36 @@ mod tests {
         assert!(attachment_matches(&a, "u1"));
         assert!(attachment_matches(&a, "abc"));
         assert!(!attachment_matches(&a, "no"));
+    }
+
+    #[test]
+    fn write_path_bytes_rejects_blank_without_extension_rule() {
+        let err = write_user_path_bytes("   ", b"hi").unwrap_err();
+        let text = err.to_string();
+        assert!(text.contains("请选择保存路径"));
+        assert!(!text.contains("md"));
+        assert!(write_user_path_bytes("notes.json", b"{}").is_err());
+    }
+
+    #[test]
+    fn write_path_bytes_keeps_original_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "gkm-beam-write-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let json = dir.join("sub").join("gam-s3-git-account-manage.json");
+        let gif = dir.join("shot.gif");
+        let bin = dir.join("a.bin");
+        write_user_path_bytes(&json.to_string_lossy(), br#"{"ok":true}"#).unwrap();
+        write_user_path_bytes(&gif.to_string_lossy(), b"GIF89a").unwrap();
+        write_user_path_bytes(&bin.to_string_lossy(), &[0, 1, 2, 255]).unwrap();
+        assert_eq!(std::fs::read(&json).unwrap(), br#"{"ok":true}"#);
+        assert_eq!(std::fs::read(&gif).unwrap(), b"GIF89a");
+        assert_eq!(std::fs::read(&bin).unwrap(), vec![0, 1, 2, 255]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
