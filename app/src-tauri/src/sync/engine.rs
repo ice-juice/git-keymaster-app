@@ -9,8 +9,8 @@
 
 use crate::error::{AppError, Result};
 use crate::model::{
-    collect_blob_hashes, collect_blob_hashes_all, collect_note_body_hashes, AccountData, FileData, NoteData,
-    QrHistoryData, Secrets, TotpData, VaultData,
+    collect_blob_hashes, collect_blob_hashes_all, collect_note_body_hashes, AccountData, FileData, LockerData,
+    NoteData, QrHistoryData, Secrets, TotpData, VaultData,
 };
 use crate::store::blob;
 use crate::store;
@@ -668,6 +668,7 @@ pub fn push_to_cloud_with(
     let file_data = store::load_files(vault).unwrap_or_default();
     let note_data = store::load_notes(vault).unwrap_or_default();
     let qr_history = store::load_qr_history(vault).unwrap_or_default();
+    let locker_data = store::load_locker(vault).unwrap_or_default();
     let remote_manifest = fetch_remote_manifest(vault, s3).ok().flatten();
     if crate::model::secrets_incomplete_for_entries(&secrets, &totp_data, &account_data) {
         if let Some(manifest) = &remote_manifest {
@@ -730,6 +731,7 @@ pub fn push_to_cloud_with(
     logical_objects.insert("data/files.json".into(), serde_json::to_vec(&file_data)?);
     logical_objects.insert("data/notes.json".into(), serde_json::to_vec(&note_data)?);
     logical_objects.insert("data/qr-history.json".into(), serde_json::to_vec(&qr_history)?);
+    logical_objects.insert("data/locker.json".into(), serde_json::to_vec(&locker_data)?);
     for hash in store::list_icon_hashes(vault) {
         if let Ok(bytes) = store::load_icon(vault, &hash) {
             logical_objects.insert(format!("icons/{hash}.webp"), bytes);
@@ -889,6 +891,7 @@ fn pull_from_cloud_inner(
     let mut remote_file_snap: Option<FileData> = None;
     let mut remote_note_snap: Option<NoteData> = None;
     let mut remote_qr_snap: Option<QrHistoryData> = None;
+    let mut remote_locker_snap: Option<LockerData> = None;
     let mut remote_ssh_snap: Option<String> = None;
     let mut pulled_key_ids: Vec<String> = Vec::new();
 
@@ -940,6 +943,11 @@ fn pull_from_cloud_inner(
             remote_qr_snap = Some(
                 serde_json::from_slice(&plain)
                     .map_err(|e| AppError::Invalid(format!("解析云端二维码历史失败: {e}")))?,
+            );
+        } else if logical_path == "data/locker.json" {
+            remote_locker_snap = Some(
+                serde_json::from_slice(&plain)
+                    .map_err(|e| AppError::Invalid(format!("解析云端寄存柜数据失败: {e}")))?,
             );
         } else if let Some(hash) = logical_path
             .strip_prefix("icons/")
@@ -1007,6 +1015,19 @@ fn pull_from_cloud_inner(
     } else {
         local_qr
     };
+    let local_locker = store::load_locker(vault).unwrap_or_default();
+    let merged_locker = if let Some(remote_locker) = remote_locker_snap.clone() {
+        crate::model::merge_locker_data(local_locker, remote_locker)
+    } else {
+        local_locker
+    };
+    // 云端旧快照会把已删钥匙的口令和密文一起拉下来。墓碑生效后把这两样清掉，避免列表和 ssh-keys/ 又长出来。
+    for id in current_data.deleted_keys.keys() {
+        current_secrets.key_passphrases.remove(id);
+        if store::key_exists(vault, id) {
+            let _ = store::delete_key(vault, id);
+        }
+    }
     // 先落机密与身份，再写 SSH。~/.ssh 被拒绝写入时不能把已拉下来的身份一起丢掉。
     store::save_secrets(vault, &current_secrets)?;
     store::save_totp(vault, &merged_totp)?;
@@ -1014,6 +1035,7 @@ fn pull_from_cloud_inner(
     store::save_files(vault, &merged_files)?;
     store::save_notes(vault, &merged_notes)?;
     store::save_qr_history(vault, &merged_qr)?;
+    store::save_locker(vault, &merged_locker)?;
     store::save_data(vault, &current_data)?;
     transferred_count += pull_missing_blobs(
         vault,
@@ -1058,6 +1080,7 @@ fn pull_from_cloud_inner(
             remote_file_snap.as_ref().unwrap_or(&FileData::default()),
             remote_note_snap.as_ref().unwrap_or(&NoteData::default()),
             remote_qr_snap.as_ref().unwrap_or(&QrHistoryData::default()),
+            remote_locker_snap.as_ref().unwrap_or(&LockerData::default()),
         )),
         None => None,
     };
@@ -1072,6 +1095,7 @@ fn pull_from_cloud_inner(
                 &merged_files,
                 &merged_notes,
                 &merged_qr,
+                &merged_locker,
             )
         }
         None => local_has_syncable_assets(vault)?,
@@ -1754,6 +1778,7 @@ fn stable_state_hash(
     files: &FileData,
     notes: &NoteData,
     qr_history: &QrHistoryData,
+    locker: &LockerData,
 ) -> String {
     let mut identities: Vec<&_> = data.identities.iter().collect();
     identities.sort_by(|a, b| a.id.cmp(&b.id));
@@ -1782,6 +1807,10 @@ fn stable_state_hash(
     note_entries.sort_by(|a, b| a.id.cmp(&b.id));
     let mut blob_hashes: Vec<String> = collect_blob_hashes_all(files, notes, accounts).into_iter().collect();
     blob_hashes.sort();
+    let mut locker_entries = locker.entries.clone();
+    locker_entries.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut locker_deleted: Vec<(&String, &String)> = locker.deleted_entries.iter().collect();
+    locker_deleted.sort_by(|a, b| a.0.cmp(b.0));
     let payload = serde_json::json!({
         "identities": identities,
         "keys": keys,
@@ -1797,6 +1826,8 @@ fn stable_state_hash(
         "fileEntries": file_entries,
         "noteEntries": note_entries,
         "qrHistory": qr_state_json(qr_history),
+        "lockerEntries": locker_entries,
+        "lockerDeleted": locker_deleted,
         "blobHashes": blob_hashes,
         "ssh": crate::sys::canonical_ssh_for_sync(ssh),
     });
@@ -1810,6 +1841,7 @@ fn local_has_syncable_assets(vault: &Vault) -> Result<bool> {
     let files = store::load_files(vault).unwrap_or_default();
     let notes = store::load_notes(vault).unwrap_or_default();
     let qr_history = store::load_qr_history(vault).unwrap_or_default();
+    let locker = store::load_locker(vault).unwrap_or_default();
     Ok(!data.identities.is_empty()
         || !data.keys.is_empty()
         || !data.repos.is_empty()
@@ -1820,7 +1852,9 @@ fn local_has_syncable_assets(vault: &Vault) -> Result<bool> {
         || !qr_history.scans.is_empty()
         || !qr_history.generations.is_empty()
         || !qr_history.deleted_scans.is_empty()
-        || !qr_history.deleted_generations.is_empty())
+        || !qr_history.deleted_generations.is_empty()
+        || !locker.entries.is_empty()
+        || !locker.deleted_entries.is_empty())
 }
 
 /// 合并结果和云端不一致才上传。

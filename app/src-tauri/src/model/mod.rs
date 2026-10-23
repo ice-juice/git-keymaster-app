@@ -56,6 +56,10 @@ pub struct KeyRecord {
     #[serde(default)]
     pub deployed_path: Option<String>,
     pub imported_at: String,
+    /// 未挂接时的密钥标签：`git` / `server` / `export`。
+    /// 有身份引用这把钥匙后，分组以身份为准，此字段不再参与分组。旧数据缺省为空。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub purpose_intent: String,
 }
 
 /// 一个 Git 身份。
@@ -115,6 +119,9 @@ pub struct VaultData {
     /// 已删除仓库：id → 删除时间。避免云端旧快照把本机刚移除的登记合并回来。
     #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
     pub deleted_repos: HashMap<String, String>,
+    /// 已删除密钥：id → 删除时间。云端旧快照不能把刚删掉的钥匙合并回来。
+    #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
+    pub deleted_keys: HashMap<String, String>,
 }
 
 /// 机密集合（data/secrets.enc）——容器本身不跨 IPC。
@@ -145,6 +152,12 @@ pub struct Secrets {
     /// 网络代理密码。同样只进保险库信封。
     #[serde(default)]
     pub network_proxy_password: Option<String>,
+    /// 文件寄存柜分享服务地址。跟着机密同步，方便同一账号的其他设备生成分享链接。
+    #[serde(default)]
+    pub locker_worker_base_url: Option<String>,
+    /// 文件寄存柜分享服务共享密钥。只进已加密的 secrets，不进本机明文配置。
+    #[serde(default)]
+    pub locker_worker_secret: Option<String>,
 }
 
 /// 一个 TOTP 条目（元数据；种子单独存 Secrets）。
@@ -391,6 +404,48 @@ pub struct NoteData {
     pub deleted_entries: HashMap<String, String>,
 }
 
+/// 已分享项的短链登记。CK 不在这里，只在生成链接时从 wrap_self 解出来。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareMeta {
+    pub slug: String,
+    pub registered_at: String,
+}
+
+/// 寄存项（元数据；文件字节以随机 CK 加密后存 R2）。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LockerEntry {
+    pub id: String,
+    pub name: String,
+    pub original_name: String,
+    #[serde(default)]
+    pub mime: Option<String>,
+    pub size: u64,
+    pub object_name: String,
+    pub pickup_code: String,
+    pub code_hash: String,
+    pub wrap_self: String,
+    pub created_at: String,
+    #[serde(default)]
+    pub expire_at: Option<String>,
+    #[serde(default)]
+    pub max_pulls: Option<u32>,
+    #[serde(default)]
+    pub pulls_left: Option<u32>,
+    #[serde(default)]
+    pub share: Option<ShareMeta>,
+}
+
+/// data/locker.enc
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LockerData {
+    pub entries: Vec<LockerEntry>,
+    #[serde(default, serialize_with = "serde_maps::ordered_string_map")]
+    pub deleted_entries: HashMap<String, String>,
+}
+
 /// 每类二维码历史在本地界面上的上限。超出后丢掉最旧的，并打确定性墓碑，避免多端来回把被裁掉的记录写回来。
 pub const QR_HISTORY_LIMIT: usize = 80;
 /// 原文上限。二维码图片由原文重建，不进同步载荷。
@@ -474,6 +529,8 @@ pub fn merge_vault_data(local: VaultData, remote: VaultData) -> VaultData {
         }
     }
 
+    let deleted_keys = merge_tombstones(local.deleted_keys, remote.deleted_keys);
+
     let mut identities: HashMap<String, Identity> = HashMap::new();
     for item in local.identities {
         identities.insert(item.id.clone(), item);
@@ -496,9 +553,15 @@ pub fn merge_vault_data(local: VaultData, remote: VaultData) -> VaultData {
 
     let mut keys: HashMap<String, KeyRecord> = HashMap::new();
     for item in local.keys {
+        if deleted_keys.contains_key(&item.id) {
+            continue;
+        }
         keys.insert(item.id.clone(), item);
     }
     for item in remote.keys {
+        if deleted_keys.contains_key(&item.id) {
+            continue;
+        }
         match keys.get(&item.id) {
             Some(local_item) if local_item.imported_at >= item.imported_at => {}
             _ => {
@@ -530,6 +593,7 @@ pub fn merge_vault_data(local: VaultData, remote: VaultData) -> VaultData {
         repos,
         deleted_identities: deleted,
         deleted_repos,
+        deleted_keys,
     }
 }
 
@@ -730,6 +794,72 @@ pub fn merge_file_data(local: FileData, remote: FileData) -> FileData {
             |e| e.updated_at.as_str(),
         ),
         groups: merge_groups(local.groups, remote.groups),
+        deleted_entries: deleted,
+    }
+}
+
+/// 剩余次数取更小的一侧。`None` 表示不限，有限次数比不限更严。
+fn min_pulls_left(a: Option<u32>, b: Option<u32>) -> Option<u32> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (Some(x), None) | (None, Some(x)) => Some(x),
+        (None, None) => None,
+    }
+}
+
+fn pick_share(a: Option<ShareMeta>, b: Option<ShareMeta>) -> Option<ShareMeta> {
+    match (a, b) {
+        (None, None) => None,
+        (Some(s), None) | (None, Some(s)) => Some(s),
+        (Some(a), Some(b)) => {
+            if timestamp_newer_or_eq(&a.registered_at, &b.registered_at) {
+                Some(a)
+            } else {
+                Some(b)
+            }
+        }
+    }
+}
+
+fn merge_locker_entry(local: LockerEntry, remote: LockerEntry) -> LockerEntry {
+    let local_newer = timestamp_newer_or_eq(&local.created_at, &remote.created_at);
+    let (newer, older) = if local_newer { (local, remote) } else { (remote, local) };
+    let pulls_left = min_pulls_left(newer.pulls_left, older.pulls_left);
+    let share = pick_share(newer.share.clone(), older.share);
+    LockerEntry {
+        pulls_left,
+        share,
+        ..newer
+    }
+}
+
+/// 寄存项按 created_at 取新，墓碑传播删除；`pulls_left` 取更小值。
+pub fn merge_locker_data(local: LockerData, remote: LockerData) -> LockerData {
+    let deleted = merge_tombstones(local.deleted_entries, remote.deleted_entries);
+    let mut entries: HashMap<String, LockerEntry> = HashMap::new();
+    for item in local.entries {
+        entries.insert(item.id.clone(), item);
+    }
+    for item in remote.entries {
+        match entries.remove(&item.id) {
+            Some(local_item) => {
+                entries.insert(item.id.clone(), merge_locker_entry(local_item, item));
+            }
+            None => {
+                entries.insert(item.id.clone(), item);
+            }
+        }
+    }
+    let mut entries: Vec<LockerEntry> = entries
+        .into_values()
+        .filter(|item| match deleted.get(&item.id) {
+            Some(ts) if timestamp_newer_or_eq(ts, &item.created_at) => false,
+            _ => true,
+        })
+        .collect();
+    entries.sort_by(|a, b| a.id.cmp(&b.id));
+    LockerData {
+        entries,
         deleted_entries: deleted,
     }
 }
@@ -1045,6 +1175,24 @@ pub fn merge_secrets_with_meta(
     {
         local.network_proxy_password = remote.network_proxy_password.clone();
     }
+    if local
+        .locker_worker_base_url
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        local.locker_worker_base_url = remote.locker_worker_base_url.clone();
+    }
+    if local
+        .locker_worker_secret
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        local.locker_worker_secret = remote.locker_worker_secret.clone();
+    }
     for (k, v) in remote.totp_seeds.clone() {
         if !usable_seed(&v) {
             continue;
@@ -1131,6 +1279,22 @@ fn parse_rfc3339(raw: &str) -> Option<time::OffsetDateTime> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn key_record_purpose_intent_defaults_empty_for_old_data() {
+        let raw = r#"{
+            "id":"k","name":"n","algorithm":"ed25519","fingerprint":"SHA256:x",
+            "publicOpenssh":"ssh-ed25519 AAAA","bits":256,"hasPassphrase":true,
+            "weak":false,"sourcePath":null,"deployedPath":null,"importedAt":"t"
+        }"#;
+        let mut rec: KeyRecord = serde_json::from_str(raw).unwrap();
+        assert_eq!(rec.purpose_intent, "");
+        let value = serde_json::to_value(&rec).unwrap();
+        assert!(value.get("purposeIntent").is_none());
+        rec.purpose_intent = "server".into();
+        let value = serde_json::to_value(&rec).unwrap();
+        assert_eq!(value.get("purposeIntent").and_then(|v| v.as_str()), Some("server"));
+    }
+
     fn ident(id: &str, name: &str, updated_at: &str) -> Identity {
         Identity {
             id: id.into(),
@@ -1177,6 +1341,41 @@ mod tests {
         assert_eq!(names.get("b"), Some(&"remote-new"));
         assert_eq!(names.get("d"), Some(&"remote-only"));
         assert!(!names.contains_key("c"));
+    }
+
+    fn key_rec(id: &str, imported_at: &str) -> KeyRecord {
+        KeyRecord {
+            id: id.into(),
+            name: format!("id_ed25519_{id}"),
+            algorithm: "ed25519".into(),
+            fingerprint: format!("SHA256:{id}"),
+            public_openssh: "ssh-ed25519 AAAA".into(),
+            bits: Some(256),
+            has_passphrase: true,
+            weak: false,
+            source_path: None,
+            deployed_path: None,
+            imported_at: imported_at.into(),
+            purpose_intent: String::new(),
+        }
+    }
+
+    #[test]
+    fn merge_drops_key_covered_by_tombstone() {
+        let local = VaultData {
+            keys: vec![],
+            deleted_keys: HashMap::from([("gone".into(), "2026-10-23T18:00:00Z".into())]),
+            ..VaultData::default()
+        };
+        let remote = VaultData {
+            keys: vec![key_rec("gone", "2026-10-23T17:00:00Z"), key_rec("keep", "2026-10-23T17:00:00Z")],
+            ..VaultData::default()
+        };
+        let merged = merge_vault_data(local, remote);
+        let ids: Vec<_> = merged.keys.iter().map(|k| k.id.as_str()).collect();
+        assert!(!ids.contains(&"gone"));
+        assert!(ids.contains(&"keep"));
+        assert!(merged.deleted_keys.contains_key("gone"));
     }
 
     fn repo(id: &str, path: &str) -> ManagedRepo {
@@ -1804,5 +2003,71 @@ mod tests {
         let rest = &a["legacy-".len()..];
         assert_eq!(rest.len(), 32);
         assert!(rest.bytes().all(|b| b.is_ascii_hexdigit()));
+    }
+
+    fn locker_entry(id: &str, created_at: &str, pulls_left: Option<u32>) -> LockerEntry {
+        LockerEntry {
+            id: id.into(),
+            name: format!("n-{id}"),
+            original_name: format!("{id}.bin"),
+            mime: None,
+            size: 4,
+            object_name: format!("obj-{id}"),
+            pickup_code: "482193".into(),
+            code_hash: "hash".into(),
+            wrap_self: "wrap".into(),
+            created_at: created_at.into(),
+            expire_at: None,
+            max_pulls: pulls_left,
+            pulls_left,
+            share: None,
+        }
+    }
+
+    #[test]
+    fn merge_locker_takes_newer_tombstone_and_smaller_pulls() {
+        let mut local_a = locker_entry("a", "2026-10-16T03:00:00Z", Some(5));
+        local_a.name = "local".into();
+        let mut remote_a = locker_entry("a", "2026-10-16T01:00:00Z", Some(2));
+        remote_a.name = "remote".into();
+        remote_a.share = Some(ShareMeta {
+            slug: "remoteSlug1".into(),
+            registered_at: "2026-10-16T02:00:00Z".into(),
+        });
+        let local = LockerData {
+            entries: vec![local_a, locker_entry("b", "2026-10-16T01:00:00Z", None)],
+            deleted_entries: HashMap::from([("c".into(), "2026-10-16T00:00:00Z".into())]),
+        };
+        let remote = LockerData {
+            entries: vec![
+                remote_a,
+                locker_entry("c", "2026-10-15T00:00:00Z", Some(1)),
+                locker_entry("d", "2026-10-16T04:00:00Z", Some(9)),
+            ],
+            deleted_entries: HashMap::from([("b".into(), "2026-10-16T05:00:00Z".into())]),
+        };
+        let merged = merge_locker_data(local, remote);
+        let a = merged.entries.iter().find(|e| e.id == "a").unwrap();
+        assert_eq!(a.name, "local");
+        assert_eq!(a.pulls_left, Some(2));
+        assert_eq!(a.share.as_ref().unwrap().slug, "remoteSlug1");
+        assert!(merged.entries.iter().all(|e| e.id != "b" && e.id != "c"));
+        assert!(merged.entries.iter().any(|e| e.id == "d"));
+        assert!(merged.deleted_entries.contains_key("b"));
+        assert!(merged.deleted_entries.contains_key("c"));
+    }
+
+    #[test]
+    fn merge_locker_unlimited_loses_to_a_finite_count() {
+        let local = LockerData {
+            entries: vec![locker_entry("a", "2026-10-16T01:00:00Z", None)],
+            deleted_entries: HashMap::new(),
+        };
+        let remote = LockerData {
+            entries: vec![locker_entry("a", "2026-10-16T01:00:00Z", Some(1))],
+            deleted_entries: HashMap::new(),
+        };
+        let merged = merge_locker_data(local, remote);
+        assert_eq!(merged.entries[0].pulls_left, Some(1));
     }
 }

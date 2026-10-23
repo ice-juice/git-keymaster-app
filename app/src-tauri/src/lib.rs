@@ -18,6 +18,7 @@ pub mod error;
 pub mod git;
 pub mod icons;
 pub mod importer;
+pub mod locker;
 pub mod model;
 pub mod qrscan;
 pub mod screen_protect;
@@ -139,6 +140,9 @@ pub fn run() {
             commands::assets::test_connection,
             commands::assets::open_url,
             commands::write::generate_key,
+            commands::write::generate_ssh_material,
+            commands::write::save_generated_ssh_key,
+            commands::write::set_key_purpose_intent,
             commands::write::preview_config,
             commands::write::apply_config,
             commands::write::create_identity,
@@ -146,8 +150,11 @@ pub fn run() {
             commands::write::abort_identity_draft,
             commands::write::update_identity,
             commands::write::delete_identity,
+            commands::write::delete_key,
             commands::write::reveal_key_passphrase,
             commands::write::reveal_key_material,
+            commands::write::openssh_rsa_to_pem,
+            commands::write::export_vault_key_pem,
             commands::agent::agent_status,
             commands::agent::agent_ensure,
             commands::agent::agent_unify_env,
@@ -269,6 +276,20 @@ pub fn run() {
             commands::files::write_path_bytes,
             commands::files::reveal_path,
             commands::files::file_save_groups,
+            commands::locker::locker_list,
+            commands::locker::locker_put_from_path,
+            commands::locker::locker_put_bytes,
+            commands::locker::locker_put_from_vault,
+            commands::locker::locker_reveal_code,
+            commands::locker::locker_pull,
+            commands::locker::locker_pull_by_id,
+            commands::locker::locker_pull_bytes,
+            commands::locker::locker_pull_bytes_by_id,
+            commands::locker::locker_share,
+            commands::locker::locker_revoke_share,
+            commands::locker::locker_delete,
+            commands::locker::locker_get_worker_config,
+            commands::locker::locker_save_worker_config,
             commands::notes::note_list,
             commands::notes::note_get_body,
             commands::notes::note_upsert,

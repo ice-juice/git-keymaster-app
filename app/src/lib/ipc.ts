@@ -74,6 +74,21 @@ export interface KeyInfo {
   encrypted: boolean | null;
   comment: string;
 }
+export interface GeneratedSshMaterial {
+  algorithm: string;
+  bits: number | null;
+  fingerprint: string;
+  publicOpenssh: string;
+  privateOpenssh: string;
+  passphrase: string;
+}
+export interface SaveGeneratedSshKeyArgs {
+  privateOpenssh: string;
+  publicOpenssh: string;
+  passphrase: string;
+  name?: string;
+  purposeIntent: string;
+}
 export interface KeyRecord {
   id: string;
   name: string;
@@ -86,6 +101,8 @@ export interface KeyRecord {
   sourcePath: string | null;
   deployedPath: string | null;
   importedAt: string;
+  /** 未挂接时的密钥标签：git / server / export。旧数据缺省为空。 */
+  purposeIntent?: string;
 }
 export interface RevealedKeyMaterial {
   publicOpenssh: string;
@@ -532,6 +549,12 @@ export const api = {
 
   // write (M3)
   generateKey: (comment: string, name?: string) => invoke<KeyRecord>("generate_key", { comment, name }),
+  generateSshMaterial: (algorithm: string, bits: number | null, comment: string) =>
+    invoke<GeneratedSshMaterial>("generate_ssh_material", { algorithm, bits, comment }),
+  saveGeneratedSshKey: (args: SaveGeneratedSshKeyArgs) =>
+    invoke<KeyRecord>("save_generated_ssh_key", { args }),
+  setKeyPurposeIntent: (keyId: string, purposeIntent: string) =>
+    invoke<KeyRecord>("set_key_purpose_intent", { keyId, purposeIntent }),
   previewConfig: (entry: ManagedEntry) => invoke<ConfigPreview>("preview_config", { entry }),
   applyConfig: (entry: ManagedEntry) => invoke("apply_config", { entry }),
   createIdentity: (args: CreateIdentityArgs) => invoke<CreateIdentityResult>("create_identity", { args }),
@@ -548,10 +571,15 @@ export const api = {
     invoke<void>("abort_identity_draft", { args }),
   updateIdentity: (args: UpdateIdentityArgs) => invoke<Identity>("update_identity", { args }),
   deleteIdentity: (identityId: string) => invoke<void>("delete_identity", { identityId }),
+  deleteKey: (keyId: string) => invoke<void>("delete_key", { keyId }),
   revealKeyPassphrase: (password: string, keyId: string) =>
     invoke<string>("reveal_key_passphrase", { password, keyId }),
   revealKeyMaterial: (password: string, keyId: string) =>
     invoke<RevealedKeyMaterial>("reveal_key_material", { password, keyId }),
+  opensshRsaToPem: (privateOpenssh: string, passphrase: string) =>
+    invoke<string>("openssh_rsa_to_pem", { privateOpenssh, passphrase }),
+  exportVaultKeyPem: (password: string, keyId: string) =>
+    invoke<string>("export_vault_key_pem", { password, keyId }),
 
   // agent (M4)
   agentStatus: () => invoke<AgentStatus>("agent_status"),
@@ -743,6 +771,40 @@ export const api = {
   fileSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
     invoke<void>("file_save_groups", { groups, remap: remap ?? null }),
 
+  lockerList: () => invoke<{ entries: LockerEntry[] }>("locker_list"),
+  lockerPutFromPath: (path: string, opts?: LockerPutOpts) =>
+    invoke<LockerPutResult>("locker_put_from_path", { path, opts: opts ?? null }),
+  lockerPutBytes: (originalName: string, bytes: number[], opts?: LockerPutOpts) =>
+    invoke<LockerPutResult>("locker_put_bytes", { originalName, bytes, opts: opts ?? null }),
+  lockerPutFromVault: (entryId: string, attachmentId: string | null, password: string | undefined, opts?: LockerPutOpts) =>
+    invoke<LockerPutResult>("locker_put_from_vault", {
+      entryId,
+      attachmentId,
+      password: password ?? null,
+      opts: opts ?? null,
+    }),
+  lockerRevealCode: (id: string, password?: string) =>
+    invoke<{ code: string }>("locker_reveal_code", { id, password: password ?? null }),
+  lockerPull: (code: string, destPath: string, password?: string) =>
+    invoke<LockerPullResult>("locker_pull", { code, destPath, password: password ?? null }),
+  lockerPullById: (id: string, destPath: string, password?: string) =>
+    invoke<LockerPullResult>("locker_pull_by_id", { id, destPath, password: password ?? null }),
+  lockerPullBytes: (code: string, password?: string) =>
+    invoke<LockerPullBytesResult>("locker_pull_bytes", { code, password: password ?? null }),
+  lockerPullBytesById: (id: string, password?: string) =>
+    invoke<LockerPullBytesResult>("locker_pull_bytes_by_id", { id, password: password ?? null }),
+  lockerShare: (id: string, password?: string) =>
+    invoke<LockerShareResult>("locker_share", { id, password: password ?? null }),
+  lockerRevokeShare: (id: string) => invoke<void>("locker_revoke_share", { id }),
+  lockerDelete: (id: string) => invoke<void>("locker_delete", { id }),
+  lockerGetWorkerConfig: () => invoke<LockerWorkerConfig>("locker_get_worker_config"),
+  lockerSaveWorkerConfig: (baseUrl: string, secret?: string | null, clearSecret?: boolean) =>
+    invoke<LockerWorkerConfig>("locker_save_worker_config", {
+      baseUrl,
+      secret: secret ?? null,
+      clearSecret: clearSecret ?? false,
+    }),
+
   qrHistoryList: () => invoke<QrHistoryList>("qr_history_list"),
   qrHistoryAdd: (kind: "scan" | "generate", text: string) =>
     invoke<QrHistoryList>("qr_history_add", { kind, text }),
@@ -901,6 +963,65 @@ export interface FileUpdateArgs {
   keepAttachmentIds?: string[];
   addPaths?: string[];
   addBytes?: FileBytesItem[];
+}
+
+export interface LockerShareMeta {
+  slug: string;
+  registeredAt: string;
+}
+
+export interface LockerEntry {
+  id: string;
+  name: string;
+  originalName: string;
+  mime?: string | null;
+  size: number;
+  createdAt: string;
+  expireAt?: string | null;
+  maxPulls?: number | null;
+  pullsLeft?: number | null;
+  share?: LockerShareMeta | null;
+}
+
+export interface LockerPutOpts {
+  name?: string;
+  ttlSecs?: number | null;
+  permanent?: boolean;
+  maxPulls?: number | null;
+  unlimitedPulls?: boolean;
+}
+
+export interface LockerPutResult {
+  id: string;
+  code: string;
+}
+
+export interface LockerPullResult {
+  id: string;
+  name: string;
+  originalName: string;
+  destPath: string;
+  pullsLeft?: number | null;
+  burned: boolean;
+}
+
+export interface LockerPullBytesResult {
+  id: string;
+  name: string;
+  originalName: string;
+  bytes: number[];
+  pullsLeft?: number | null;
+  burned: boolean;
+}
+
+export interface LockerShareResult {
+  url: string;
+  slug: string;
+}
+
+export interface LockerWorkerConfig {
+  baseUrl: string;
+  hasSecret: boolean;
 }
 
 export function entryAttachments(e: FileEntry): FileAttachment[] {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronLeft, Hash, QrCode, ScanLine, ShieldCheck, Sparkles } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { ChevronLeft, Hash, KeyRound, PackageOpen, QrCode, ScanLine, ShieldCheck, Sparkles } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { copyWithClear } from "../lib/secretsUi";
 import { useOverlayBack } from "../shared/mobileBack";
@@ -22,11 +23,13 @@ import { QrScannerDialog } from "../ui/QrScannerDialog";
 import { showAppToast } from "../ui/Toast";
 import { MobileQrHistory } from "./Overview.mobileQrHistory";
 import { FileBeamTool } from "./Overview.mobileFileBeam";
+import { ToolsLockerPage } from "./tools/ToolsLockerPage";
+import { ToolsSshKeyPage } from "./tools/ToolsSshKeyPage";
 import { ToolsCertsPage } from "./tools/ToolsCertsPage";
 import { ToolsCryptoPage } from "./tools/ToolsCryptoPage";
 import { ToolEmbed } from "./tools/ToolsShared";
 
-type ToolId = "password" | "crypto" | "qr" | "certs" | "filebeam";
+type ToolId = "password" | "crypto" | "qr" | "certs" | "filebeam" | "locker" | "ssh";
 type QrTab = "scan" | "generate";
 
 function ToolSubpage({
@@ -301,8 +304,20 @@ function QrTool() {
 
 export function OverviewMobileTools() {
   const { t } = useTranslation();
+  const location = useLocation();
+  const navigate = useNavigate();
   const [open, setOpen] = useState<ToolId | null>(null);
+  const [lockerSeed, setLockerSeed] = useState<{ entryId: string; attId?: string } | null>(null);
   const close = useCallback(() => setOpen(null), []);
+
+  useEffect(() => {
+    const state = location.state as { openLocker?: { entryId?: string; attId?: string } } | null;
+    const seed = state?.openLocker;
+    if (!seed?.entryId) return;
+    setLockerSeed({ entryId: seed.entryId, attId: seed.attId });
+    setOpen("locker");
+    navigate(".", { replace: true, state: null });
+  }, [location.state, navigate]);
 
   const cards: { id: ToolId; title: string; desc: string; icon: ReactNode }[] = [
     {
@@ -334,6 +349,18 @@ export function OverviewMobileTools() {
       title: t("tools.fileBeamTitle"),
       desc: t("tools.fileBeamDesc"),
       icon: <ScanLine size={18} />,
+    },
+    {
+      id: "locker",
+      title: t("tools.lockerTitle"),
+      desc: t("tools.lockerDesc"),
+      icon: <PackageOpen size={18} />,
+    },
+    {
+      id: "ssh",
+      title: t("tools.sshTitle"),
+      desc: t("tools.sshCardDesc"),
+      icon: <KeyRound size={18} />,
     },
   ];
 
@@ -377,6 +404,20 @@ export function OverviewMobileTools() {
       {open === "filebeam" && (
         <ToolSubpage title={t("tools.fileBeamTitle")} onClose={close} beam>
           <FileBeamTool />
+        </ToolSubpage>
+      )}
+      {open === "locker" && (
+        <ToolSubpage title={t("tools.lockerTitle")} onClose={close}>
+          <ToolEmbed>
+            <ToolsLockerPage initialVault={lockerSeed} />
+          </ToolEmbed>
+        </ToolSubpage>
+      )}
+      {open === "ssh" && (
+        <ToolSubpage title={t("tools.sshTitle")} onClose={close}>
+          <ToolEmbed>
+            <ToolsSshKeyPage />
+          </ToolEmbed>
         </ToolSubpage>
       )}
     </section>

@@ -1,4 +1,4 @@
-import { Hash, QrCode, Radio, ShieldCheck, Sparkles } from "lucide-react";
+import { Hash, KeyRound, PackageOpen, QrCode, Radio, ShieldCheck, Sparkles } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { PageHead } from "../../ui/common";
@@ -19,6 +19,8 @@ export function ToolsHub() {
     { id: "qr", to: "/tools/qr", title: t("home.toolQr"), desc: t("home.toolQrDesc"), icon: QrCode },
     { id: "certs", to: "/tools/certs", title: t("tools.certsTitle"), desc: t("tools.certsDesc"), icon: ShieldCheck },
     { id: "filebeam", to: "/tools/filebeam", title: t("tools.fileBeamTitle"), desc: t("tools.fileBeamDesc"), icon: Radio },
+    { id: "locker", to: "/tools/locker", title: t("tools.lockerTitle"), desc: t("tools.lockerDesc"), icon: PackageOpen },
+    { id: "ssh", to: "/tools/ssh", title: t("tools.sshTitle"), desc: t("tools.sshCardDesc"), icon: KeyRound },
   ];
 
   return (

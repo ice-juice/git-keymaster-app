@@ -4903,6 +4903,15 @@ html[data-platform="mobile"] .m-tool-card.tone-filebeam .m-tool-card-icon {
   --accent: var(--tone-filebeam);
   --accent-soft: var(--tone-filebeam-soft);
 }
+html[data-platform="mobile"] .m-tool-card.tone-locker .m-tool-card-icon {
+  --accent: var(--tone-locker);
+  --accent-soft: var(--tone-locker-soft);
+}
+html[data-platform="mobile"] .m-tool-card.tone-ssh .m-tool-card-icon {
+  --accent: var(--tone-ssh);
+  --accent-soft: var(--tone-ssh-soft);
+}
+html[data-platform="mobile"] .locker-op { min-height: 132px; }
 
 /* 工具子页：顶栏标题居中，光传占满导航以下的剩余高度。 */
 html[data-platform="mobile"] .m-tool-subpage .m-subpage-nav {

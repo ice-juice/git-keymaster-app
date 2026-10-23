@@ -434,6 +434,7 @@ mod tests {
             source_path: None,
             deployed_path: None,
             imported_at: "2026-09-09".into(),
+            purpose_intent: String::new(),
         });
         store::save_data(&vault, &data).unwrap();
         store::save_key(&vault, "key-1", b"fake-private-key").unwrap();

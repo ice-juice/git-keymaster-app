@@ -39,6 +39,7 @@ time = { version = "0.3", features = ["formatting", "parsing"] }
 
 # ---- M2 SSH 资产读取/导入 ----
 ssh-key = { version = "0.6", features = ["ed25519", "rsa", "encryption", "std", "getrandom"] }
+rsa = { version = "0.9.10", default-features = false, features = ["pem", "std"] }
 rand_core = { version = "0.6", features = ["std", "getrandom"] }
 
 # ---- M3 写操作/预览 ----

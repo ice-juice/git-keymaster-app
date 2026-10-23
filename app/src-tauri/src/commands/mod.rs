@@ -5,6 +5,7 @@ pub mod accounts;
 pub mod agent;
 pub mod files;
 pub mod gh_cli;
+pub mod locker;
 pub mod notes;
 pub mod assets;
 pub mod biometric;

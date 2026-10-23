@@ -5,6 +5,8 @@ import { ToolsCryptoPage } from "./ToolsCryptoPage";
 import { ToolsQrPage } from "./ToolsQrPage";
 import { ToolsCertsPage } from "./ToolsCertsPage";
 import { ToolsFileBeamPage } from "./ToolsFileBeamPage";
+import { ToolsLockerPage } from "./ToolsLockerPage";
+import { ToolsSshKeyPage } from "./ToolsSshKeyPage";
 
 export function ToolsRoutes() {
   return (
@@ -15,6 +17,8 @@ export function ToolsRoutes() {
       <Route path="qr" element={<ToolsQrPage />} />
       <Route path="certs" element={<ToolsCertsPage />} />
       <Route path="filebeam" element={<ToolsFileBeamPage />} />
+      <Route path="locker" element={<ToolsLockerPage />} />
+      <Route path="ssh" element={<ToolsSshKeyPage />} />
     </Routes>
   );
 }

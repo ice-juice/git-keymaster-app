@@ -2,7 +2,9 @@
 //! 纯 Rust（`ssh-key`），不依赖外部命令。
 
 use crate::error::{AppError, Result};
+use rsa::pkcs1::EncodeRsaPrivateKey;
 use serde::Serialize;
+use ssh_key::private::KeypairData;
 use ssh_key::{Algorithm, HashAlg, LineEnding, PrivateKey, PublicKey};
 use zeroize::Zeroizing;
 
@@ -144,6 +146,34 @@ pub fn decrypt_to_openssh(private_openssh: &str, passphrase: Option<&str>) -> Re
         .to_openssh(LineEnding::LF)
         .map_err(|_| AppError::Crypto)?;
     Ok(text)
+}
+
+/// 把带口令的 OpenSSH RSA 私钥转成无口令的传统 PEM（`BEGIN RSA PRIVATE KEY`）。
+/// ed25519 没有这种格式。供 FinalShell 等只认 PEM 私钥的终端导入。
+pub fn rsa_openssh_to_pkcs1_pem(private_openssh: &str, passphrase: &str) -> Result<Zeroizing<String>> {
+    let sk = PrivateKey::from_openssh(private_openssh)
+        .map_err(|e| AppError::Invalid(format!("私钥解析失败：{e}")))?;
+    let decrypted = if sk.is_encrypted() {
+        sk.decrypt(passphrase).map_err(|_| AppError::BadPassword)?
+    } else {
+        sk
+    };
+    let pair = match decrypted.key_data() {
+        KeypairData::Rsa(pair) => pair,
+        _ => {
+            return Err(AppError::Invalid(
+                "只有 RSA 密钥可以导出 PEM 私钥。ed25519 请使用 OpenSSH 私钥。".into(),
+            ))
+        }
+    };
+    let n = rsa::BigUint::from_bytes_be(pair.public.n.as_bytes());
+    let e = rsa::BigUint::from_bytes_be(pair.public.e.as_bytes());
+    let d = rsa::BigUint::from_bytes_be(pair.private.d.as_bytes());
+    let p = rsa::BigUint::from_bytes_be(pair.private.p.as_bytes());
+    let q = rsa::BigUint::from_bytes_be(pair.private.q.as_bytes());
+    let key = rsa::RsaPrivateKey::from_components(n, e, d, vec![p, q]).map_err(|_| AppError::Crypto)?;
+    key.to_pkcs1_pem(rsa::pkcs1::LineEnding::LF)
+        .map_err(|_| AppError::Crypto)
 }
 
 #[cfg(test)]

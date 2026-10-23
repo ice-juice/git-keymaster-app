@@ -663,6 +663,39 @@ pub fn key_file_stem(name: &str) -> String {
     }
 }
 
+/// 按算法收成文件名主干，供工具箱保存使用。身份创建仍走 `key_file_stem`。
+/// 空名称得到 `id_rsa` / `id_ed25519`。清洗对齐导入时的 `default_name`（非字母数字换成 `_`）。
+pub fn key_file_stem_for_algo(algo: &str, name: &str) -> String {
+    let prefix = if algo.eq_ignore_ascii_case("rsa") {
+        "id_rsa"
+    } else {
+        "id_ed25519"
+    };
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '_' })
+        .collect();
+    let cleaned = cleaned.trim().trim_matches('.').trim_matches('_').trim();
+    if cleaned.is_empty() {
+        prefix.to_string()
+    } else if has_ascii_prefix_ignore_case(cleaned, prefix) {
+        cleaned.to_string()
+    } else {
+        format!("{prefix}_{cleaned}")
+    }
+}
+
+fn has_ascii_prefix_ignore_case(value: &str, prefix: &str) -> bool {
+    let mut chars = value.chars();
+    for expected in prefix.chars() {
+        match chars.next() {
+            Some(got) if got.eq_ignore_ascii_case(&expected) => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
 /// 云端/库内工作空间路径占位符。本机落盘给 OpenSSH 时再替换成当前工作空间绝对路径。
 pub const WORKSPACE_PATH_TOKEN: &str = "%GAM_WORKSPACE%";
 
@@ -809,6 +842,21 @@ mod tests {
     }
 
     #[test]
+    fn key_stem_for_algo_uses_rsa_or_ed25519_prefix() {
+        assert_eq!(key_file_stem_for_algo("rsa", ""), "id_rsa");
+        assert_eq!(key_file_stem_for_algo("ed25519", "   "), "id_ed25519");
+        assert_eq!(key_file_stem_for_algo("rsa", "work"), "id_rsa_work");
+        assert_eq!(key_file_stem_for_algo("ed25519", "work"), "id_ed25519_work");
+        assert_eq!(key_file_stem_for_algo("rsa", "id_rsa_work"), "id_rsa_work");
+        assert_eq!(key_file_stem_for_algo("RSA", "ID_RSA_work"), "ID_RSA_work");
+        assert_eq!(key_file_stem_for_algo("rsa", "a/b:c"), "id_rsa_a_b_c");
+        assert_eq!(key_file_stem_for_algo("ed25519", "mgcp-afk"), "id_ed25519_mgcp_afk");
+        assert_eq!(key_file_stem_for_algo("rsa", ".."), "id_rsa");
+        assert_eq!(key_file_stem_for_algo("rsa", "钥匙"), "id_rsa_钥匙");
+        assert_eq!(key_file_stem("mgcp-afk"), "id_ed25519_mgcp-afk");
+    }
+
+    #[test]
     fn identity_file_uses_slashes_and_quotes() {
         assert_eq!(
             identity_file_for_ssh(Path::new(r"D:\gitIdentifyData\ssh-keys\id_ed25519_a")),
@@ -884,6 +932,7 @@ mod tests {
             source_path: None,
             deployed_path: Some("D:/dataSpace/gitIdentityData/ssh-keys/id_ed25519_a".into()),
             imported_at: "t".into(),
+            purpose_intent: String::new(),
         });
         let sync = vault_data_for_sync(&data);
         assert_eq!(

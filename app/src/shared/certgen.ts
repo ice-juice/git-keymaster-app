@@ -300,14 +300,61 @@ export async function generateServerCertSignedByCa(options: {
   };
 }
 
-export function downloadTextFile(filename: string, content: string): void {
+export interface TextFileSaveRequest {
+  defaultPath: string;
+  filters?: { name: string; extensions: string[] }[];
+}
+
+/** 保存对话框只接受文件名。.pub 与 .pem 走同一套请求。 */
+export function textFileSaveRequest(filename: string): TextFileSaveRequest {
+  const slash = Math.max(filename.lastIndexOf("/"), filename.lastIndexOf("\\"));
+  const base = (slash >= 0 ? filename.slice(slash + 1) : filename)
+    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
+    .replace(/^\.+/, "")
+    .trim();
+  const defaultPath = base || "key.txt";
+  const dot = defaultPath.lastIndexOf(".");
+  const ext = dot > 0 ? defaultPath.slice(dot + 1).toLowerCase() : "";
+  if (ext === "pub") {
+    return { defaultPath, filters: [{ name: "OpenSSH public key", extensions: ["pub"] }] };
+  }
+  if (ext === "pem") {
+    return { defaultPath, filters: [{ name: "PEM", extensions: ["pem"] }] };
+  }
+  if (ext) return { defaultPath, filters: [{ name: ext, extensions: [ext] }] };
+  return { defaultPath };
+}
+
+function isTauriRuntime(): boolean {
+  return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+/**
+ * 把文本交给用户落盘。
+ * Tauri WebView 会忽略 `<a download>`，点击后没有对话框也没有文件。
+ * 桌面端改为保存对话框，再按返回的路径写入。用户取消时返回 false，不表示已保存。
+ */
+export async function downloadTextFile(filename: string, content: string): Promise<boolean> {
+  const request = textFileSaveRequest(filename);
+  if (isTauriRuntime()) {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const { api } = await import("../lib/ipc");
+    const dest = await save(
+      request.filters ? { defaultPath: request.defaultPath, filters: request.filters } : { defaultPath: request.defaultPath },
+    );
+    if (typeof dest !== "string" || !dest.trim()) return false;
+    await api.writePathBytes(dest, Array.from(new TextEncoder().encode(content)));
+    return true;
+  }
+  if (typeof document === "undefined") return false;
   const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename;
+  a.download = request.defaultPath;
   a.click();
   URL.revokeObjectURL(url);
+  return true;
 }
 
 export async function caMaterialFromPem(certPem: string, keyPem: string, subjectCn: string): Promise<CaMaterial> {

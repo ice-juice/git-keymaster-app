@@ -1,10 +1,11 @@
 import { useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { pushMobileBack } from "../shared/mobileBack";
-import { Download, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { Download, MoreHorizontal, PackageOpen, Pencil, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge, Empty } from "../ui/common";
 import { MobileListToolbar } from "../ui/MobileListToolbar";
-import { editFromEntry, FilesDialogs, FilesFilters } from "./Files.shared";
+import { editFromEntry, FilesDialogs, FilesFilters, openLockerForEntry } from "./Files.shared";
 import { formatBytes, formatUpdatedAt, useFilesModel, type FilesModel } from "../shared/hooks/useFilesModel";
 import { entryAttachments, type FileEntry } from "../lib/ipc";
 import { FileMobileEditor } from "./FileMobileEditor";
@@ -35,6 +36,7 @@ function FileMobileCard({ e, m }: { e: FileEntry; m: FilesModel }) {
 
 export function FilesMobile() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   const m = useFilesModel();
   const inputRef = useRef<HTMLInputElement>(null);
   useItemFocus(true, () => {
@@ -121,6 +123,25 @@ export function FilesMobile() {
                 </>
               ) : null}
             </div>
+            <button
+              type="button"
+              className="m-list-sheet-item"
+              disabled={m.writesLocked}
+              onClick={() => {
+                const entry = m.sheetEntry;
+                if (!entry) return;
+                m.setSheetEntry(null);
+                openLockerForEntry(navigate, entry);
+              }}
+            >
+              <span className="m-list-sheet-icon">
+                <PackageOpen size={18} />
+              </span>
+              <span className="m-list-sheet-copy">
+                <span className="m-list-sheet-label">{t("files.sendToLocker")}</span>
+                <span className="m-list-sheet-hint">{t("files.sendToLockerHint")}</span>
+              </span>
+            </button>
             <button
               type="button"
               className="m-list-sheet-item"

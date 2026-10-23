@@ -26,6 +26,11 @@ pub const LABEL_SYNC_OBJECT: &[u8] = b"gam-sync-object-v1";
 pub const LABEL_SYNC_NAME: &[u8] = b"gam-sync-name-v1";
 /// 文件保险库 / 备忘录 blob 内容加密（v1.6）
 pub const LABEL_FILE_BLOB: &[u8] = b"gam-file-blob-v1";
+/// 文件寄存柜：封装每项内容密钥 CK 的子密钥（v1.x）
+pub const LABEL_LOCKER_WRAP: &[u8] = b"gam-locker-wrap-v1";
+/// 文件寄存柜：取件码 HMAC 的子密钥标签。
+/// 取件码哈希用这段公开标签本身做 HMAC 密钥，Worker 没有主密钥也能复核。
+pub const LABEL_LOCKER_CODE: &[u8] = b"gam-locker-code-v1";
 
 /// 32 字节主密钥，Drop 时自动清零。
 #[derive(Clone, Zeroize, ZeroizeOnDrop)]
@@ -201,8 +206,13 @@ mod tests {
         let a = mk.subkey(LABEL_KEYFILE);
         let b = mk.subkey(LABEL_METADATA);
         let c = mk.subkey(LABEL_FILE_BLOB);
+        let d = mk.subkey(LABEL_LOCKER_WRAP);
+        let e = mk.subkey(LABEL_LOCKER_CODE);
         assert_ne!(a, c);
         assert_ne!(b, c);
+        assert_ne!(d, e);
+        assert_ne!(c, d);
+        assert_ne!(b, e);
     }
 
     #[test]

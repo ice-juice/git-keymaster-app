@@ -149,6 +149,7 @@ dependencies = [
  "reqwest 0.13.4",
  "rfd 0.15.4",
  "rqrr",
+ "rsa",
  "rustls",
  "security-framework",
  "semver",
@@ -1213,6 +1214,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid",
+ "pem-rfc7468",
  "zeroize",
 ]
 

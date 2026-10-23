@@ -4,7 +4,7 @@ use crate::commands::{recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::model::{Identity, KeyRecord};
 use crate::platform::{self, PlatformOps};
-use crate::ssh::keygen;
+use crate::ssh::{key, keygen};
 use crate::ssh::managed::{self, ManagedEntry};
 use crate::store;
 use crate::sys;
@@ -159,35 +159,74 @@ fn now_iso8601() -> String {
         .unwrap_or_default()
 }
 
-/// 生成密钥并存入 vault（私钥密文 + 口令 + 元数据），返回元数据记录。
-fn generate_and_store_key(v: &Vault, comment: &str, name: Option<String>) -> Result<KeyRecord> {
-    let g = keygen::generate_ed25519(comment)?;
+/// 把已有的带口令 OpenSSH 私钥写入 vault，并投放到工作空间 `ssh-keys/`。
+/// 不创建身份、不写 Host、不装 agent。调用方负责把返回的记录推进 `VaultData.keys`。
+fn store_prepared_key(
+    v: &Vault,
+    private_openssh: &str,
+    passphrase: &str,
+    record_name: String,
+    file_stem: &str,
+    purpose_intent: String,
+) -> Result<KeyRecord> {
+    let info = key::parse_private_openssh(private_openssh)?;
+    let encrypted = info.encrypted.unwrap_or(false);
+    if encrypted {
+        key::verify_passphrase(private_openssh, passphrase)
+            .map_err(|_| AppError::Invalid("私钥口令不正确".into()))?;
+    }
+    let data = store::load_data(v)?;
+    if data.keys.iter().any(|k| k.fingerprint == info.fingerprint) {
+        return Err(AppError::Invalid(format!(
+            "已存在相同指纹的密钥：{}",
+            info.fingerprint
+        )));
+    }
+
     let key_id = uuid::Uuid::new_v4().to_string();
-    store::save_key(v, &key_id, g.private_openssh_encrypted.as_bytes())?;
+    store::save_key(v, &key_id, private_openssh.as_bytes())?;
+    if encrypted {
+        let mut secrets = store::load_secrets(v)?;
+        secrets
+            .key_passphrases
+            .insert(key_id.clone(), passphrase.to_string());
+        store::save_secrets(v, &secrets)?;
+    }
 
-    let mut secrets = store::load_secrets(v)?;
-    secrets
-        .key_passphrases
-        .insert(key_id.clone(), g.passphrase.clone());
-    store::save_secrets(v, &secrets)?;
-
-    let stem_name = name.clone().unwrap_or_else(|| default_key_name(comment));
+    let weak = info.algorithm == "rsa" && info.bits.map(|b| b < 2048).unwrap_or(false);
     let mut record = KeyRecord {
-        id: key_id.clone(),
-        name: stem_name.clone(),
-        algorithm: "ed25519".into(),
-        fingerprint: g.fingerprint,
-        public_openssh: g.public_openssh,
-        bits: Some(256),
-        has_passphrase: true,
-        weak: false,
+        id: key_id,
+        name: record_name,
+        algorithm: info.algorithm,
+        fingerprint: info.fingerprint,
+        public_openssh: info.public_openssh,
+        bits: info.bits,
+        has_passphrase: encrypted,
+        weak,
         source_path: None,
         deployed_path: None,
         imported_at: now_iso8601(),
+        purpose_intent,
     };
-    let deployed = deploy_openssh_files(v, &record, &sys::key_file_stem(&stem_name), false)?;
+    let deployed = deploy_openssh_files(v, &record, file_stem, false)?;
     record.deployed_path = Some(sys::portable_deployed_path(&deployed));
     Ok(record)
+}
+
+/// 生成密钥并存入 vault（私钥密文 + 口令 + 元数据），返回元数据记录。
+/// 身份创建与密钥页的旧入口仍只产 ed25519，文件名干走 `key_file_stem`。
+fn generate_and_store_key(v: &Vault, comment: &str, name: Option<String>) -> Result<KeyRecord> {
+    let g = keygen::generate_ed25519(comment)?;
+    let stem_name = name.clone().unwrap_or_else(|| default_key_name(comment));
+    let stem = sys::key_file_stem(&stem_name);
+    store_prepared_key(
+        v,
+        &g.private_openssh_encrypted,
+        &g.passphrase,
+        stem_name,
+        &stem,
+        String::new(),
+    )
 }
 
 fn default_key_name(comment: &str) -> String {
@@ -242,6 +281,143 @@ pub fn generate_key(app: AppHandle, state: State<AppState>, comment: String, nam
     data.keys.push(record.clone());
     store::save_data(v, &data)?;
     util::audit(v.root(), &format!("生成密钥 {}", record.name));
+    drop(vault);
+    crate::sync::scheduler::kick_publish(app);
+    Ok(record)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedSshMaterial {
+    pub algorithm: String,
+    pub bits: Option<u32>,
+    pub fingerprint: String,
+    pub public_openssh: String,
+    pub private_openssh: String,
+    pub passphrase: String,
+}
+
+/// 在本机内存生成 OpenSSH 密钥。不入库、不写磁盘、不装 agent、不创建身份。
+#[tauri::command]
+pub fn generate_ssh_material(algorithm: String, bits: Option<u32>, comment: String) -> Result<GeneratedSshMaterial> {
+    let g = match algorithm.trim().to_ascii_lowercase().as_str() {
+        "ed25519" => keygen::generate_ed25519(&comment)?,
+        "rsa" => keygen::generate_rsa(bits.unwrap_or(2048), &comment)?,
+        _ => return Err(AppError::Invalid("只支持 ed25519 与 RSA".into())),
+    };
+    Ok(GeneratedSshMaterial {
+        algorithm: g.algorithm,
+        bits: g.bits,
+        fingerprint: g.fingerprint,
+        public_openssh: g.public_openssh,
+        private_openssh: g.private_openssh_encrypted,
+        passphrase: g.passphrase,
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveGeneratedSshKeyArgs {
+    pub private_openssh: String,
+    pub public_openssh: String,
+    pub passphrase: String,
+    pub name: Option<String>,
+    pub purpose_intent: String,
+}
+
+fn normalize_purpose_intent(raw: &str) -> Result<String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "git" => Ok("git".into()),
+        "server" => Ok("server".into()),
+        "export" => Ok("export".into()),
+        _ => Err(AppError::Invalid(
+            "请设置密钥标签：Git 托管、服务器登录，或仅导出公钥".into(),
+        )),
+    }
+}
+
+fn normalize_purpose_intent_optional(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(String::new());
+    }
+    normalize_purpose_intent(trimmed)
+}
+
+fn assign_purpose_intent(keys: &mut [KeyRecord], key_id: &str, raw: &str) -> Result<KeyRecord> {
+    let intent = normalize_purpose_intent_optional(raw)?;
+    let key = keys
+        .iter_mut()
+        .find(|k| k.id == key_id)
+        .ok_or_else(|| AppError::Invalid("密钥不存在".into()))?;
+    key.purpose_intent = intent;
+    Ok(key.clone())
+}
+
+/// 修改已入库密钥的用途标签。空字符串表示清除。不改身份、不写 SSH 配置。
+#[tauri::command]
+pub fn set_key_purpose_intent(
+    app: AppHandle,
+    state: State<AppState>,
+    key_id: String,
+    purpose_intent: String,
+) -> Result<KeyRecord> {
+    crate::commands::ensure_writes_allowed(&state)?;
+    let vault = recover_lock(&state.vault);
+    let v = vault.as_ref().ok_or(AppError::Locked)?;
+    if !v.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let mut data = store::load_data(v)?;
+    let record = assign_purpose_intent(&mut data.keys, &key_id, &purpose_intent)?;
+    store::save_data(v, &data)?;
+    util::audit(
+        v.root(),
+        &format!("更新密钥标签 {} -> {}", record.name, record.purpose_intent),
+    );
+    drop(vault);
+    crate::sync::scheduler::kick_publish(app);
+    Ok(record)
+}
+
+/// 把工具箱里已经生成的 OpenSSH 密钥存进保险库。不创建身份、不写 Host、不装 agent。
+#[tauri::command]
+pub fn save_generated_ssh_key(
+    app: AppHandle,
+    state: State<AppState>,
+    args: SaveGeneratedSshKeyArgs,
+) -> Result<KeyRecord> {
+    crate::commands::ensure_writes_allowed(&state)?;
+    let vault = recover_lock(&state.vault);
+    let v = vault.as_ref().ok_or(AppError::Locked)?;
+    if !v.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let intent = normalize_purpose_intent(&args.purpose_intent)?;
+    if args.public_openssh.trim().is_empty() || args.private_openssh.trim().is_empty() {
+        return Err(AppError::Invalid("没有可保存的密钥，请先生成".into()));
+    }
+    if !crate::ssh::key::pair_matches(&args.private_openssh, &args.public_openssh)? {
+        return Err(AppError::Invalid("提供的公钥与私钥不配对，疑似张冠李戴".into()));
+    }
+    let info = key::parse_private_openssh(&args.private_openssh)?;
+    if info.algorithm != "rsa" && info.algorithm != "ed25519" {
+        return Err(AppError::Invalid("只支持保存 RSA 与 ed25519".into()));
+    }
+    let raw_name = args.name.as_deref().unwrap_or("").trim();
+    let stem = sys::key_file_stem_for_algo(&info.algorithm, raw_name);
+    let record = store_prepared_key(
+        v,
+        &args.private_openssh,
+        &args.passphrase,
+        stem.clone(),
+        &stem,
+        intent,
+    )?;
+    let mut data = store::load_data(v)?;
+    data.keys.push(record.clone());
+    store::save_data(v, &data)?;
+    util::audit(v.root(), &format!("保存 SSH 密钥 {}", record.name));
     drop(vault);
     crate::sync::scheduler::kick_publish(app);
     Ok(record)
@@ -645,6 +821,32 @@ pub fn reveal_key_material(
     })
 }
 
+/// 把内存中的 OpenSSH RSA 私钥转成无口令 PKCS#1 PEM。不入库。
+#[tauri::command]
+pub fn openssh_rsa_to_pem(private_openssh: String, passphrase: String) -> Result<String> {
+    let pem = key::rsa_openssh_to_pkcs1_pem(&private_openssh, &passphrase)?;
+    Ok(pem.to_string())
+}
+
+/// 二次验证后，把库内 RSA 私钥导出为无口令 PKCS#1 PEM。不改库存格式。
+#[tauri::command]
+pub fn export_vault_key_pem(state: State<AppState>, password: String, key_id: String) -> Result<String> {
+    let vault = recover_lock(&state.vault);
+    let v = vault.as_ref().ok_or(AppError::Locked)?;
+    if !v.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    v.verify_password(&password)?;
+    let raw = store::load_key(v, &key_id)?;
+    let private_openssh = String::from_utf8(raw)
+        .map_err(|_| AppError::Invalid("私钥不是可显示的 OpenSSH 文本".into()))?;
+    let secrets = store::load_secrets(v)?;
+    let passphrase = secrets.key_passphrases.get(&key_id).cloned().unwrap_or_default();
+    let pem = key::rsa_openssh_to_pkcs1_pem(&private_openssh, &passphrase)?;
+    util::audit(v.root(), &format!("二次验证导出 PEM 私钥 key_id={key_id}"));
+    Ok(pem.to_string())
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UpdateIdentityArgs {
@@ -757,6 +959,135 @@ pub fn update_identity(app: AppHandle, state: State<AppState>, args: UpdateIdent
     Ok(updated)
 }
 
+fn is_git_hosting_platform(platform: &str) -> bool {
+    matches!(
+        platform.trim().to_ascii_lowercase().as_str(),
+        "github" | "gitlab" | "gitee" | "gitea"
+    )
+}
+
+fn git_hosting_blocks_key_delete(identities: &[Identity], key_id: &str) -> bool {
+    identities.iter().any(|identity| {
+        identity.key_id.as_deref() == Some(key_id) && is_git_hosting_platform(&identity.platform)
+    })
+}
+
+/// 写入锁或保险库未解锁时给出明确错误。命令与测试共用这一判断。
+fn gate_key_delete(writes_locked: bool, unlocked: bool) -> Result<()> {
+    if writes_locked {
+        return Err(AppError::Busy);
+    }
+    if !unlocked {
+        return Err(AppError::Locked);
+    }
+    Ok(())
+}
+
+fn safe_workspace_key_stem(stem: &str) -> bool {
+    !stem.is_empty()
+        && stem != "."
+        && stem != ".."
+        && !stem.contains('/')
+        && !stem.contains('\\')
+        && !stem.contains("..")
+        && !stem.chars().any(|c| c.is_control())
+}
+
+/// 只删除工作空间 `ssh-keys/` 目录里的这一对文件。符号链接只摘掉链接本身。
+fn remove_file_directly_inside(dir: &std::path::Path, path: &std::path::Path) -> Result<()> {
+    let Some(parent) = path.parent() else {
+        return Ok(());
+    };
+    let Ok(dir_canon) = dir.canonicalize() else {
+        return Ok(());
+    };
+    let Ok(parent_canon) = parent.canonicalize() else {
+        return Ok(());
+    };
+    if parent_canon != dir_canon {
+        return Ok(());
+    }
+    match path.symlink_metadata() {
+        Ok(meta) if meta.is_file() || meta.file_type().is_symlink() => std::fs::remove_file(path)?,
+        _ => return Ok(()),
+    }
+    Ok(())
+}
+
+fn remove_workspace_key_pair(workspace: &std::path::Path, deployed_path: Option<&str>) -> Result<()> {
+    let Some(raw) = deployed_path.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(());
+    };
+    let Some(name) = sys::workspace_key_filename(raw) else {
+        return Ok(());
+    };
+    let stem = name.strip_suffix(".pub").unwrap_or(name.as_str());
+    if !safe_workspace_key_stem(stem) {
+        return Ok(());
+    }
+    let dir = sys::workspace_ssh_keys_dir(workspace);
+    remove_file_directly_inside(&dir, &dir.join(stem))?;
+    remove_file_directly_inside(&dir, &dir.join(format!("{stem}.pub")))?;
+    Ok(())
+}
+
+/// 从保险库去掉一把钥匙。不改 SSH config，不删除身份。
+/// Git 托管身份仍引用时整单拒绝，此时磁盘不动。
+fn delete_stored_key(v: &Vault, key_id: &str) -> Result<()> {
+    if !v.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key_id = key_id.trim();
+    if key_id.is_empty() {
+        return Err(AppError::Invalid("密钥不存在".into()));
+    }
+    let mut data = store::load_data(v)?;
+    let idx = data
+        .keys
+        .iter()
+        .position(|k| k.id == key_id)
+        .ok_or_else(|| AppError::Invalid("密钥不存在".into()))?;
+    if git_hosting_blocks_key_delete(&data.identities, key_id) {
+        return Err(AppError::Invalid("已被 Git 托管身份使用，不能删除".into()));
+    }
+    let removed = data.keys.remove(idx);
+    let now = now_iso8601();
+    data.deleted_keys.insert(key_id.to_string(), now.clone());
+    for identity in &mut data.identities {
+        if identity.key_id.as_deref() == Some(key_id) {
+            identity.key_id = None;
+            identity.updated_at = now.clone();
+        }
+    }
+    remove_workspace_key_pair(v.root(), removed.deployed_path.as_deref())?;
+    store::delete_key(v, key_id)?;
+    let mut secrets = store::load_secrets(v)?;
+    if secrets.key_passphrases.remove(key_id).is_some() {
+        store::save_secrets(v, &secrets)?;
+    }
+    store::save_data(v, &data)?;
+    util::audit(v.root(), &format!("删除密钥 {}", removed.name));
+    Ok(())
+}
+
+/// 删除库内密钥。已被 Git 托管身份引用时拒绝。
+#[tauri::command]
+pub fn delete_key(app: AppHandle, state: State<AppState>, key_id: String) -> Result<()> {
+    let unlocked = recover_lock(&state.vault)
+        .as_ref()
+        .is_some_and(|v| v.is_unlocked());
+    gate_key_delete(
+        state.writes_locked.load(std::sync::atomic::Ordering::SeqCst),
+        unlocked,
+    )?;
+    let vault = recover_lock(&state.vault);
+    let v = vault.as_ref().ok_or(AppError::Locked)?;
+    delete_stored_key(v, &key_id)?;
+    drop(vault);
+    crate::sync::scheduler::kick_publish(app);
+    Ok(())
+}
+
 /// 删除已有身份，并从工作空间 SSH config 托管区块中移除。
 #[tauri::command]
 pub fn delete_identity(app: AppHandle, state: State<AppState>, identity_id: String) -> Result<()> {
@@ -796,6 +1127,43 @@ pub fn delete_identity(app: AppHandle, state: State<AppState>, identity_id: Stri
 mod tests {
     use super::*;
 
+    fn unlocked_vault() -> (Vault, std::path::PathBuf) {
+        use crate::vault::header::KdfParams;
+        use crate::vault::kdf::{ITERS_FLOOR, MEM_FLOOR_KIB};
+        let root = std::env::temp_dir().join(format!("gam-write-{}", uuid::Uuid::new_v4()));
+        let kdf = KdfParams::new(MEM_FLOOR_KIB, ITERS_FLOOR, 1);
+        let (v, _rec) = Vault::init(&root, "pw", kdf).unwrap();
+        (v, root)
+    }
+
+    fn sample_key(id: &str) -> KeyRecord {
+        KeyRecord {
+            id: id.into(),
+            name: "id_ed25519_techn".into(),
+            algorithm: "ed25519".into(),
+            fingerprint: "SHA256:abc".into(),
+            public_openssh: "ssh-ed25519 AAAA techn".into(),
+            bits: Some(256),
+            has_passphrase: true,
+            weak: false,
+            source_path: None,
+            deployed_path: None,
+            imported_at: "now".into(),
+            purpose_intent: String::new(),
+        }
+    }
+
+    #[test]
+    fn purpose_intent_can_be_changed_or_cleared() {
+        let mut keys = vec![sample_key("k1")];
+        let updated = assign_purpose_intent(&mut keys, "k1", "git").unwrap();
+        assert_eq!(updated.purpose_intent, "git");
+        let cleared = assign_purpose_intent(&mut keys, "k1", "  ").unwrap();
+        assert!(cleared.purpose_intent.is_empty());
+        assert!(assign_purpose_intent(&mut keys, "k1", "nope").is_err());
+        assert!(assign_purpose_intent(&mut keys, "missing", "server").is_err());
+    }
+
     #[test]
     fn key_comment_prefers_email_then_name_then_git_user() {
         assert_eq!(
@@ -805,5 +1173,271 @@ mod tests {
         assert_eq!(suggest_key_comment(None, "nova-labs", Some("Nova")), "nova-labs@gam");
         assert_eq!(suggest_key_comment(Some("  "), "", Some("Nova Reyes")), "Nova.Reyes@gam");
         assert_eq!(suggest_key_comment(None, "", None), "");
+    }
+
+    #[test]
+    fn legacy_generate_keeps_ed25519_stem_and_empty_intent() {
+        let (v, root) = unlocked_vault();
+        let rec = generate_and_store_key(&v, "a@b", Some("plain".into())).unwrap();
+        assert_eq!(rec.name, "plain");
+        assert_eq!(rec.algorithm, "ed25519");
+        assert!(rec.purpose_intent.is_empty());
+        let deployed = rec.deployed_path.unwrap();
+        assert!(deployed.contains("id_ed25519_plain"), "{deployed}");
+        drop(v);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn stored_rsa_uses_algo_stem_and_rejects_same_fingerprint() {
+        let (v, root) = unlocked_vault();
+        let g = keygen::generate_rsa(2048, "lab@host").unwrap();
+        let stem = sys::key_file_stem_for_algo("rsa", "lab");
+        let rec = store_prepared_key(
+            &v,
+            &g.private_openssh_encrypted,
+            &g.passphrase,
+            stem.clone(),
+            &stem,
+            "server".into(),
+        )
+        .unwrap();
+        assert_eq!(rec.name, "id_rsa_lab");
+        assert_eq!(rec.algorithm, "rsa");
+        assert_eq!(rec.purpose_intent, "server");
+        assert!(rec.public_openssh.starts_with("ssh-rsa "));
+        let pub_path = sys::workspace_ssh_keys_dir(v.root()).join("id_rsa_lab.pub");
+        let text = std::fs::read_to_string(&pub_path).unwrap();
+        assert!(text.starts_with("ssh-rsa "));
+        assert!(text.ends_with('\n'));
+        assert!(sys::workspace_ssh_keys_dir(v.root()).join("id_rsa_lab").is_file());
+        let secrets = store::load_secrets(&v).unwrap();
+        assert_eq!(secrets.key_passphrases.get(&rec.id).unwrap(), &g.passphrase);
+
+        let mut data = store::load_data(&v).unwrap();
+        data.keys.push(rec);
+        store::save_data(&v, &data).unwrap();
+        let again = store_prepared_key(
+            &v,
+            &g.private_openssh_encrypted,
+            &g.passphrase,
+            stem.clone(),
+            &stem,
+            "server".into(),
+        );
+        assert!(again.is_err(), "相同指纹应拒绝");
+        drop(v);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    fn identity(id: &str, name: &str, platform: &str, key_id: Option<&str>) -> Identity {
+        Identity {
+            id: id.into(),
+            name: name.into(),
+            platform: platform.into(),
+            host_alias: format!("h-{id}"),
+            real_host: "example.com".into(),
+            user: "git".into(),
+            email: None,
+            git_user_name: None,
+            key_id: key_id.map(str::to_string),
+            owners: vec![],
+            strict_mode: false,
+            updated_at: "2020-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn put_key(v: &Vault, id: &str, name: &str, deployed: Option<String>) {
+        store::save_key(v, id, b"OPENSSH PRIVATE KEY").unwrap();
+        let mut secrets = store::load_secrets(v).unwrap();
+        secrets.key_passphrases.insert(id.into(), format!("pass-{id}"));
+        store::save_secrets(v, &secrets).unwrap();
+        let mut data = store::load_data(v).unwrap();
+        data.keys.push(KeyRecord {
+            id: id.into(),
+            name: name.into(),
+            algorithm: "ed25519".into(),
+            fingerprint: format!("SHA256:{id}"),
+            public_openssh: format!("ssh-ed25519 AAAA {name}"),
+            bits: Some(256),
+            has_passphrase: true,
+            weak: false,
+            source_path: None,
+            deployed_path: deployed,
+            imported_at: "2020-01-01T00:00:00Z".into(),
+            purpose_intent: String::new(),
+        });
+        store::save_data(v, &data).unwrap();
+    }
+
+    fn write_pair(dir: &std::path::Path, stem: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(stem), b"private").unwrap();
+        std::fs::write(dir.join(format!("{stem}.pub")), b"public\n").unwrap();
+    }
+
+    #[test]
+    fn key_delete_blocks_git_hosting() {
+        for platform in ["GitHub", "gitlab", "Gitee", "gitea"] {
+            let ident = identity("i", "host", platform, Some("k"));
+            assert!(git_hosting_blocks_key_delete(&[ident], "k"), "{platform}");
+        }
+        let server = identity("i", "bastion", "other", Some("k"));
+        assert!(!git_hosting_blocks_key_delete(&[server], "k"));
+        let other_key = identity("i", "host", "github", Some("other"));
+        assert!(!git_hosting_blocks_key_delete(&[other_key], "k"));
+    }
+
+    #[test]
+    fn key_delete_refuses_locked_or_busy() {
+        let busy = gate_key_delete(true, true).unwrap_err();
+        assert!(matches!(busy, AppError::Busy));
+        assert!(busy.to_string().contains("请稍后再修改"));
+        let locked = gate_key_delete(false, false).unwrap_err();
+        assert!(matches!(locked, AppError::Locked));
+        assert_eq!(locked.to_string(), "工作空间未解锁");
+        assert!(gate_key_delete(false, true).is_ok());
+
+        let (mut v, root) = unlocked_vault();
+        v.lock();
+        let err = delete_stored_key(&v, "k1").unwrap_err();
+        assert!(matches!(err, AppError::Locked));
+        assert_eq!(err.to_string(), "工作空间未解锁");
+        drop(v);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn key_delete_drops_record_files_and_passphrase() {
+        let (v, root) = unlocked_vault();
+        let keys_dir = sys::workspace_ssh_keys_dir(v.root());
+        write_pair(&keys_dir, "id_ed25519_gh");
+        write_pair(&keys_dir, "id_ed25519_lab");
+        write_pair(&keys_dir, "id_ed25519_strict");
+        write_pair(&keys_dir, "id_ed25519_export");
+        std::fs::write(keys_dir.join("keep_me"), b"neighbor").unwrap();
+
+        let outside = root.join("home-ssh");
+        write_pair(&outside, "id_ed25519");
+        let outside_priv = outside.join("id_ed25519");
+        let secret = root.join("secrets.txt");
+        std::fs::write(&secret, b"do-not-touch").unwrap();
+
+        put_key(
+            &v,
+            "gh",
+            "gh-key",
+            Some(format!("%GAM_WORKSPACE%/ssh-keys/id_ed25519_gh")),
+        );
+        put_key(
+            &v,
+            "lab",
+            "server-key",
+            Some("%GAM_WORKSPACE%/ssh-keys/id_ed25519_lab".into()),
+        );
+        put_key(
+            &v,
+            "strict",
+            "strict-key",
+            Some("%GAM_WORKSPACE%/ssh-keys/id_ed25519_strict.pub".into()),
+        );
+        put_key(
+            &v,
+            "export",
+            "export-key",
+            Some(outside_priv.display().to_string()),
+        );
+        put_key(
+            &v,
+            "trav",
+            "trav-key",
+            Some("%GAM_WORKSPACE%/ssh-keys/../secrets.txt".into()),
+        );
+
+        let mut data = store::load_data(&v).unwrap();
+        data.identities.push(identity("gh-id", "GitHub 工作", "GitHub", Some("gh")));
+        data.identities.push(identity("lab-id", "机房登录", "other", Some("lab")));
+        data.identities.push(identity("bak-id", "备份机", "custom", Some("lab")));
+        data.keys
+            .iter_mut()
+            .find(|k| k.id == "export")
+            .unwrap()
+            .purpose_intent = "export".into();
+        store::save_data(&v, &data).unwrap();
+
+        let config = sys::workspace_ssh_config(v.root());
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let config_body = "Host lab\n    IdentityFile %GAM_WORKSPACE%/ssh-keys/id_ed25519_lab\n";
+        std::fs::write(&config, config_body).unwrap();
+
+        let blocked = delete_stored_key(&v, "gh").unwrap_err();
+        assert!(blocked.to_string().contains("已被 Git 托管身份使用"));
+        assert!(store::key_exists(&v, "gh"));
+        assert!(keys_dir.join("id_ed25519_gh").is_file());
+        assert!(keys_dir.join("id_ed25519_gh.pub").is_file());
+        assert_eq!(
+            store::load_data(&v)
+                .unwrap()
+                .identities
+                .iter()
+                .find(|i| i.id == "gh-id")
+                .unwrap()
+                .key_id
+                .as_deref(),
+            Some("gh")
+        );
+
+        delete_stored_key(&v, "lab").unwrap();
+        delete_stored_key(&v, "strict").unwrap();
+        delete_stored_key(&v, "export").unwrap();
+        delete_stored_key(&v, "trav").unwrap();
+        let missing = delete_stored_key(&v, "missing").unwrap_err();
+        assert!(missing.to_string().contains("密钥不存在"));
+
+        let data = store::load_data(&v).unwrap();
+        assert_eq!(data.keys.len(), 1);
+        assert_eq!(data.keys[0].id, "gh");
+        for id in ["lab", "strict", "export", "trav"] {
+            assert!(data.deleted_keys.contains_key(id), "{id}");
+        }
+        assert!(!data.deleted_keys.contains_key("gh"));
+        assert!(store::key_exists(&v, "gh"));
+        let lab = data.identities.iter().find(|i| i.id == "lab-id").unwrap();
+        let bak = data.identities.iter().find(|i| i.id == "bak-id").unwrap();
+        assert_eq!(lab.name, "机房登录");
+        assert!(lab.key_id.is_none());
+        assert_ne!(lab.updated_at, "2020-01-01T00:00:00Z");
+        assert_eq!(bak.name, "备份机");
+        assert!(bak.key_id.is_none());
+        assert!(data.identities.iter().any(|i| i.id == "gh-id"));
+
+        let secrets = store::load_secrets(&v).unwrap();
+        assert!(secrets.key_passphrases.get("lab").is_none());
+        assert!(secrets.key_passphrases.get("strict").is_none());
+        assert!(secrets.key_passphrases.get("export").is_none());
+        assert_eq!(secrets.key_passphrases.get("gh").unwrap(), "pass-gh");
+        assert!(!store::key_exists(&v, "lab"));
+        assert!(!store::key_exists(&v, "strict"));
+        assert!(!store::key_exists(&v, "export"));
+        assert!(!store::key_exists(&v, "trav"));
+
+        assert!(!keys_dir.join("id_ed25519_lab").exists());
+        assert!(!keys_dir.join("id_ed25519_lab.pub").exists());
+        assert!(!keys_dir.join("id_ed25519_strict").exists());
+        assert!(!keys_dir.join("id_ed25519_strict.pub").exists());
+        assert!(keys_dir.join("keep_me").is_file());
+        assert!(outside.join("id_ed25519").is_file());
+        assert!(outside.join("id_ed25519.pub").is_file());
+        assert!(secret.is_file());
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), config_body);
+
+        let audit = std::fs::read_to_string(v.root().join("audit.log")).unwrap();
+        assert!(audit.contains("删除密钥 server-key"));
+        assert!(audit.contains("删除密钥 strict-key"));
+        assert!(audit.contains("删除密钥 export-key"));
+        assert!(!audit.contains("删除密钥 gh-key"));
+
+        drop(v);
+        std::fs::remove_dir_all(&root).ok();
     }
 }

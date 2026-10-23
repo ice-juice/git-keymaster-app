@@ -4,7 +4,9 @@
 pub mod blob;
 
 use crate::error::{AppError, Result};
-use crate::model::{AccountData, FileData, NoteData, QrHistoryData, Secrets, TotpData, VaultData};
+use crate::model::{
+    AccountData, FileData, LockerData, NoteData, QrHistoryData, Secrets, TotpData, VaultData,
+};
 use crate::vault::atomic_write;
 use crate::vault::crypto::{self, KEY_LEN, LABEL_KEYFILE, LABEL_METADATA, XNONCE_LEN};
 use crate::vault::Vault;
@@ -78,6 +80,9 @@ fn notes_path(vault: &Vault) -> PathBuf {
 fn qr_history_path(vault: &Vault) -> PathBuf {
     vault.root().join("data").join("qr-history.enc")
 }
+fn locker_path(vault: &Vault) -> PathBuf {
+    vault.root().join("data").join("locker.enc")
+}
 fn icon_path(vault: &Vault, hash: &str) -> Result<PathBuf> {
     // 图标哈希同样从云端逻辑路径 `icons/{hash}.webp` 里切出来。
     if !crate::store::blob::is_sha256_hex(hash) {
@@ -107,6 +112,7 @@ static CACHE_ACCOUNTS: Mutex<Option<PlainCache<AccountData>>> = Mutex::new(None)
 static CACHE_FILES: Mutex<Option<PlainCache<FileData>>> = Mutex::new(None);
 static CACHE_NOTES: Mutex<Option<PlainCache<NoteData>>> = Mutex::new(None);
 static CACHE_QR_HISTORY: Mutex<Option<PlainCache<QrHistoryData>>> = Mutex::new(None);
+static CACHE_LOCKER: Mutex<Option<PlainCache<LockerData>>> = Mutex::new(None);
 
 fn cache_lock<T>(slot: &Mutex<Option<PlainCache<T>>>) -> MutexGuard<'_, Option<PlainCache<T>>> {
     slot.lock().unwrap_or_else(|e| e.into_inner())
@@ -122,6 +128,7 @@ pub fn invalidate_plaintext_cache() {
     *cache_lock(&CACHE_FILES) = None;
     *cache_lock(&CACHE_NOTES) = None;
     *cache_lock(&CACHE_QR_HISTORY) = None;
+    *cache_lock(&CACHE_LOCKER) = None;
 }
 
 fn load_cached<T: Clone + Default + DeserializeOwned>(
@@ -281,6 +288,15 @@ pub fn key_exists(vault: &Vault, key_id: &str) -> bool {
     key_path(vault, key_id).is_ok_and(|p| p.exists())
 }
 
+/// 删除私钥密文副本（`keys/<id>.enc`）。文件已不在时视为成功。
+pub fn delete_key(vault: &Vault, key_id: &str) -> Result<()> {
+    let path = key_path(vault, key_id)?;
+    if path.is_file() {
+        std::fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
 pub fn load_totp(vault: &Vault) -> Result<TotpData> {
     load_cached(vault, totp_path(vault), &CACHE_TOTP)
 }
@@ -344,6 +360,19 @@ pub fn save_qr_history(vault: &Vault, data: &QrHistoryData) -> Result<()> {
     let json = serde_json::to_vec(&data)?;
     let sealed = seal(&key, &json)?;
     atomic_write(&qr_history_path(vault), &sealed)?;
+    invalidate_plaintext_cache();
+    Ok(())
+}
+
+pub fn load_locker(vault: &Vault) -> Result<LockerData> {
+    load_cached(vault, locker_path(vault), &CACHE_LOCKER)
+}
+
+pub fn save_locker(vault: &Vault, data: &LockerData) -> Result<()> {
+    let key = vault.subkey(LABEL_METADATA)?;
+    let json = serde_json::to_vec(data)?;
+    let sealed = seal(&key, &json)?;
+    atomic_write(&locker_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -416,6 +445,7 @@ mod tests {
             source_path: None,
             deployed_path: None,
             imported_at: "now".into(),
+            purpose_intent: String::new(),
         });
         data.identities.push(Identity {
             id: "i1".into(),

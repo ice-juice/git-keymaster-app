@@ -127,6 +127,7 @@ pub fn import_private_key(vault: &Vault, req: ImportRequest) -> Result<KeyRecord
         source_path: req.source_path.clone(),
         deployed_path: None,
         imported_at: now_iso8601(),
+        purpose_intent: String::new(),
     };
     data.keys.push(record.clone());
     store::save_data(vault, &data)?;

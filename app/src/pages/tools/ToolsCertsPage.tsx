@@ -8,6 +8,7 @@ import {
   generateServerCertSignedByCa,
   type PemCertBundle,
 } from "../../shared/certgen";
+import { errMessage } from "../../lib/ipc";
 import { Card } from "../../ui/common";
 import { CopyField, ToolSubPage } from "./ToolsShared";
 
@@ -41,19 +42,29 @@ function readCaSession(): CaSession | null {
 
 function ResultBlock({ bundle, prefix }: { bundle: PemCertBundle | null; prefix: string }) {
   const { t } = useTranslation();
+  const [saveErr, setSaveErr] = useState("");
   if (!bundle) return null;
+  async function save(filename: string, content: string) {
+    setSaveErr("");
+    try {
+      await downloadTextFile(filename, content);
+    } catch (e) {
+      setSaveErr(errMessage(e));
+    }
+  }
   return (
     <div className="stack">
       <CopyField label={t("tools.certPem")} value={bundle.certPem} rows={8} />
       <CopyField label={t("tools.keyPem")} value={bundle.keyPem} secret rows={8} />
       <div className="row">
-        <button type="button" className="btn sm" onClick={() => downloadTextFile(`${prefix}-cert.pem`, bundle.certPem)}>
+        <button type="button" className="btn sm" onClick={() => void save(`${prefix}-cert.pem`, bundle.certPem)}>
           {t("tools.downloadCert")}
         </button>
-        <button type="button" className="btn sm" onClick={() => downloadTextFile(`${prefix}-key.pem`, bundle.keyPem)}>
+        <button type="button" className="btn sm" onClick={() => void save(`${prefix}-key.pem`, bundle.keyPem)}>
           {t("tools.downloadKey")}
         </button>
       </div>
+      {saveErr && <div className="err-text">{saveErr}</div>}
     </div>
   );
 }

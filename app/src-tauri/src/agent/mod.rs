@@ -819,6 +819,7 @@ mod tests {
             source_path: None,
             deployed_path: None,
             imported_at: "now".into(),
+            purpose_intent: String::new(),
         }
     }
 

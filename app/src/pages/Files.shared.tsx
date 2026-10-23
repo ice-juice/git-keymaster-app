@@ -1,8 +1,9 @@
 import { useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import { useOverlayBack } from "../shared/mobileBack";
-import { Download, Pencil, Plus, Trash2 } from "lucide-react";
+import { Download, PackageOpen, Pencil, Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { resolvePlatform } from "../platform/resolve";
+import { isMobilePlatform, resolvePlatform } from "../platform/resolve";
 import { Badge, ConfirmDangerDialog, Empty, ErrorDialog, FieldLabel } from "../ui/common";
 import { GroupManageDialogs, groupManageHandlers } from "../ui/GroupDialog";
 import { GroupPicker } from "../ui/GroupPicker";
@@ -67,8 +68,21 @@ export function FilesFilters({ m, hideSearch }: { m: FilesModel; hideSearch?: bo
   );
 }
 
+export function openLockerForEntry(navigate: ReturnType<typeof useNavigate>, e: FileEntry) {
+  const atts = entryAttachments(e);
+  const attId = atts.length === 1 ? atts[0].id : undefined;
+  if (isMobilePlatform()) {
+    navigate("/", { state: { openLocker: { entryId: e.id, attId } } });
+    return;
+  }
+  const q = new URLSearchParams({ vault: e.id });
+  if (attId) q.set("att", attId);
+  navigate(`/tools/locker?${q.toString()}`);
+}
+
 function FileEntryActions({ e, m, layout }: { e: FileEntry; m: FilesModel; layout: "card" | "table" }) {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   return (
     <div className={layout === "card" ? "file-card-actions" : "file-table-actions"}>
       <button
@@ -80,6 +94,16 @@ function FileEntryActions({ e, m, layout }: { e: FileEntry; m: FilesModel; layou
         onClick={() => void m.exportFile(e)}
       >
         <Download size={14} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="file-icon-btn"
+        title={t("files.sendToLocker")}
+        aria-label={t("files.sendToLocker")}
+        disabled={m.writesLocked}
+        onClick={() => openLockerForEntry(navigate, e)}
+      >
+        <PackageOpen size={14} aria-hidden="true" />
       </button>
       <button
         type="button"
