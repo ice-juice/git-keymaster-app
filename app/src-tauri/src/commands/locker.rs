@@ -3,6 +3,7 @@
 
 use crate::commands::{clone_unlocked_vault, ensure_reveal_authorized, ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
+use crate::locker::deploy::{self, DeployMethod, LockerDeployProgress, LockerProbeResult};
 use crate::locker::worker::{self, RegisterBody, WorkerEndpoint};
 use crate::locker::{
     self, after_successful_pull, framed_ciphertext_len, is_expired, logical_path, normalize_pickup_code,
@@ -133,7 +134,11 @@ pub struct LockerShareOut {
 #[serde(rename_all = "camelCase")]
 pub struct LockerWorkerView {
     pub base_url: String,
+    pub workers_dev_url: String,
     pub has_secret: bool,
+    pub has_api_token: bool,
+    pub token_last4: String,
+    pub last_method: String,
 }
 
 fn view_of(entry: &LockerEntry) -> LockerView {
@@ -760,7 +765,6 @@ pub fn locker_share(
     id: String,
     password: Option<String>,
 ) -> Result<LockerShareOut> {
-    ensure_reveal_authorized(&state, password.as_deref())?;
     let vault = clone_unlocked_vault(&state)?;
     let s3 = open_s3(&state, &vault)?;
     let endpoint = require_share_worker(&vault)?;
@@ -775,6 +779,10 @@ pub fn locker_share(
         .clone();
     if is_expired(snapshot.expire_at.as_deref(), &stamp) || pulls_exhausted(snapshot.pulls_left) {
         return Err(AppError::Invalid("这份寄存已过期或次数已用完".into()));
+    }
+    // 第一次生成分享链接不二次验证。关掉结果后再打开同一份分享，才走查看机密校验。
+    if snapshot.share.is_some() {
+        ensure_reveal_authorized(&state, password.as_deref())?;
     }
     let mut ck = locker::unwrap_content_key(&vault, &snapshot.wrap_self)?;
     let slug = if let Some(share) = &snapshot.share {
@@ -880,17 +888,41 @@ pub fn locker_delete(app: AppHandle, state: State<'_, AppState>, id: String) -> 
     Ok(())
 }
 
-#[tauri::command]
-pub fn locker_get_worker_config(state: State<'_, AppState>) -> Result<LockerWorkerView> {
-    let vault = clone_unlocked_vault(&state)?;
-    let secrets = store::load_secrets(&vault)?;
+fn worker_view_of(vault: &crate::vault::Vault) -> Result<LockerWorkerView> {
+    let secrets = store::load_secrets(vault)?;
+    let rec = deploy::load_record(vault);
     Ok(LockerWorkerView {
         base_url: secrets.locker_worker_base_url.unwrap_or_default(),
+        workers_dev_url: secrets.locker_worker_workers_dev_url.unwrap_or_default(),
         has_secret: secrets
             .locker_worker_secret
             .as_deref()
             .is_some_and(|s| !s.trim().is_empty()),
+        has_api_token: deploy::has_token(&rec),
+        token_last4: rec
+            .api_token
+            .as_deref()
+            .map(deploy::token_last4)
+            .unwrap_or_default(),
+        last_method: rec.last_method.unwrap_or_default(),
     })
+}
+
+fn cloud_sync_bucket(state: &AppState, vault: &crate::vault::Vault) -> (String, bool) {
+    let app_cfg = recover_lock(&state.config).clone();
+    let Some(mut sync) = app_cfg.cloud_sync.clone() else {
+        return (String::new(), false);
+    };
+    if sync.secret_access_key.trim().is_empty() {
+        sync.secret_access_key = store::cloud_sync_secret(vault).ok().flatten().unwrap_or_default();
+    }
+    (sync.bucket.trim().to_string(), sync.has_usable_secret())
+}
+
+#[tauri::command]
+pub fn locker_get_worker_config(state: State<'_, AppState>) -> Result<LockerWorkerView> {
+    let vault = clone_unlocked_vault(&state)?;
+    worker_view_of(&vault)
 }
 
 #[tauri::command]
@@ -913,11 +945,77 @@ pub fn locker_save_worker_config(
     }
     store::save_secrets(&vault, &secrets)?;
     publish(app);
-    Ok(LockerWorkerView {
-        base_url: secrets.locker_worker_base_url.unwrap_or_default(),
-        has_secret: secrets
-            .locker_worker_secret
-            .as_deref()
-            .is_some_and(|s| !s.trim().is_empty()),
+    worker_view_of(&vault)
+}
+
+#[tauri::command(async)]
+pub async fn locker_probe_worker(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<LockerProbeResult> {
+    let proxy = proxy_of(&state);
+    tauri::async_runtime::spawn_blocking(move || deploy::probe_worker(&url, proxy.as_ref()))
+        .await
+        .map_err(|e| AppError::Other(format!("连通性测试中断：{e}")))?
+}
+
+#[tauri::command]
+pub fn locker_deploy_status(state: State<'_, AppState>) -> Result<LockerDeployProgress> {
+    let vault = clone_unlocked_vault(&state)?;
+    Ok(deploy::status_from_record(&vault))
+}
+
+#[tauri::command(async)]
+pub async fn locker_deploy_start(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    method: String,
+    token: Option<String>,
+) -> Result<LockerDeployProgress> {
+    ensure_writes_allowed(&state)?;
+    let vault = clone_unlocked_vault(&state)?;
+    let method = DeployMethod::parse(&method)?;
+    let proxy = proxy_of(&state);
+    let (bucket, access_ok) = cloud_sync_bucket(&state, &vault);
+    let secrets = store::load_secrets(&vault)?;
+    let existing_secret = secrets.locker_worker_secret.clone();
+    let current_url = secrets.locker_worker_base_url.clone().unwrap_or_default();
+    let last_workers_dev = secrets
+        .locker_worker_workers_dev_url
+        .clone()
+        .unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        deploy::start_deploy(
+            app,
+            vault,
+            method,
+            token,
+            proxy,
+            bucket,
+            access_ok,
+            existing_secret,
+            current_url,
+            last_workers_dev,
+        )
     })
+    .await
+    .map_err(|e| AppError::Other(format!("启动部署中断：{e}")))?
+}
+
+#[tauri::command]
+pub fn locker_deploy_select_account(account_id: String) -> Result<LockerDeployProgress> {
+    deploy::select_account(account_id)
+}
+
+#[tauri::command]
+pub fn locker_deploy_cancel() -> Result<LockerDeployProgress> {
+    deploy::cancel_deploy()
+}
+
+#[tauri::command]
+pub fn locker_clear_api_token(state: State<'_, AppState>) -> Result<LockerWorkerView> {
+    ensure_writes_allowed(&state)?;
+    let vault = clone_unlocked_vault(&state)?;
+    deploy::clear_api_token(&vault)?;
+    worker_view_of(&vault)
 }

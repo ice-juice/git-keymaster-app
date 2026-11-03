@@ -155,6 +155,9 @@ pub struct Secrets {
     /// 文件寄存柜分享服务地址。跟着机密同步，方便同一账号的其他设备生成分享链接。
     #[serde(default)]
     pub locker_worker_base_url: Option<String>,
+    /// 上次一键部署得到的 workers.dev 地址，与当前使用的地址分开。跟着机密同步。
+    #[serde(default)]
+    pub locker_worker_workers_dev_url: Option<String>,
     /// 文件寄存柜分享服务共享密钥。只进已加密的 secrets，不进本机明文配置。
     #[serde(default)]
     pub locker_worker_secret: Option<String>,
@@ -1185,6 +1188,15 @@ pub fn merge_secrets_with_meta(
         local.locker_worker_base_url = remote.locker_worker_base_url.clone();
     }
     if local
+        .locker_worker_workers_dev_url
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .is_empty()
+    {
+        local.locker_worker_workers_dev_url = remote.locker_worker_workers_dev_url.clone();
+    }
+    if local
         .locker_worker_secret
         .as_deref()
         .unwrap_or("")
@@ -1890,6 +1902,41 @@ mod tests {
         let s: Secrets = serde_json::from_str(r#"{"keyPassphrases":{},"githubPat":null}"#).unwrap();
         assert!(s.gitlab_pat.is_none());
         assert!(s.gitee_pat.is_none());
+        assert!(s.locker_worker_workers_dev_url.is_none());
+    }
+
+    #[test]
+    fn merge_secrets_fills_missing_locker_workers_dev_url() {
+        let remote = Secrets {
+            locker_worker_workers_dev_url: Some("https://file-locker.ex.workers.dev".into()),
+            locker_worker_base_url: Some("https://share.example.com".into()),
+            ..Secrets::default()
+        };
+        let merged = merge_secrets(Secrets::default(), &remote);
+        assert_eq!(
+            merged.locker_worker_workers_dev_url.as_deref(),
+            Some("https://file-locker.ex.workers.dev")
+        );
+        assert_eq!(
+            merged.locker_worker_base_url.as_deref(),
+            Some("https://share.example.com")
+        );
+
+        let keep_local = merge_secrets(
+            Secrets {
+                locker_worker_workers_dev_url: Some("https://file-locker.local.workers.dev".into()),
+                ..Secrets::default()
+            },
+            &remote,
+        );
+        assert_eq!(
+            keep_local.locker_worker_workers_dev_url.as_deref(),
+            Some("https://file-locker.local.workers.dev")
+        );
+        assert_eq!(
+            keep_local.locker_worker_base_url.as_deref(),
+            Some("https://share.example.com")
+        );
     }
 
     #[test]

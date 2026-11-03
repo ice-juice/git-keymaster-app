@@ -2,6 +2,7 @@
 //!
 //! 密文帧与文件保险库 blob 相同（`GKB1`），但密钥是每项随机的 CK，不进内容寻址池。
 
+pub mod deploy;
 pub mod worker;
 
 use crate::error::{AppError, Result};
