@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { PackageOpen, Settings } from "lucide-react";
 import { useOverlayBack } from "../../shared/mobileBack";
@@ -8,8 +9,13 @@ import {
   api,
   entryAttachments,
   errMessage,
+  LOCKER_DEPLOY_PROGRESS_EVENT,
   type FileEntry,
+  type LockerDeployMethod,
+  type LockerDeployProgress,
+  type LockerDeployStep,
   type LockerEntry,
+  type LockerProbeResult,
   type LockerPutOpts,
   type LockerWorkerConfig,
 } from "../../lib/ipc";
@@ -21,8 +27,52 @@ import { ReauthDialog } from "../../ui/ReauthDialog";
 import { ToolSubPage } from "./ToolsShared";
 
 type Panel = "put" | "take" | "config" | "door";
+type ConfigView = "form" | "methods" | "guide" | "progress";
 type TtlChoice = "1h" | "24h" | "7d" | "30d" | "forever" | "custom";
 type PullChoice = "1" | "3" | "custom" | "unlimited";
+
+const CF_TOKEN_URL = "https://dash.cloudflare.com/profile/api-tokens";
+
+const EMPTY_WORKER: LockerWorkerConfig = {
+  baseUrl: "",
+  workersDevUrl: "",
+  hasSecret: false,
+  hasApiToken: false,
+  tokenLast4: "",
+  lastMethod: "",
+};
+
+function isDeployMethod(value: string | null | undefined): value is LockerDeployMethod {
+  return value === "apiToken" || value === "wrangler";
+}
+
+function hasViewableProgress(p: LockerDeployProgress | null): boolean {
+  if (!p) return false;
+  return (
+    p.running ||
+    p.finished ||
+    Boolean(p.error) ||
+    p.waitingForAccount ||
+    p.steps.some((step) => step.status !== "pending")
+  );
+}
+
+function idleSteps(): LockerDeployStep[] {
+  return Array.from({ length: 12 }, (_, i) => ({
+    index: i + 1,
+    name: "",
+    status: "pending",
+    detail: "",
+  }));
+}
+
+function redactSecrets(text: string, secrets: string[]) {
+  return secrets.reduce((out, secret) => {
+    const value = secret.trim();
+    if (value.length < 8) return out;
+    return out.split(value).join("••••");
+  }, text);
+}
 
 function groupCode(code: string) {
   const digits = code.replace(/\D/g, "");
@@ -59,14 +109,22 @@ export function ToolsLockerPage({
   const [ttl, setTtl] = useState<TtlChoice>("24h");
   const [customHours, setCustomHours] = useState("6");
   const [pulls, setPulls] = useState<PullChoice>("1");
+  const [alsoShare, setAlsoShare] = useState(true);
   const [customPulls, setCustomPulls] = useState("5");
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [entries, setEntries] = useState<LockerEntry[]>([]);
-  const [worker, setWorker] = useState<LockerWorkerConfig>({ baseUrl: "", hasSecret: false });
+  const [worker, setWorker] = useState<LockerWorkerConfig>(EMPTY_WORKER);
   const [workerUrl, setWorkerUrl] = useState("");
   const [workerSecret, setWorkerSecret] = useState("");
+  const [configView, setConfigView] = useState<ConfigView>("form");
+  const [pasteToken, setPasteToken] = useState("");
+  const [guideErr, setGuideErr] = useState("");
+  const [deployRun, setDeployRun] = useState<"idle" | "running" | "failed" | "done">("idle");
+  const [progress, setProgress] = useState<LockerDeployProgress | null>(null);
+  const [probe, setProbe] = useState<LockerProbeResult | null>(null);
+  const [probeBusy, setProbeBusy] = useState(false);
   const [putCode, setPutCode] = useState("");
   const [putId, setPutId] = useState("");
   const [shareUrl, setShareUrl] = useState("");
@@ -116,12 +174,41 @@ export function ToolsLockerPage({
     }
   }, []);
 
+  const stepName = useCallback((index: number) => t(`tools.lockerStep${index}`), [t]);
+
+  const applyDeployRun = useCallback((next: LockerDeployProgress, follow = false) => {
+    if (next.finished) {
+      setDeployRun("done");
+      return;
+    }
+    if (next.error) {
+      setDeployRun("failed");
+      return;
+    }
+    if (next.running || next.waitingForAccount) {
+      setDeployRun("running");
+      if (follow) {
+        setConfigView((view) => (view === "guide" || view === "methods" ? "progress" : view));
+      }
+      return;
+    }
+    setDeployRun("idle");
+  }, []);
+
   const reload = useCallback(async () => {
-    const [list, cfg] = await Promise.all([api.lockerList(), api.lockerGetWorkerConfig()]);
+    const [list, cfg, status] = await Promise.all([
+      api.lockerList(),
+      api.lockerGetWorkerConfig(),
+      api.lockerDeployStatus().catch(() => null),
+    ]);
     setEntries(list.entries);
     setWorker(cfg);
     setWorkerUrl(cfg.baseUrl);
-  }, []);
+    if (status) {
+      setProgress(status);
+      applyDeployRun(status);
+    }
+  }, [applyDeployRun]);
 
   useEffect(() => {
     void reload().catch((e) => setErr(errMessage(e)));
@@ -152,6 +239,24 @@ export function ToolsLockerPage({
     const id = window.setInterval(() => setTick(Date.now()), 1000);
     return () => window.clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<LockerDeployProgress>(LOCKER_DEPLOY_PROGRESS_EVENT, (ev) => {
+      const next = ev.payload;
+      if (!next) return;
+      setProgress(next);
+      applyDeployRun(next, true);
+      if (next.finished) void reload().catch(() => {});
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch(() => {
+        /* 非 Tauri */
+      });
+    return () => unlisten?.();
+  }, [applyDeployRun, reload]);
 
   useEffect(() => {
     const entryId = initialVault?.entryId || params.get("vault") || "";
@@ -199,14 +304,23 @@ export function ToolsLockerPage({
     setErr("");
   }
 
+  async function finishPut(result: { id: string; code: string }) {
+    showPut(result);
+    await reload();
+    if (!alsoShare || !shareReady) return;
+    const shared = await withAuth((pw) => api.lockerShare(result.id, pw));
+    if (!shared) return;
+    setShareUrl(shared.url);
+    await reload();
+  }
+
   async function putFromPath() {
     setErr("");
     const selected = await open({ multiple: false, directory: false });
     if (typeof selected !== "string" || !selected) return;
     setBusy(true);
     try {
-      showPut(await api.lockerPutFromPath(selected, buildOpts()));
-      await reload();
+      await finishPut(await api.lockerPutFromPath(selected, buildOpts()));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -223,8 +337,7 @@ export function ToolsLockerPage({
     setBusy(true);
     try {
       const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
-      showPut(await api.lockerPutBytes(file.name, bytes, buildOpts()));
-      await reload();
+      await finishPut(await api.lockerPutBytes(file.name, bytes, buildOpts()));
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -242,8 +355,7 @@ export function ToolsLockerPage({
     try {
       const result = await withAuth((pw) => api.lockerPutFromVault(vaultId, attId || null, pw, buildOpts()));
       if (!result) return;
-      showPut(result);
-      await reload();
+      await finishPut(result);
     } catch (e) {
       setErr(errMessage(e));
     } finally {
@@ -367,14 +479,148 @@ export function ToolsLockerPage({
     setBusy(true);
     setErr("");
     try {
-      const cfg = await api.lockerSaveWorkerConfig(workerUrl.trim(), workerSecret.trim() || null, false);
-      setWorker(cfg);
+      await api.lockerSaveWorkerConfig(workerUrl.trim(), workerSecret.trim() || null, false);
       setWorkerSecret("");
+      await reload();
     } catch (e) {
       setErr(errMessage(e));
     } finally {
       setBusy(false);
     }
+  }
+
+  const deploying = deployRun === "running";
+  const deployedOnce = Boolean(worker.workersDevUrl || worker.lastMethod || worker.hasApiToken || shareReady);
+  const workersDevUrl = (worker.workersDevUrl || "").replace(/\/$/, "");
+  const canRestoreWorkersDev = Boolean(
+    workersDevUrl && workerUrl.trim().replace(/\/$/, "") !== workersDevUrl,
+  );
+
+  async function startDeploy(method: LockerDeployMethod, token?: string) {
+    setGuideErr("");
+    setErr("");
+    setDeployRun("running");
+    try {
+      const next = await api.lockerDeployStart(method, token || null);
+      setProgress(next);
+      applyDeployRun(next, true);
+      setConfigView("progress");
+    } catch (e) {
+      const message = errMessage(e);
+      setDeployRun("idle");
+      if (method === "apiToken") {
+        setGuideErr(message);
+        setConfigView("guide");
+        return;
+      }
+      setErr(message);
+    }
+  }
+
+  async function probeWorker() {
+    setProbeBusy(true);
+    setErr("");
+    setProbe(null);
+    try {
+      setProbe(await api.lockerProbeWorker(workerUrl.trim()));
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setProbeBusy(false);
+    }
+  }
+
+  async function clearDeployToken() {
+    setBusy(true);
+    setErr("");
+    try {
+      const cfg = await api.lockerClearApiToken();
+      setWorker(cfg);
+      setWorkerUrl(cfg.baseUrl);
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelDeploy() {
+    if (!progress?.cancelable) return;
+    try {
+      const next = await api.lockerDeployCancel();
+      setProgress(next);
+      applyDeployRun(next);
+    } catch (e) {
+      setErr(errMessage(e));
+      return;
+    }
+    setConfigView("methods");
+  }
+
+  async function retryDeploy() {
+    const fromProgress = progress?.method;
+    const method = isDeployMethod(fromProgress)
+      ? fromProgress
+      : isDeployMethod(worker.lastMethod)
+        ? worker.lastMethod
+        : null;
+    if (!method) {
+      setConfigView("methods");
+      return;
+    }
+    await startDeploy(method);
+  }
+
+  async function selectDeployAccount(accountId: string) {
+    setErr("");
+    try {
+      const next = await api.lockerDeploySelectAccount(accountId);
+      setProgress(next);
+      applyDeployRun(next, true);
+    } catch (e) {
+      setErr(errMessage(e));
+    }
+  }
+
+  function openDeployMethods() {
+    if (deploying) return;
+    setGuideErr("");
+    setPasteToken("");
+    setConfigView("methods");
+  }
+
+  async function openProgress() {
+    setErr("");
+    try {
+      const status = await api.lockerDeployStatus();
+      setProgress(status);
+      applyDeployRun(status);
+      setConfigView("progress");
+    } catch (e) {
+      setErr(errMessage(e));
+    }
+  }
+
+  async function restoreWorkersDev() {
+    if (!workersDevUrl) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const cfg = await api.lockerSaveWorkerConfig(workersDevUrl);
+      setWorker(cfg);
+      setWorkerUrl(cfg.baseUrl);
+      setWorkerSecret("");
+      setProbe(null);
+    } catch (e) {
+      setErr(errMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function safeDetail(text?: string) {
+    if (!text) return "";
+    return redactSecrets(text, [workerSecret, pasteToken]);
   }
 
   const selectedVault = vaultEntries.find((e) => e.id === vaultId);
@@ -388,9 +634,16 @@ export function ToolsLockerPage({
     setPutId("");
     setRevealedCode("");
     setTakeDigits([]);
+    setConfigView("form");
+    setGuideErr("");
+    setPasteToken("");
+  }, []);
+  const closeConfigView = useCallback(() => {
+    setConfigView((view) => (view === "guide" ? "methods" : "form"));
   }, []);
   const closeVault = useCallback(() => setVaultOpen(false), []);
-  useOverlayBack(panel != null, closePanel);
+  useOverlayBack(panel === "config" && configView !== "form", closeConfigView);
+  useOverlayBack(panel != null && !(panel === "config" && configView !== "form"), closePanel);
   useOverlayBack(vaultOpen, closeVault);
 
   function openPut() {
@@ -489,7 +742,7 @@ export function ToolsLockerPage({
           <div className="locker-kiosk-head">
             <span />
             <div className="locker-prompt">{t("tools.lockerChoose")}</div>
-            <button type="button" className="locker-gear" onClick={() => { setErr(""); setPanel("config"); }}>
+            <button type="button" className="locker-gear" onClick={() => { setErr(""); setPanel("config"); setConfigView(deployRun === "running" ? "progress" : "form"); }}>
               <Settings size={16} aria-hidden="true" />
               {t("tools.lockerConfig")}
             </button>
@@ -626,6 +879,11 @@ export function ToolsLockerPage({
               <input className="input" inputMode="numeric" value={customPulls} onChange={(e) => setCustomPulls(e.target.value)} />
             </label>
           )}
+          <label className="locker-share-opt">
+            <input type="checkbox" checked={alsoShare} onChange={(e) => setAlsoShare(e.target.checked)} />
+            <span>{t("tools.lockerAlsoShare")}</span>
+          </label>
+          {alsoShare && !shareReady && <div className="muted">{t("tools.lockerShareDisabled")}</div>}
           <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
             {mobile ? (
               <>
@@ -802,42 +1060,315 @@ export function ToolsLockerPage({
       )}
 
       {panel === "config" && (
-        <div className="wizard-overlay" role="presentation" onClick={closePanel}>
-          <div className="locker-sheet" role="dialog" aria-labelledby="locker-config-title" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="wizard-overlay"
+          role="presentation"
+          onClick={() => {
+            if (configView !== "form") closeConfigView();
+            else closePanel();
+          }}
+        >
+          <div
+            className={"locker-sheet" + (configView === "progress" || configView === "guide" ? " locker-deploy-sheet" : "")}
+            role="dialog"
+            aria-labelledby="locker-config-title"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="card-head">
               <div className="card-title locker-panel-title" id="locker-config-title">
-                {t("tools.lockerConfig")}
+                {configView === "methods"
+                  ? t("tools.lockerDeployMethodsTitle")
+                  : configView === "guide"
+                    ? t("tools.lockerGuideTitle")
+                    : configView === "progress"
+                      ? t("tools.lockerProgressTitle")
+                      : t("tools.lockerConfig")}
               </div>
-              <button type="button" className="btn ghost sm" onClick={closePanel}>
-                {t("common.close")}
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={() => {
+                  if (configView !== "form") closeConfigView();
+                  else closePanel();
+                }}
+              >
+                {configView === "form" ? t("common.close") : t("common.back")}
               </button>
             </div>
-            <div className="card-body stack">
-              {err && <div className="callout danger sm">{err}</div>}
-              <div className="muted">{shareReady ? t("tools.lockerWorkerReady") : t("tools.lockerShareDisabled")}</div>
-              <label className="field">
-                <span>{t("tools.lockerWorkerUrl")}</span>
-                <input
-                  className="input"
-                  value={workerUrl}
-                  onChange={(e) => setWorkerUrl(e.target.value)}
-                  placeholder="https://locker.example.com"
-                />
-              </label>
-              <label className="field">
-                <span>{t("tools.lockerWorkerSecret")}</span>
-                <input
-                  className="input"
-                  type="password"
-                  value={workerSecret}
-                  onChange={(e) => setWorkerSecret(e.target.value)}
-                  placeholder={worker.hasSecret ? t("tools.lockerSecretKeep") : ""}
-                />
-              </label>
-              <button type="button" className="btn primary" disabled={busy} onClick={() => void saveWorker()}>
-                {t("common.save")}
-              </button>
-            </div>
+            {configView === "form" && (
+              <div className="card-body stack">
+                {err && <div className="callout danger sm">{err}</div>}
+                <div className="muted">{shareReady ? t("tools.lockerWorkerReady") : t("tools.lockerShareDisabled")}</div>
+                <label className="field">
+                  <span>{t("tools.lockerWorkerUrl")}</span>
+                  <input
+                    className="input"
+                    value={workerUrl}
+                    onChange={(e) => {
+                      setWorkerUrl(e.target.value);
+                      setProbe(null);
+                    }}
+                    placeholder="https://locker.example.com"
+                  />
+                </label>
+                <label className="field">
+                  <span>{t("tools.lockerWorkerSecret")}</span>
+                  <input
+                    className="input"
+                    type="password"
+                    value={workerSecret}
+                    onChange={(e) => setWorkerSecret(e.target.value)}
+                    placeholder={worker.hasSecret ? t("tools.lockerSecretKeep") : ""}
+                  />
+                </label>
+                {worker.hasApiToken && (
+                  <div className="locker-token-row">
+                    <span>{t("tools.lockerTokenSaved", { last4: worker.tokenLast4 || "••••" })}</span>
+                    <button type="button" className="btn ghost sm" disabled={busy || deploying} onClick={() => void clearDeployToken()}>
+                      {t("tools.lockerTokenClear")}
+                    </button>
+                  </div>
+                )}
+                <button type="button" className="btn primary" disabled={busy} onClick={() => void saveWorker()}>
+                  {t("common.save")}
+                </button>
+                <button type="button" className="btn" disabled={busy || deploying} onClick={openDeployMethods}>
+                  {deployedOnce ? t("tools.lockerRedeploy") : t("tools.lockerDeploy")}
+                </button>
+                {hasViewableProgress(progress) && (
+                  <button type="button" className="btn" onClick={() => void openProgress()}>
+                    {t("tools.lockerViewProgress")}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={probeBusy || !workerUrl.trim()}
+                  onClick={() => void probeWorker()}
+                >
+                  {probeBusy ? t("common.busy") : t("tools.lockerProbe")}
+                </button>
+                {canRestoreWorkersDev && (
+                  <button type="button" className="btn" disabled={busy} onClick={() => void restoreWorkersDev()}>
+                    {t("tools.lockerRestoreWorkersDev")}
+                  </button>
+                )}
+                {probe && (
+                  <div className={"locker-probe" + (probe.ok ? " is-ok" : " is-bad")}>
+                    {probe.checks.map((check) => (
+                      <div key={check.id} className={"locker-probe-item" + (check.ok ? " is-ok" : " is-bad")}>
+                        <span className="locker-probe-led" aria-hidden="true" />
+                        <div>
+                          <strong>
+                            {check.id === "download"
+                              ? t("tools.lockerProbeDownload")
+                              : check.id === "gate"
+                                ? t("tools.lockerProbeGate")
+                                : t("tools.lockerProbeService")}
+                          </strong>
+                          {check.detail && <p>{safeDetail(check.detail)}</p>}
+                        </div>
+                      </div>
+                    ))}
+                    <div className="locker-probe-sum">
+                      {probe.ok ? t("tools.lockerProbeOk") : t("tools.lockerProbeFail")}
+                    </div>
+                    {probe.hint && <p className="muted">{safeDetail(probe.hint)}</p>}
+                  </div>
+                )}
+              </div>
+            )}
+            {configView === "methods" && (
+              <div className="card-body stack">
+                {err && <div className="callout danger sm">{err}</div>}
+                <p className="muted">{t("tools.lockerDeployMethodsHint")}</p>
+                <div className="locker-methods">
+                  <button
+                    type="button"
+                    className={"locker-method" + (worker.lastMethod === "apiToken" ? " is-last" : "")}
+                    disabled={deploying}
+                    onClick={() => {
+                      setGuideErr("");
+                      setConfigView("guide");
+                    }}
+                  >
+                    {worker.lastMethod === "apiToken" && <span className="locker-slot">{t("tools.lockerMethodLast")}</span>}
+                    <strong>{t("tools.lockerMethodApiTitle")}</strong>
+                    <span>{t("tools.lockerMethodApiDesc")}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={"locker-method" + (worker.lastMethod === "wrangler" ? " is-last" : "")}
+                    disabled={deploying}
+                    onClick={() => void startDeploy("wrangler")}
+                  >
+                    {worker.lastMethod === "wrangler" && <span className="locker-slot">{t("tools.lockerMethodLast")}</span>}
+                    <strong>{t("tools.lockerMethodWranglerTitle")}</strong>
+                    <span>{t("tools.lockerMethodWranglerDesc")}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+            {configView === "guide" && (
+              <div className="card-body stack">
+                {guideErr && <div className="callout danger sm">{guideErr}</div>}
+                <p className="muted">{t("tools.lockerGuideIntro")}</p>
+                <ol className="locker-guide-list">
+                  <li>{t("tools.lockerGuideStep1")}</li>
+                  <li>
+                    {t("tools.lockerGuidePermsTitle")}
+                    <ul>
+                      <li>{t("tools.lockerGuidePermScripts")}</li>
+                      <li>{t("tools.lockerGuidePermR2")}</li>
+                      <li>{t("tools.lockerGuidePermD1")}</li>
+                      <li>{t("tools.lockerGuidePermAccount")}</li>
+                    </ul>
+                  </li>
+                  <li>{t("tools.lockerGuideUserPerms")}</li>
+                </ol>
+                <p className="muted">{t("tools.lockerGuideCopyHint")}</p>
+                <button type="button" className="btn" onClick={() => void api.openUrl(CF_TOKEN_URL)}>
+                  {t("tools.lockerGuideOpenDash")}
+                </button>
+                {worker.hasApiToken && (
+                  <div className="locker-token-row">
+                    <span>{t("tools.lockerTokenSaved", { last4: worker.tokenLast4 || "••••" })}</span>
+                    <button
+                      type="button"
+                      className="btn primary"
+                      disabled={deploying}
+                      onClick={() => void startDeploy("apiToken")}
+                    >
+                      {t("tools.lockerGuideUseSaved")}
+                    </button>
+                  </div>
+                )}
+                <label className="field">
+                  <span>{t("tools.lockerGuideToken")}</span>
+                  <textarea
+                    className="input locker-token-input"
+                    rows={3}
+                    value={pasteToken}
+                    autoComplete="off"
+                    spellCheck={false}
+                    onChange={(e) => setPasteToken(e.target.value)}
+                    placeholder={t("tools.lockerGuideTokenPh")}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn primary"
+                  disabled={deploying || !pasteToken.trim()}
+                  onClick={() => {
+                    const token = pasteToken.trim();
+                    if (!token) {
+                      setGuideErr(t("tools.lockerGuideNeedToken"));
+                      return;
+                    }
+                    setPasteToken("");
+                    void startDeploy("apiToken", token);
+                  }}
+                >
+                  {t("tools.lockerGuideStart")}
+                </button>
+              </div>
+            )}
+            {configView === "progress" && (
+              <div className="card-body stack locker-deploy-body">
+                {err && <div className="callout danger sm">{err}</div>}
+                <div className={"locker-deploy-now" + (progress?.error ? " is-failed" : progress?.finished ? " is-done" : "")}>
+                  {progress?.finished
+                    ? t("tools.lockerProgressDone")
+                    : progress?.error
+                      ? t("tools.lockerProgressFailed", {
+                          current: progress.currentStep,
+                          name: progress.steps.find((step) => step.index === progress.currentStep)?.name || stepName(progress.currentStep),
+                        })
+                      : t("tools.lockerProgressNow", {
+                          current: progress?.currentStep || 1,
+                          name:
+                            progress?.steps.find((step) => step.index === progress.currentStep)?.name ||
+                            stepName(progress?.currentStep || 1),
+                        })}
+                </div>
+                <ol className="locker-deploy-steps">
+                  {(progress?.steps?.length ? progress.steps : idleSteps()).map((step) => {
+                    const showAccounts =
+                      Boolean(progress?.waitingForAccount) &&
+                      step.index === (progress?.currentStep || 3);
+                    return (
+                      <li
+                        key={step.index}
+                        className={"locker-deploy-step is-" + step.status + (progress?.currentStep === step.index ? " is-current" : "")}
+                      >
+                        <span className="locker-deploy-index">{step.index}</span>
+                        <div className="locker-deploy-copy">
+                          <strong>{step.name || stepName(step.index)}</strong>
+                          <span className="locker-deploy-state">
+                            {step.status === "running"
+                              ? t("tools.lockerStepRunning")
+                              : step.status === "waiting"
+                                ? t("tools.lockerStepWaiting")
+                                : step.status === "done"
+                                  ? t("tools.lockerStepDone")
+                                  : step.status === "failed"
+                                    ? t("tools.lockerStepFailed")
+                                    : t("tools.lockerStepPending")}
+                          </span>
+                          {progress?.currentStep === step.index && safeDetail(step.detail) && (
+                            <p>{safeDetail(step.detail)}</p>
+                          )}
+                          {step.status === "failed" && safeDetail(step.detail) && progress?.currentStep !== step.index && (
+                            <p>{safeDetail(step.detail)}</p>
+                          )}
+                          {showAccounts && (
+                            <div className="locker-accounts">
+                              <div className="muted">{t("tools.lockerPickAccount")}</div>
+                              {progress?.accounts.map((account) => (
+                                <button
+                                  key={account.id}
+                                  type="button"
+                                  className="btn"
+                                  onClick={() => void selectDeployAccount(account.id)}
+                                >
+                                  {account.name}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {step.status === "failed" && (
+                            <button type="button" className="btn primary" disabled={deploying} onClick={() => void retryDeploy()}>
+                              {t("tools.lockerRetryStep")}
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {progress?.cancelable === true && (
+                  <button type="button" className="btn" onClick={() => void cancelDeploy()}>
+                    {t("common.cancel")}
+                  </button>
+                )}
+                {progress?.finished && (
+                  <div className="locker-deploy-success">
+                    <div>{t("tools.lockerSuccessUrl", { url: progress.currentUrl || workerUrl || workersDevUrl || "—" })}</div>
+                    <div className="muted">
+                      {progress.hasSecret || worker.hasSecret ? t("tools.lockerSuccessSecret") : t("tools.lockerSuccessNoSecret")}
+                    </div>
+                    {progress.keptCustomAddress && <div className="muted">{t("tools.lockerKeptCustomUrl")}</div>}
+                    {progress.keptCustomAddress &&
+                      progress.currentUrl &&
+                      progress.workersDevUrl &&
+                      progress.currentUrl.replace(/\/$/, "") !== progress.workersDevUrl.replace(/\/$/, "") && (
+                        <div className="muted">{t("tools.lockerCustomDomainPending")}</div>
+                      )}
+                    <p className="muted">{t("tools.lockerSuccessHint")}</p>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

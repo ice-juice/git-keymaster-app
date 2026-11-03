@@ -804,6 +804,17 @@ export const api = {
       secret: secret ?? null,
       clearSecret: clearSecret ?? false,
     }),
+  lockerProbeWorker: (url: string) => invoke<LockerProbeResult>("locker_probe_worker", { url }),
+  lockerDeployStatus: () => invoke<LockerDeployProgress>("locker_deploy_status"),
+  lockerDeployStart: (method: LockerDeployMethod, token?: string | null) =>
+    invoke<LockerDeployProgress>("locker_deploy_start", {
+      method,
+      token: token ?? null,
+    }),
+  lockerDeploySelectAccount: (accountId: string) =>
+    invoke<LockerDeployProgress>("locker_deploy_select_account", { accountId }),
+  lockerDeployCancel: () => invoke<LockerDeployProgress>("locker_deploy_cancel"),
+  lockerClearApiToken: () => invoke<LockerWorkerConfig>("locker_clear_api_token"),
 
   qrHistoryList: () => invoke<QrHistoryList>("qr_history_list"),
   qrHistoryAdd: (kind: "scan" | "generate", text: string) =>
@@ -1019,10 +1030,64 @@ export interface LockerShareResult {
   slug: string;
 }
 
+export type LockerDeployMethod = "apiToken" | "wrangler";
+
 export interface LockerWorkerConfig {
   baseUrl: string;
+  workersDevUrl: string;
   hasSecret: boolean;
+  hasApiToken: boolean;
+  tokenLast4: string;
+  lastMethod: LockerDeployMethod | "";
 }
+
+export interface LockerProbeCheck {
+  id: "health" | "download" | "gate" | string;
+  ok: boolean;
+  status?: number | null;
+  detail: string;
+}
+
+export interface LockerProbeResult {
+  ok: boolean;
+  url: string;
+  checks: LockerProbeCheck[];
+  hint?: string | null;
+}
+
+export interface LockerCfAccount {
+  id: string;
+  name: string;
+}
+
+export interface LockerDeployStep {
+  index: number;
+  name: string;
+  status: "pending" | "running" | "waiting" | "done" | "failed" | string;
+  detail: string;
+}
+
+export interface LockerDeployProgress {
+  running: boolean;
+  method: string;
+  currentStep: number;
+  totalSteps: number;
+  headline: string;
+  steps: LockerDeployStep[];
+  accounts: LockerCfAccount[];
+  waitingForAccount: boolean;
+  cancelable: boolean;
+  workersDevUrl: string;
+  currentUrl: string;
+  keptCustomAddress: boolean;
+  hasSecret: boolean;
+  error?: string | null;
+  finished: boolean;
+  note?: string | null;
+}
+
+/** 一键部署进度事件名。payload 即 `LockerDeployProgress`。 */
+export const LOCKER_DEPLOY_PROGRESS_EVENT = "locker-deploy-progress";
 
 export function entryAttachments(e: FileEntry): FileAttachment[] {
   if (e.attachments && e.attachments.length > 0) return e.attachments;
