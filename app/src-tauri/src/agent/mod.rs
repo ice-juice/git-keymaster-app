@@ -233,13 +233,44 @@ fn apply_agent_env(cmd: &mut std::process::Command, env: &AgentEnv) {
 const SSH_ADD_LIST_TIMEOUT: Duration = Duration::from_secs(2);
 const SSH_ADD_MUTATE_TIMEOUT: Duration = Duration::from_secs(8);
 
-/// 运行 `ssh-add -l`。exit code 2 通常表示 agent 未运行。
+/// 运行 `ssh-add -l`。
+///
+/// 只有列出密钥，或明确返回 “no identities”，才算连上了。
+/// 超时杀掉后的空输出、exit 2、连接失败都算连不上——以前这些会被当成「空 Agent」，
+/// `is_ready` 因此为真，点「一键加载」不会回收僵死套接字。
 pub fn list(env: &AgentEnv) -> Result<Vec<AgentKey>> {
-    let (out, _err, code) = run_ssh_add(env, &["-l"], None, SSH_ADD_LIST_TIMEOUT)?;
-    if code == 2 {
-        return Err(AppError::Other("ssh-agent 未运行".into()));
+    let (out, err, code) = run_ssh_add(env, &["-l"], None, SSH_ADD_LIST_TIMEOUT)?;
+    interpret_agent_list(&out, &err, code)
+}
+
+/// 把 `ssh-add -l` 的退出码和输出分成「连得上」和「要回收」。
+pub(crate) fn interpret_agent_list(stdout: &str, stderr: &str, code: i32) -> Result<Vec<AgentKey>> {
+    let blob = format!("{stdout}\n{stderr}");
+    // 只认这句空 Agent。密钥注释里可能出现 “connection refused” 之类的词，不能拿整段输出去判死。
+    if blob.to_ascii_lowercase().contains("no identities") {
+        return Ok(Vec::new());
     }
-    Ok(parse_agent_list(&out))
+    if code == 0 {
+        return Ok(parse_agent_list(stdout));
+    }
+    let hint = {
+        let err = stderr.trim();
+        if err.is_empty() { stdout.trim() } else { err }
+    };
+    if hint.is_empty() {
+        return Err(AppError::Other(
+            "ssh-agent 无响应（探测超时或套接字已僵死）".into(),
+        ));
+    }
+    Err(AppError::Other(format!("ssh-agent 未运行：{hint}")))
+}
+
+/// 加载/探测失败是不是「套接字死了，应该回收重启」，而不是密钥本身的问题。
+pub fn is_agent_down(err: &AppError) -> bool {
+    let AppError::Other(msg) = err else {
+        return false;
+    };
+    msg.contains("无响应") || msg.contains("未运行") || msg.contains("连不上")
 }
 
 /// 把一把 key 加载进 agent：Rust 侧解密后交给 `ssh-add`。
@@ -269,14 +300,11 @@ fn add_private_key(env: &AgentEnv, pem: &[u8]) -> Result<()> {
         return Ok(());
     }
     let hint = err.trim();
-    if is_agent_unreachable(hint) {
-        return Err(AppError::Other(match os {
-            "windows" => {
-                "ssh-add 连不上 agent。Windows OpenSSH 服务可能未启动，已尝试改用 Git 自带 ssh-agent。请再点一次「一键加载」。"
-                    .into()
-            }
-            _ => "ssh-add 连不上 agent。请点「确保运行」拉起本机 ssh-agent，然后重试。".into(),
-        }));
+    // 超时杀掉 ssh-add 时往往没有任何输出，退出码也不是 2。这同样是套接字僵死。
+    if hint.is_empty() || is_agent_unreachable(hint) {
+        return Err(AppError::Other(
+            "ssh-agent 无响应（连接超时或套接字已僵死）".into(),
+        ));
     }
     Err(AppError::Other(format!("ssh-add 加载失败：{hint}")))
 }
@@ -407,17 +435,69 @@ fn is_agent_unreachable(hint: &str) -> bool {
         || h.contains("no such file or directory")
 }
 
+fn ensure_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// 统一使用 Git 自带 ssh-agent：先复用固定套接字，没有再启动。
 pub fn ensure() -> Result<AgentEnv> {
+    prepare(&AgentEnv::default())
+}
+
+/// 复用当前还能列密钥的 agent。
+/// 已知套接字连不上（含探测超时、空输出）时直接回收并重启，不再把它当成空 Agent。
+/// 并发的加载、体检、启动探测共用一把锁，避免同时拉起两只 agent。
+pub fn prepare(current: &AgentEnv) -> Result<AgentEnv> {
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = current;
+        return Err(AppError::Unsupported("ssh-agent"));
+    }
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _guard = ensure_lock();
+        prepare_locked(current)
+    }
+}
+
+/// 不管当前套接字看起来如何，杀掉旧进程并重新绑定固定套接字。
+pub fn restart() -> Result<AgentEnv> {
     #[cfg(any(target_os = "android", target_os = "ios"))]
     {
         return Err(AppError::Unsupported("ssh-agent"));
     }
-    if let Some(env) = probe_existing_git_agent() {
-        persist_git_agent_meta(&env, None);
-        cleanup_stale_agent_sockets(env.auth_sock.as_deref());
-        return Ok(env);
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let _guard = ensure_lock();
+        restart_locked()
     }
+}
+
+fn prepare_locked(current: &AgentEnv) -> Result<AgentEnv> {
+    if current.auth_sock.is_some() && list(current).is_ok() {
+        return Ok(current.clone());
+    }
+    let stable = to_msys_sock_path(&stable_git_sock_path());
+    let current_is_stable = current
+        .auth_sock
+        .as_deref()
+        .is_some_and(|sock| socks_eq(sock, &stable));
+    // 固定套接字刚刚已经证明连不上。再探一次只会在僵死套接字上多等一个超时。
+    if !current_is_stable {
+        if let Some(env) = probe_existing_git_agent() {
+            persist_git_agent_meta(&env, None);
+            cleanup_stale_agent_sockets(env.auth_sock.as_deref());
+            return Ok(env);
+        }
+    }
+    if current.auth_sock.is_some() || stable_git_sock_path().exists() {
+        log::warn!("ssh-agent 套接字无响应，正在回收并重启");
+    }
+    restart_locked()
+}
+
+fn restart_locked() -> Result<AgentEnv> {
     clear_stale_managed_auth_sock();
     recycle_previous_git_agent();
     cleanup_stale_agent_sockets(None);
@@ -503,11 +583,13 @@ pub(crate) fn select_probe_socks(
 fn probe_existing_git_agent() -> Option<AgentEnv> {
     let dir = git_agent_dir();
     let stable = stable_git_sock_path();
-    let prefer = if stable.exists() {
-        Some(to_msys_sock_path(&stable))
-    } else {
-        None
-    };
+    // 固定套接字文件还在时只认它。连不上就返回 None，让调用方回收重启。
+    // 不能改挂到目录里别的残留套接字上，否则终端里的 SSH_AUTH_SOCK 仍指向这只死的。
+    if stable.exists() {
+        let sock = to_msys_sock_path(&stable);
+        let env = git_agent_env(sock, None)?;
+        return list(&env).ok().map(|_| env);
+    }
     let mut others: Vec<(String, Option<SystemTime>)> = Vec::new();
     if let Ok(existing) = std::env::var("SSH_AUTH_SOCK") {
         let existing = existing.trim().to_string();
@@ -528,14 +610,11 @@ fn probe_existing_git_agent() -> Option<AgentEnv> {
                 continue;
             }
             let sock = to_msys_sock_path(&p);
-            if prefer.as_deref().is_some_and(|s| socks_eq(s, &sock)) {
-                continue;
-            }
             let mtime = entry.metadata().and_then(|m| m.modified()).ok();
             others.push((sock, mtime));
         }
     }
-    for sock in select_probe_socks(prefer.as_deref(), others, MAX_PROBE_CANDIDATES) {
+    for sock in select_probe_socks(None, others, MAX_PROBE_CANDIDATES) {
         if let Some(env) = git_agent_env(sock, None) {
             if list(&env).is_ok() {
                 return Some(env);
@@ -566,25 +645,105 @@ fn clear_stale_managed_auth_sock() {
 }
 
 fn recycle_previous_git_agent() {
+    let sock = to_msys_sock_path(&stable_git_sock_path());
     let raw = std::fs::read_to_string(stable_git_pid_path()).unwrap_or_default();
     let (msys, win) = parse_pid_file(&raw);
+    let mut killed_win = false;
     if let Some(winpid) = win {
         if winpid != 0 && winpid != std::process::id() {
             sys::kill_pid(winpid);
+            killed_win = true;
         }
-    } else if let Some(pid) = msys {
-        if let Some(exe) = git_ssh_agent() {
-            let sock = to_msys_sock_path(&stable_git_sock_path());
-            let _ = sys::run_timeout_with_env(
-                &exe.display().to_string(),
-                &["-k", "-s"],
-                Duration::from_secs(8),
-                &[("SSH_AGENT_PID", &pid), ("SSH_AUTH_SOCK", &sock)],
-            );
+    }
+    // pid 文件可能是旧的。命令行绑在这只固定套接字上的 ssh-agent 也要一起收掉，
+    // 否则文件删了、进程还占着，下一次启动会再撞上同一只僵死 agent。
+    for pid in ssh_agent_pids_on_sock(&sock) {
+        if pid != 0 && pid != std::process::id() && Some(pid) != win {
+            sys::kill_pid(pid);
+            killed_win = true;
+        }
+    }
+    if !killed_win {
+        if let Some(pid) = msys {
+            if let Some(exe) = git_ssh_agent() {
+                let _ = sys::run_timeout_with_env(
+                    &exe.display().to_string(),
+                    &["-k", "-s"],
+                    Duration::from_secs(8),
+                    &[("SSH_AGENT_PID", &pid), ("SSH_AUTH_SOCK", &sock)],
+                );
+            }
         }
     }
     let _ = std::fs::remove_file(stable_git_pid_path());
-    let _ = std::fs::remove_file(stable_git_sock_path());
+    let _ = std::fs::remove_file(&stable_git_sock_path());
+}
+
+/// `pid\tcommand line`，一行一个。
+pub(crate) fn parse_pid_command_lines(output: &str) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Some((pid, cmd)) = line.split_once('\t') else {
+            continue;
+        };
+        let Ok(pid) = pid.trim().parse::<u32>() else {
+            continue;
+        };
+        if pid == 0 {
+            continue;
+        }
+        out.push((pid, cmd.trim().to_string()));
+    }
+    out
+}
+
+pub(crate) fn command_binds_sock(cmd: &str, sock_msys: &str) -> bool {
+    let cmd = cmd.replace('\\', "/").to_ascii_lowercase();
+    let sock = sock_msys.replace('\\', "/").trim().to_ascii_lowercase();
+    if sock.is_empty() {
+        return false;
+    }
+    if cmd.contains(&sock) {
+        return true;
+    }
+    // 进程命令行有时是 `C:\Users\...`，环境变量里是 `/c/Users/...`。
+    let win = from_msys_sock_path(sock_msys)
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    !win.is_empty() && win != sock && cmd.contains(&win)
+}
+
+fn ssh_agent_pids_on_sock(sock_msys: &str) -> Vec<u32> {
+    #[cfg(windows)]
+    {
+        let Ok((out, _, _)) = sys::run_timeout(
+            "powershell.exe",
+            &[
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Get-CimInstance Win32_Process -Filter \"Name = 'ssh-agent.exe'\" | ForEach-Object { Write-Output ($_.ProcessId.ToString() + [char]9 + $_.CommandLine) }",
+            ],
+            Duration::from_secs(5),
+        ) else {
+            return Vec::new();
+        };
+        return parse_pid_command_lines(&out)
+            .into_iter()
+            .filter(|(_, cmd)| command_binds_sock(cmd, sock_msys))
+            .map(|(pid, _)| pid)
+            .collect();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = sock_msys;
+        Vec::new()
+    }
 }
 
 fn cleanup_stale_agent_sockets(keep_sock: Option<&str>) {
@@ -1002,6 +1161,58 @@ mod tests {
         assert!(!is_agent_unreachable("Identity added: (stdin)"));
         assert!(!is_agent_unreachable("Error loading key \"-\": No such file or directory"));
         assert!(is_agent_unreachable("Could not open a connection to your authentication agent: No such file or directory"));
+    }
+
+    #[test]
+    fn list_accepts_only_a_live_agent() {
+        let keys = interpret_agent_list(
+            "256 SHA256:abcDEF123 comment (ED25519)\n",
+            "",
+            0,
+        )
+        .unwrap();
+        assert_eq!(keys.len(), 1);
+        assert!(interpret_agent_list("The agent has no identities.\n", "", 1)
+            .unwrap()
+            .is_empty());
+        // 超时杀掉 ssh-add：空输出，退出码不是 2。以前这会被当成空 Agent。
+        assert!(interpret_agent_list("", "", -1).is_err());
+        assert!(interpret_agent_list("", "", 1).is_err());
+        assert!(interpret_agent_list(
+            "",
+            "Error connecting to agent: Connection refused",
+            2
+        )
+        .is_err());
+        assert!(interpret_agent_list(
+            "",
+            "Error connecting to agent: No such file or directory",
+            2
+        )
+        .is_err());
+        let down = interpret_agent_list("", "", -1).unwrap_err();
+        assert!(is_agent_down(&down));
+        let format = AppError::Other("ssh-add 加载失败：invalid format".into());
+        assert!(!is_agent_down(&format));
+    }
+
+    #[test]
+    fn command_line_match_finds_agent_on_stable_sock() {
+        let raw = "5268\t\"C:\\Program Files\\Git\\usr\\bin\\ssh-agent.exe\" -a /c/Users/Jeck/.ssh/agent/git-keymaster -s\n64032\tssh-agent.exe -a /tmp/other\n";
+        let rows = parse_pid_command_lines(raw);
+        assert_eq!(rows.len(), 2);
+        let sock = "/c/Users/Jeck/.ssh/agent/git-keymaster";
+        let hits: Vec<u32> = rows
+            .into_iter()
+            .filter(|(_, cmd)| command_binds_sock(cmd, sock))
+            .map(|(pid, _)| pid)
+            .collect();
+        assert_eq!(hits, vec![5268]);
+        assert!(command_binds_sock(
+            r"ssh-agent.exe -a C:\Users\Jeck\.ssh\agent\git-keymaster",
+            sock
+        ));
+        assert!(!command_binds_sock("ssh-agent.exe -a /tmp/other", sock));
     }
 
     #[test]

@@ -12,6 +12,8 @@ use crate::ssh::toolchain::{self, SshBinary, Toolchain};
 use crate::sys;
 use serde::Serialize;
 use std::path::PathBuf;
+use std::process::Stdio;
+use std::time::Duration;
 use tauri::{AppHandle, State};
 
 #[derive(Serialize)]
@@ -392,20 +394,7 @@ pub fn test_connection(state: State<'_, AppState>, host_alias: String) -> Result
         let _ = (state, host_alias);
         return Err(AppError::Unsupported("SSH 连接体检"));
     }
-    let env = {
-        let current = recover_lock(&state.agent_env).clone();
-        if crate::agent::is_ready(&current) {
-            current
-        } else {
-            match crate::agent::ensure() {
-                Ok(started) => {
-                    *recover_lock(&state.agent_env) = started.clone();
-                    started
-                }
-                Err(e) => return Err(e),
-            }
-        }
-    };
+    let env = crate::commands::agent::adopt_agent(&state)?;
     let ssh = crate::agent::ssh_bin(&env);
     let target = format!("git@{host_alias}");
     let config_file = workspace_root(&state).and_then(|root| {
@@ -437,11 +426,20 @@ pub fn test_connection(state: State<'_, AppState>, host_alias: String) -> Result
     if let Some(p) = crate::net::effective(&recover_lock(&state.config)) {
         crate::net::apply_ssh_command(&mut cmd, &p)?;
     }
-    let output = cmd
-        .output()
+    // ConnectTimeout 管不到「卡在僵死 ssh-agent 套接字上」的 ssh。进程级超时避免体检一直转圈。
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    let child = cmd
+        .spawn()
         .map_err(|e| AppError::Io(format!("执行 ssh 失败：{e}")))?;
-    let out = String::from_utf8_lossy(&output.stdout).to_string();
-    let err = String::from_utf8_lossy(&output.stderr).to_string();
+    let (out, err, code) = sys::wait_output_timeout(child, Duration::from_secs(20), "ssh")?;
+    if code != 0 && out.trim().is_empty() && err.trim().is_empty() {
+        return Ok(AuthResult {
+            ok: false,
+            account: None,
+            message: "连接体检超时。ssh 在联系 ssh-agent 时没有返回，请再点一次「一键加载」。".into(),
+            error_code: Some("AGENT_TIMEOUT".into()),
+        });
+    }
     Ok(connect::parse_auth_result(&out, &err))
 }
 

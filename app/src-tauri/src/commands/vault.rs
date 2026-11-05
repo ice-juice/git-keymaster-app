@@ -531,16 +531,9 @@ fn grant_grace_if_configured(state: &AppState) {
 }
 
 fn load_agent_best_effort(state: &AppState) {
-    let env = {
-        let env = recover_lock(&state.agent_env).clone();
-        if crate::agent::is_ready(&env) {
-            env
-        } else if let Ok(started) = crate::agent::ensure() {
-            *recover_lock(&state.agent_env) = started.clone();
-            started
-        } else {
-            env
-        }
+    let env = match crate::commands::agent::adopt_agent(state) {
+        Ok(env) => env,
+        Err(_) => return,
     };
     let vault = {
         let guard = recover_lock(&state.vault);
@@ -549,11 +542,26 @@ fn load_agent_best_effort(state: &AppState) {
             None => return,
         }
     };
-    if let Ok(data) = crate::store::load_data(&vault) {
-        for identity in &data.identities {
-            if let Some(key_id) = &identity.key_id {
-                let _ = crate::agent::load_key(&vault, &env, key_id);
+    let Ok(data) = crate::store::load_data(&vault) else {
+        return;
+    };
+    let mut env = env;
+    let mut restarted = false;
+    for identity in &data.identities {
+        let Some(key_id) = &identity.key_id else {
+            continue;
+        };
+        if let Err(e) = crate::agent::load_key(&vault, &env, key_id) {
+            if restarted || !crate::agent::is_agent_down(&e) {
+                continue;
             }
+            restarted = true;
+            let Ok(next) = crate::agent::restart() else {
+                return;
+            };
+            *recover_lock(&state.agent_env) = next.clone();
+            env = next;
+            let _ = crate::agent::load_key(&vault, &env, key_id);
         }
     }
 }

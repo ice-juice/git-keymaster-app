@@ -141,15 +141,7 @@ pub fn reconcile_ssh_hosts(v: &Vault) -> Result<u32> {
 }
 
 fn ready_agent(state: &State<AppState>) -> Result<crate::agent::AgentEnv> {
-    {
-        let env = recover_lock(&state.agent_env).clone();
-        if crate::agent::is_ready(&env) {
-            return Ok(env);
-        }
-    }
-    let env = crate::agent::ensure()?;
-    *recover_lock(&state.agent_env) = env.clone();
-    Ok(env)
+    crate::commands::agent::adopt_agent(state)
 }
 
 fn now_iso8601() -> String {

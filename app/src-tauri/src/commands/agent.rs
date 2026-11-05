@@ -89,17 +89,35 @@ pub fn agent_ensure(state: State<'_, AppState>) -> Result<AgentStatus> {
     agent_status(state)
 }
 
-/// 复用已就绪的 Git agent；否则启动并写回状态。
-fn ready_env(state: &State<AppState>) -> Result<crate::agent::AgentEnv> {
-    {
-        let env = recover_lock(&state.agent_env).clone();
-        if env.auth_sock.is_some() && agent::is_ready(&env) {
-            return Ok(env);
-        }
-    }
-    let env = agent::ensure()?;
+/// 复用还能列密钥的 agent。已知套接字连不上时回收重启，并写回状态。
+pub(crate) fn adopt_agent(state: &AppState) -> Result<crate::agent::AgentEnv> {
+    let current = recover_lock(&state.agent_env).clone();
+    let env = agent::prepare(&current)?;
     *recover_lock(&state.agent_env) = env.clone();
     Ok(env)
+}
+
+fn ready_env(state: &State<AppState>) -> Result<crate::agent::AgentEnv> {
+    adopt_agent(state)
+}
+
+/// 加载失败如果是套接字僵死，回收重启后再试一次。
+fn load_key_recovering(state: &State<AppState>, key_id: &str) -> Result<()> {
+    let env = ready_env(state)?;
+    let vault = recover_lock(&state.vault);
+    let v = vault.as_ref().ok_or(AppError::Locked)?;
+    match agent::load_key(v, &env, key_id) {
+        Ok(()) => Ok(()),
+        Err(e) if agent::is_agent_down(&e) => {
+            drop(vault);
+            let env = agent::restart()?;
+            *recover_lock(&state.agent_env) = env.clone();
+            let vault = recover_lock(&state.vault);
+            let v = vault.as_ref().ok_or(AppError::Locked)?;
+            agent::load_key(v, &env, key_id)
+        }
+        Err(e) => Err(e),
+    }
 }
 
 /// 启动时只拉起 Git ssh-agent，不改用户环境变量（写入必须经前端二次确认）。
@@ -159,11 +177,11 @@ pub fn agent_load(state: State<'_, AppState>, key_id: String) -> Result<()> {
         let _ = (state, key_id);
         return unsupported_agent();
     }
-    let env = ready_env(&state)?;
+    load_key_recovering(&state, &key_id)?;
     let vault = recover_lock(&state.vault);
-    let v = vault.as_ref().ok_or(AppError::Locked)?;
-    agent::load_key(v, &env, &key_id)?;
-    crate::util::audit(v.root(), &format!("agent 加载密钥 key_id={key_id}"));
+    if let Some(v) = vault.as_ref() {
+        crate::util::audit(v.root(), &format!("agent 加载密钥 key_id={key_id}"));
+    }
     Ok(())
 }
 
@@ -175,7 +193,6 @@ pub fn agent_load_identity(state: State<'_, AppState>, identity_id: String) -> R
         let _ = (state, identity_id);
         return unsupported_agent();
     }
-    let env = ready_env(&state)?;
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
     let data = store::load_data(v)?;
@@ -188,7 +205,8 @@ pub fn agent_load_identity(state: State<'_, AppState>, identity_id: String) -> R
         .key_id
         .clone()
         .ok_or_else(|| AppError::Invalid("该身份未绑定密钥".into()))?;
-    agent::load_key(v, &env, &key_id)?;
+    drop(vault);
+    load_key_recovering(&state, &key_id)?;
     Ok(())
 }
 
@@ -200,31 +218,51 @@ pub fn agent_load_all(state: State<'_, AppState>) -> Result<u32> {
         let _ = state;
         return unsupported_agent();
     }
-    let env = ready_env(&state)?;
-    let vault = recover_lock(&state.vault);
-    let v = vault.as_ref().ok_or(AppError::Locked)?;
-    let data = store::load_data(v)?;
+    let mut env = ready_env(&state)?;
+    let key_ids = {
+        let vault = recover_lock(&state.vault);
+        let v = vault.as_ref().ok_or(AppError::Locked)?;
+        let data = store::load_data(v)?;
+        data.identities
+            .iter()
+            .filter_map(|identity| identity.key_id.clone())
+            .collect::<Vec<_>>()
+    };
     let mut loaded = 0u32;
-    let mut attempted = 0u32;
     let mut last_err: Option<AppError> = None;
-    for identity in &data.identities {
-        if let Some(key_id) = &identity.key_id {
-            attempted += 1;
-            match agent::load_key(v, &env, key_id) {
-                Ok(()) => loaded += 1,
-                Err(e) => last_err = Some(e),
+    let mut restarted = false;
+    for key_id in &key_ids {
+        let vault = recover_lock(&state.vault);
+        let v = vault.as_ref().ok_or(AppError::Locked)?;
+        match agent::load_key(v, &env, key_id) {
+            Ok(()) => loaded += 1,
+            Err(e) if agent::is_agent_down(&e) && !restarted => {
+                drop(vault);
+                env = agent::restart()?;
+                *recover_lock(&state.agent_env) = env.clone();
+                restarted = true;
+                let vault = recover_lock(&state.vault);
+                let v = vault.as_ref().ok_or(AppError::Locked)?;
+                match agent::load_key(v, &env, key_id) {
+                    Ok(()) => loaded += 1,
+                    Err(e) => last_err = Some(e),
+                }
             }
+            Err(e) => last_err = Some(e),
         }
     }
     if loaded == 0 {
         if let Some(e) = last_err {
             return Err(e);
         }
-        if attempted == 0 {
+        if key_ids.is_empty() {
             return Err(AppError::Invalid("没有可加载的身份密钥".into()));
         }
     }
-    crate::util::audit(v.root(), &format!("agent 自动加载 {loaded} 把密钥"));
+    let vault = recover_lock(&state.vault);
+    if let Some(v) = vault.as_ref() {
+        crate::util::audit(v.root(), &format!("agent 自动加载 {loaded} 把密钥"));
+    }
     Ok(loaded)
 }
 

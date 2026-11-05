@@ -61,17 +61,9 @@ pub fn resolve_url(state: State<AppState>, url: String) -> Result<Inference> {
 }
 
 fn current_agent_env(state: &State<AppState>) -> AgentEnv {
-    let current = recover_lock(&state.agent_env).clone();
-    if crate::agent::is_ready(&current) {
-        current
-    } else {
-        match crate::agent::ensure() {
-            Ok(started) => {
-                *recover_lock(&state.agent_env) = started.clone();
-                started
-            }
-            Err(_) => current,
-        }
+    match crate::commands::agent::adopt_agent(state) {
+        Ok(env) => env,
+        Err(_) => recover_lock(&state.agent_env).clone(),
     }
 }
 
@@ -945,20 +937,7 @@ fn clone_repo_work(app: AppHandle, args: CloneOrInitArgs) -> Result<CloneResult>
         )));
     }
 
-    let env = {
-        let current = recover_lock(&state.agent_env).clone();
-        if crate::agent::is_ready(&current) {
-            current
-        } else {
-            match crate::agent::ensure() {
-                Ok(started) => {
-                    *recover_lock(&state.agent_env) = started.clone();
-                    started
-                }
-                Err(_) => current,
-            }
-        }
-    };
+    let env = current_agent_env(&state);
 
     let proxy = {
         let cfg = recover_lock(&state.config);
