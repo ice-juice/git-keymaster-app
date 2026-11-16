@@ -1,0 +1,573 @@
+   Compiling app v1.12.1 (E:\juiceProgram\gitKeyMaster\app\src-tauri)
+warning: unused import: `collect_blob_hashes`
+  --> src\sync\engine.rs:12:5
+   |
+12 |     collect_blob_hashes, collect_blob_hashes_all, collect_note_body_hashes, AccountData, FileData,
+   |     ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable statement
+   --> src\agent\mod.rs:880:5
+    |
+878 |         return Err(AppError::Unsupported("ssh-agent"));
+    |         ---------------------------------------------- any code following this expression is unreachable
+879 |     }
+880 |     let ssh = git_ssh().ok_or_else(|| AppError::Other(crate::ssh::toolchain::missing_ssh_tool("ssh")))?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+    |
+    = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable statement
+  --> src\commands\agent.rs:36:5
+   |
+34 |         return unsupported_agent();
+   |         -------------------------- any code following this expression is unreachable
+35 |     }
+36 |     let env = recover_lock(&state.agent_env).clone();
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+  --> src\commands\agent.rs:88:5
+   |
+86 |         return unsupported_agent();
+   |         -------------------------- any code following this expression is unreachable
+87 |     }
+88 |     ready_env(&state)?;
+   |     ^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\agent.rs:154:5
+    |
+152 |           return unsupported_agent();
+    |           -------------------------- any code following this expression is unreachable
+153 |       }
+154 | /     if !confirmed {
+155 | |         return Err(AppError::Invalid(
+156 | |             "未确认写入用户环境，已取消。不会修改系统环境变量。".into(),
+157 | |         ));
+158 | |     }
+    | |_____^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\agent.rs:180:5
+    |
+178 |         return unsupported_agent();
+    |         -------------------------- any code following this expression is unreachable
+179 |     }
+180 |     load_key_recovering(&state, &key_id)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\agent.rs:196:5
+    |
+194 |         return unsupported_agent();
+    |         -------------------------- any code following this expression is unreachable
+195 |     }
+196 |     let vault = recover_lock(&state.vault);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\agent.rs:221:5
+    |
+219 |         return unsupported_agent();
+    |         -------------------------- any code following this expression is unreachable
+220 |     }
+221 |     let mut env = ready_env(&state)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\agent.rs:277:5
+    |
+275 |         return unsupported_agent();
+    |         -------------------------- any code following this expression is unreachable
+276 |     }
+277 |     let env = ready_env(&state)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\agent.rs:297:5
+    |
+295 |         return unsupported_agent();
+    |         -------------------------- any code following this expression is unreachable
+296 |     }
+297 |     let env = ready_env(&state)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\assets.rs:119:5
+    |
+117 |         return Err(AppError::Unsupported("打开本机 SSH config"));
+    |         -------------------------------------------------------- any code following this expression is unreachable
+118 |     }
+119 |     crate::commands::ensure_writes_allowed(&state)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\assets.rs:233:5
+    |
+231 |         return Toolchain::default();
+    |         --------------------------- any code following this expression is unreachable
+232 |     }
+233 |     let mut tc = Toolchain::default();
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\assets.rs:397:5
+    |
+395 |         return Err(AppError::Unsupported("SSH 连接体检"));
+    |         ------------------------------------------------- any code following this expression is unreachable
+396 |     }
+397 |     let env = crate::commands::agent::adopt_agent(&state)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:104:5
+    |
+102 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+103 |     }
+104 |     let mut cmd = Command::new("git");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:173:5
+    |
+171 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+172 |     }
+173 |     let parsed = parse_repo_url(&url)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:365:5
+    |
+363 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+364 |     }
+365 |     let (_o, _e, code) = sys::run("git", &["-C", repo_path, "remote", "get-url", "origin"])?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:396:5
+    |
+394 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+395 |     }
+396 |     let depth = max_depth.unwrap_or(5);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:420:5
+    |
+418 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+419 |     }
+420 |     crate::commands::ensure_writes_allowed(&state)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:570:5
+    |
+568 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+569 |     }
+570 |     crate::commands::ensure_writes_allowed(&state)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:634:5
+    |
+632 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+633 |     }
+634 |     let p = PathBuf::from(path.trim());
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:713:5
+    |
+711 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+712 |     }
+713 |     crate::commands::ensure_writes_allowed(&state)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:783:5
+    |
+781 |           return unsupported_local_git();
+    |           ------------------------------ any code following this expression is unreachable
+782 |       }
+783 | /     if dest_dir.trim().is_empty() {
+784 | |         return Err(AppError::Invalid("请先选择目标文件夹".into()));
+785 | |     }
+    | |_____^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:859:5
+    |
+857 |         return unsupported_local_git();
+    |         ------------------------------ any code following this expression is unreachable
+858 |     }
+859 |     let mut cmd = Command::new("git");
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\repo.rs:894:5
+    |
+892 |           return unsupported_local_git();
+    |           ------------------------------ any code following this expression is unreachable
+893 |       }
+894 | /     if let Some(n) = name {
+895 | |         sys::run("git", &["-C", repo_path, "config", "user.name", n])?;
+896 | |     }
+    | |_____^ unreachable statement
+
+warning: unreachable expression
+   --> src\commands\security_migration.rs:130:5
+    |
+129 |     { let _ = (from, to); return Err(AppError::Unsupported("独立主密钥迁移仅支持桌面端")); }
+    |                           --------------------------------------------------------------- any code following this expression is unreachable
+130 |     Ok(())
+    |     ^^^^^^ unreachable expression
+
+warning: unreachable statement
+   --> src\commands\security_migration.rs:208:5
+    |
+207 |     return Err(AppError::Unsupported("独立主密钥迁移仅支持桌面端"));
+    |     --------------------------------------------------------------- any code following this expression is unreachable
+208 |     let _prepare = PREPARING.try_lock().map_err(|_| AppError::Busy)?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\window.rs:103:5
+    |
+101 |         return Ok(());
+    |         ------------- any code following this expression is unreachable
+102 |     }
+103 |     let _ = (app, state);
+    |     ^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+   --> src\commands\write.rs:664:5
+    |
+662 |         return false;
+    |         ------------ any code following this expression is unreachable
+663 |     }
+664 |     let cfg = workspace.map(sys::workspace_ssh_config);
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+  --> src\git\repo.rs:87:5
+   |
+76 | /         return RepoInfo {
+77 | |             path: repo.display().to_string(),
+78 | |             remote_url: None,
+79 | |             current_alias: None,
+...  |
+84 | |             fix_command: None,
+85 | |         };
+   | |_________- any code following this expression is unreachable
+86 |       }
+87 |       let path = repo.display().to_string();
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable expression
+   --> src\git\repo.rs:133:5
+    |
+131 |           return None;
+    |           ----------- any code following this expression is unreachable
+132 |       }
+133 | /     sys::run("git", &["-C", path, "config", "--get", key])
+134 | |         .ok()
+135 | |         .and_then(|(o, _, c)| {
+136 | |             if c == 0 && !o.trim().is_empty() {
+...   |
+141 | |         })
+    | |__________^ unreachable expression
+
+warning: unreachable statement
+   --> src\git\repo.rs:416:5
+    |
+414 |         return Err(crate::error::AppError::Unsupported("本机 Git"));
+    |         ----------------------------------------------------------- any code following this expression is unreachable
+415 |     }
+416 |     sys::run("git", &["-C", repo, "remote", "set-url", "origin", new_url])?;
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+
+warning: unreachable statement
+  --> src\mobile\nav.rs:37:5
+   |
+32 | /         return handle
+33 | |             .0
+34 | |             .run_mobile_plugin::<()>("leaveToHome", ())
+35 | |             .map_err(|e| format!("无法回到系统桌面：{e}"));
+   | |__________________________________________________________- any code following this expression is unreachable
+36 |       }
+37 |       let _ = app;
+   |       ^^^^^^^^^^^^ unreachable statement
+
+warning: unused import: `Manager`
+  --> src\commands\repo.rs:23:33
+   |
+23 | use tauri::{AppHandle, Emitter, Manager, State};
+   |                                 ^^^^^^^
+
+warning: unused variable: `state`
+   --> src\commands\security_migration.rs:205:35
+    |
+205 | pub fn security_migration_prepare(state: State<'_, AppState>, target_path: String, access_password: String, new_password: String) -...
+    |                                   ^^^^^ help: if this is intentional, prefix it with an underscore: `_state`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `target_path`
+   --> src\commands\security_migration.rs:205:63
+    |
+205 | ...State<'_, AppState>, target_path: String, access_password: String, new_password: String) -> Result<MigrationPrepared> {
+    |                         ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_target_path`
+
+warning: unused variable: `access_password`
+   --> src\commands\security_migration.rs:205:84
+    |
+205 | ...et_path: String, access_password: String, new_password: String) -> Result<MigrationPrepared> {
+    |                     ^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_access_password`
+
+warning: unused variable: `new_password`
+   --> src\commands\security_migration.rs:205:109
+    |
+205 | ...s_password: String, new_password: String) -> Result<MigrationPrepared> {
+    |                        ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_new_password`
+
+warning: constant `MAX_PROBE_CANDIDATES` is never used
+   --> src\agent\mod.rs:144:7
+    |
+144 | const MAX_PROBE_CANDIDATES: usize = 3;
+    |       ^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `STALE_SOCKET_MAX_AGE` is never used
+   --> src\agent\mod.rs:145:7
+    |
+145 | const STALE_SOCKET_MAX_AGE: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+    |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `ensure_lock` is never used
+   --> src\agent\mod.rs:435:4
+    |
+435 | fn ensure_lock() -> std::sync::MutexGuard<'static, ()> {
+    |    ^^^^^^^^^^^
+
+warning: function `prepare_locked` is never used
+   --> src\agent\mod.rs:474:4
+    |
+474 | fn prepare_locked(current: &AgentEnv) -> Result<AgentEnv> {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `restart_locked` is never used
+   --> src\agent\mod.rs:497:4
+    |
+497 | fn restart_locked() -> Result<AgentEnv> {
+    |    ^^^^^^^^^^^^^^
+
+warning: function `socks_eq` is never used
+   --> src\agent\mod.rs:531:4
+    |
+531 | fn socks_eq(a: &str, b: &str) -> bool {
+    |    ^^^^^^^^
+
+warning: function `should_clear_managed_auth_sock` is never used
+   --> src\agent\mod.rs:549:4
+    |
+549 | fn should_clear_managed_auth_sock(sock: &str, stable_msys: &str) -> bool {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `select_probe_socks` is never used
+   --> src\agent\mod.rs:554:15
+    |
+554 | pub(crate) fn select_probe_socks(
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: function `probe_existing_git_agent` is never used
+   --> src\agent\mod.rs:580:4
+    |
+580 | fn probe_existing_git_agent() -> Option<AgentEnv> {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `clear_stale_managed_auth_sock` is never used
+   --> src\agent\mod.rs:624:4
+    |
+624 | fn clear_stale_managed_auth_sock() {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `parse_pid_command_lines` is never used
+   --> src\agent\mod.rs:680:15
+    |
+680 | pub(crate) fn parse_pid_command_lines(output: &str) -> Vec<(u32, String)> {
+    |               ^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `command_binds_sock` is never used
+   --> src\agent\mod.rs:701:15
+    |
+701 | pub(crate) fn command_binds_sock(cmd: &str, sock_msys: &str) -> bool {
+    |               ^^^^^^^^^^^^^^^^^^
+
+warning: function `cleanup_stale_agent_sockets` is never used
+   --> src\agent\mod.rs:746:4
+    |
+746 | fn cleanup_stale_agent_sockets(keep_sock: Option<&str>) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `user_env_var` is never used
+   --> src\agent\mod.rs:789:4
+    |
+789 | fn user_env_var(name: &str) -> Option<String> {
+    |    ^^^^^^^^^^^^
+
+warning: function `delete_user_env_var` is never used
+   --> src\agent\mod.rs:804:4
+    |
+804 | fn delete_user_env_var(_name: &str) {}
+    |    ^^^^^^^^^^^^^^^^^^^
+
+warning: field `face` is never read
+  --> src\biometric\android.rs:18:5
+   |
+14 | struct HwStatus {
+   |        -------- field in this struct
+...
+18 |     face: bool,
+   |     ^^^^
+   |
+   = note: `HwStatus` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: function `read` is never used
+  --> src\clipboard\mod.rs:95:8
+   |
+95 | pub fn read() -> Result<String, String> {
+   |        ^^^^
+
+warning: constant `FMT_EXCLUDE_MONITOR` is never used
+   --> src\clipboard\mod.rs:113:11
+    |
+113 | pub const FMT_EXCLUDE_MONITOR: &str = "ExcludeClipboardContentFromMonitorProcessing";
+    |           ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `FMT_CLIPBOARD_HISTORY` is never used
+   --> src\clipboard\mod.rs:115:11
+    |
+115 | pub const FMT_CLIPBOARD_HISTORY: &str = "CanIncludeInClipboardHistory";
+    |           ^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `FMT_CLOUD_CLIPBOARD` is never used
+   --> src\clipboard\mod.rs:117:11
+    |
+117 | pub const FMT_CLOUD_CLIPBOARD: &str = "CanUploadToCloudClipboard";
+    |           ^^^^^^^^^^^^^^^^^^^
+
+warning: constant `OPEN_RETRIES` is never used
+   --> src\clipboard\mod.rs:119:11
+    |
+119 | pub const OPEN_RETRIES: u32 = 5;
+    |           ^^^^^^^^^^^^
+
+warning: constant `OPEN_RETRY_MS` is never used
+   --> src\clipboard\mod.rs:120:11
+    |
+120 | pub const OPEN_RETRY_MS: u64 = 20;
+    |           ^^^^^^^^^^^^^
+
+warning: function `arm_auto_clear` is never used
+   --> src\clipboard\mod.rs:133:8
+    |
+133 | pub fn arm_auto_clear(seconds: u32) {
+    |        ^^^^^^^^^^^^^^
+
+warning: function `write` is never used
+   --> src\clipboard\mod.rs:182:8
+    |
+182 | pub fn write(text: &str, secret: bool) -> Result<WriteOutcome, String> {
+    |        ^^^^^
+
+warning: function `write_plain` is never used
+   --> src\clipboard\mod.rs:244:4
+    |
+244 | fn write_plain(text: &str) -> Result<(), String> {
+    |    ^^^^^^^^^^^
+
+warning: function `current_seq` is never used
+   --> src\clipboard\mod.rs:283:4
+    |
+283 | fn current_seq() -> Option<u32> {
+    |    ^^^^^^^^^^^
+
+warning: function `is_still_ours` is never used
+   --> src\clipboard\mod.rs:294:4
+    |
+294 | fn is_still_ours() -> Result<bool, String> {
+    |    ^^^^^^^^^^^^^
+
+warning: function `encode_utf16_nul` is never used
+   --> src\clipboard\mod.rs:338:15
+    |
+338 | pub(crate) fn encode_utf16_nul(text: &str) -> Vec<u16> {
+    |               ^^^^^^^^^^^^^^^^
+
+warning: function `dword_zero_bytes` is never used
+   --> src\clipboard\mod.rs:342:15
+    |
+342 | pub(crate) fn dword_zero_bytes() -> [u8; 4] {
+    |               ^^^^^^^^^^^^^^^^
+
+warning: function `should_clear_by_seq` is never used
+   --> src\clipboard\mod.rs:351:15
+    |
+351 | pub(crate) fn should_clear_by_seq(last: Option<u32>, current: u32) -> bool {
+    |               ^^^^^^^^^^^^^^^^^^^
+
+warning: function `should_clear_by_hash` is never used
+   --> src\clipboard\mod.rs:356:15
+    |
+356 | pub(crate) fn should_clear_by_hash(last: Option<[u8; 32]>, current: [u8; 32]) -> bool {
+    |               ^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `CLONE_PROGRESS_EVENT` is never used
+   --> src\commands\repo.rs:802:7
+    |
+802 | const CLONE_PROGRESS_EVENT: &str = "clone-progress";
+    |       ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `emit_clone_progress` is never used
+   --> src\commands\repo.rs:804:4
+    |
+804 | fn emit_clone_progress(app: &AppHandle, step: &'static str, percent: Option<u8>) {
+    |    ^^^^^^^^^^^^^^^^^^^
+
+warning: function `drain_git_progress_stderr` is never used
+   --> src\commands\repo.rs:812:4
+    |
+812 | fn drain_git_progress_stderr(app: &AppHandle, mut pipe: impl Read, sink: &mut Vec<u8>) {
+    |    ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `run_git_clone_progress` is never used
+   --> src\commands\repo.rs:847:4
+    |
+847 | fn run_git_clone_progress(
+    |    ^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `apply_local_identity` is never used
+   --> src\commands\repo.rs:888:4
+    |
+888 | fn apply_local_identity(repo_path: &str, name: Option<&str>, email: Option<&str>) -> Result<()> {
+    |    ^^^^^^^^^^^^^^^^^^^^
+
+warning: function `stub_entry` is never used
+  --> src\qrscan.rs:99:4
+   |
+99 | fn stub_entry(p: &ParsedOtpauth) -> TotpEntry {
+   |    ^^^^^^^^^^
+
+warning: `app` (lib) generated 74 warnings (run `cargo fix --lib -p app` to apply 5 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 19s

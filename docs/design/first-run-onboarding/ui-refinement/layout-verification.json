@@ -1,0 +1,26 @@
+{
+  "passed": true,
+  "layouts": [
+    "980x620-zh",
+    "840x520-zh",
+    "1136x720-zh",
+    "390x844-zh",
+    "320x640-zh",
+    "840x520-en",
+    "390x844-en"
+  ],
+  "checks": [
+    "all steps",
+    "expanded settings",
+    "independent content scroll",
+    "pinned heading and step navigation",
+    "visible hit-tested footer",
+    "reachable final content",
+    "disabled animation controls",
+    "theme changes",
+    "theme preview does not persist preferences",
+    "keyboard and touch navigation",
+    "window resizing",
+    "no page errors"
+  ]
+}

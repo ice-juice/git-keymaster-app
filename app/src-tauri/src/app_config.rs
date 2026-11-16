@@ -111,6 +111,11 @@ pub fn clamp_auto_sync_minutes(minutes: u32) -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    /// Missing on old configurations means legacy, never a new installation.
+    #[serde(default = "crate::onboarding::Record::legacy")]
+    pub onboarding: crate::onboarding::Record,
+    #[serde(skip)]
+    pub load_error: Option<String>,
     /// 当前工作空间路径（未初始化时为 None）。
     pub workspace_path: Option<String>,
     /// 无操作自动锁定时长（分钟），0 表示永不。
@@ -200,8 +205,8 @@ pub struct AppConfig {
     /// 移动端主界面再按返回：true 回到系统桌面且不杀进程；false 退出应用。
     #[serde(default)]
     pub mobile_background_run: bool,
-    /// 是否允许系统截屏 / 录屏捕获本应用画面。默认关（防护开）。
-    /// 旧配置缺字段时 serde 走 `bool` 默认值 false，与出厂行为一致。
+    /// 新配置默认允许截图，用户确认引导后才启用防护。
+    /// 旧配置缺字段仍用 false，保留历史防护行为，不能改 serde 默认。
     #[serde(default)]
     pub allow_screenshots: bool,
     /// 从旧版 config.json 读出的明文密钥，等首次解锁写进保险库后再丢掉。
@@ -324,6 +329,8 @@ impl UpdateSource {
 impl Default for AppConfig {
     fn default() -> Self {
         AppConfig {
+            onboarding: crate::onboarding::Record::fresh(),
+            load_error: None,
             workspace_path: None,
             auto_lock_minutes: 15,
             lock_on_sleep: true,
@@ -354,7 +361,7 @@ impl Default for AppConfig {
             sync_attachments_wifi_only: true,
             sync_attachments_manual_only: false,
             mobile_background_run: false,
-            allow_screenshots: false,
+            allow_screenshots: true,
             pending_legacy_secrets: None,
         }
     }
@@ -388,15 +395,19 @@ impl AppConfig {
                     // 解析失败绝不能 save 成默认空配置，否则工作空间路径被抹掉，
                     // 下次启动就会进初始化向导，看起来像虚拟机重启把库重置了。
                     log::warn!("本机 config.json 无法解析，已保留原文件: {e}");
-                    Self::default()
+                    Self::unavailable(e.to_string())
                 }
             },
-            Err(_) => {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                if crate::vault::previous_path(&path).exists() {
+                    return Self::unavailable("Could not restore previous local configuration".into());
+                }
                 let mut cfg = Self::default();
                 cfg.capture_legacy_secrets();
                 cfg.ensure_machine_id();
                 cfg
             }
+            Err(e) => Self::unavailable(e.to_string()),
         }
     }
 
@@ -413,7 +424,18 @@ impl AppConfig {
     }
 
     pub fn save(&self) -> Result<()> {
+        if self.onboarding.version != 1 {
+            return Err(crate::error::AppError::Other("Newer local configuration version; file preserved".into()));
+        }
+        if self.load_error.is_some() {
+            return Err(crate::error::AppError::Other("Local configuration is unreadable; original file preserved".into()));
+        }
         atomic_write(&config_file(), self.to_disk_json()?.as_bytes())
+    }
+
+    fn unavailable(message: String) -> Self {
+        Self { allow_screenshots: false, onboarding: crate::onboarding::Record::legacy(),
+            load_error: Some(message), ..Self::default() }
     }
 
     /// 写盘用的 JSON：已迁走则剥掉密钥；尚未迁走则把待迁明文补回去。
@@ -531,6 +553,36 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_and_legacy_capture_defaults_are_distinct() {
+        let fresh = AppConfig::default();
+        assert!(fresh.allow_screenshots);
+        assert_eq!(fresh.onboarding.status, crate::onboarding::Status::NotStarted);
+        let raw = r#"{"workspacePath":null,"autoLockMinutes":15,"lockOnSleep":true}"#;
+        let legacy: AppConfig = serde_json::from_str(raw).unwrap();
+        assert!(!legacy.allow_screenshots);
+        assert_eq!(legacy.onboarding.status, crate::onboarding::Status::Legacy);
+        for allow in [true, false] {
+            let mut json: serde_json::Value = serde_json::from_str(raw).unwrap();
+            json["allowScreenshots"] = allow.into();
+            let cfg: AppConfig = serde_json::from_value(json).unwrap();
+            assert_eq!(cfg.allow_screenshots, allow);
+            assert_eq!(cfg.onboarding.status, crate::onboarding::Status::Legacy);
+        }
+    }
+
+    #[test]
+    fn damaged_configuration_blocks_writes_and_onboarding() {
+        let cfg = AppConfig::unavailable("invalid JSON".into());
+        assert!(cfg.save().is_err()); // Returns before touching the actual user config path.
+        assert!(!cfg.allow_screenshots);
+        assert_eq!(cfg.onboarding.status, crate::onboarding::Status::Legacy);
+        assert!(crate::onboarding::check_revision(&cfg, 0).is_err());
+        let mut future = AppConfig::default();
+        future.onboarding.version = 2;
+        assert!(future.save().is_err());
+    }
 
     #[test]
     fn old_config_without_close_action_defaults_to_ask() {

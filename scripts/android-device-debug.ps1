@@ -93,6 +93,9 @@ function Import-AndroidEnv {
     Where-Object { $_.Name -match '^(CC_|CXX_|AR_|CARGO_TARGET_).*ANDROID' } |
     ForEach-Object { Set-Item "Env:$($_.Name)" $_.Value }
 
+  # Select this project's JDK without replacing Java used by other projects.
+  . (Join-Path $PSScriptRoot "dev-env.ps1")
+
   foreach ($need in @("JAVA_HOME", "ANDROID_HOME", "NDK_HOME")) {
     if (-not (Get-Item "Env:$need" -ErrorAction SilentlyContinue).Value) {
       throw "缺少环境变量 $need。先按 docs/安卓真机调试.md 配好再跑。"

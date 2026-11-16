@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { OnboardingSettingsCard } from "../ui/OnboardingSettingsCard";
+import { RecoveryKeyRotation } from "../ui/RecoveryKeyRotation";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { OptionSelect } from "../ui/OptionSelect";
@@ -32,7 +34,6 @@ import {
   type UpdateCheckResult,
   type UpdateSource,
 } from "../lib/ipc";
-import { writeClipboard } from "../lib/clipboard";
 import { copyWithClear, isNeedReauth, tryBiometricReauth } from "../lib/secretsUi";
 import { notifyClipboardWatchChanged } from "../shared/clipboardWatch";
 import { useApp } from "../store";
@@ -549,6 +550,9 @@ export function ClipboardWatchField() {
 
 export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
   const { t } = useTranslation();
+  const initialized = useApp(s => !!s.status?.initialized);
+  const [authKind, setAuthKind] = useState<"password" | "recovery">("password");
+  const [credential, setCredential] = useState("");
   const [stage, setStage] = useState<"idle" | "confirm">("idle");
   const [phrase, setPhrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -559,7 +563,9 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
     setErr("");
     setBusy(true);
     try {
-      const r = await api.factoryReset(true, phrase);
+      const r = await api.factoryReset(true, phrase,
+        authKind === "password" ? credential : undefined,
+        authKind === "recovery" ? credential : undefined);
       setSteps(r.steps);
       try {
         localStorage.removeItem("gam.theme");
@@ -570,6 +576,7 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
     } catch (e) {
       setErr(errMessage(e));
     } finally {
+      setCredential("");
       setBusy(false);
     }
   }
@@ -591,6 +598,14 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
           <div className="muted" style={{ fontSize: 12 }}>
             {t("factory.reconfirm")}
           </div>
+          {initialized && <>
+            <p className="callout danger">{t("securityFix.resetBackup", { defaultValue: "请先在独立位置保存并验证完整备份。此操作会删除本机保险库，包括文件和笔记附件。" })}</p>
+            <select className="input" value={authKind} disabled={busy} onChange={e => { setAuthKind(e.target.value as "password" | "recovery"); setCredential(""); }} aria-label={t("securityFix.resetAuth", { defaultValue: "清空前重新验证" })}>
+              <option value="password">{t("reauth.password")}</option>
+              <option value="recovery">{t("settings.recoveryCell")}</option>
+            </select>
+            <input className="input" type="password" autoComplete="off" value={credential} disabled={busy} onChange={e => setCredential(e.target.value)} aria-label={t("securityFix.resetAuth", { defaultValue: "清空前重新验证" })} />
+          </>}
           <input
             className="input"
             placeholder={t("factory.phrasePh")}
@@ -601,7 +616,7 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
             <button
               type="button"
               className="btn danger sm"
-              disabled={busy || phrase.trim() !== t("factory.phrase")}
+              disabled={busy || (initialized && !credential) || phrase.trim() !== t("factory.phrase")}
               onClick={run}
             >
               {busy ? t("factory.running") : t("factory.confirm")}
@@ -613,6 +628,7 @@ export function FactoryResetPanel({ onDone }: { onDone: () => Promise<void> }) {
               onClick={() => {
                 setStage("idle");
                 setPhrase("");
+                setCredential("");
                 setErr("");
               }}
             >
@@ -941,7 +957,7 @@ export function AboutUpdateCard() {
   useEffect(() => {
     getVersion()
       .then(setVersion)
-      .catch(() => setVersion("1.12.1"));
+      .catch(() => setVersion("1.13.0"));
     loadPrefs().catch((e) => setErr(errMessage(e)));
   }, []);
 
@@ -1436,7 +1452,6 @@ export function SettingsView() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-  const [newRecovery, setNewRecovery] = useState("");
   const [bio, setBio] = useState<BiometricStatus | null>(null);
   const [bioPw, setBioPw] = useState("");
   const [notesAutoSave, setNotesAutoSave] = useState(getNotesAutoSave);
@@ -1501,19 +1516,6 @@ export function SettingsView() {
     }
   }
 
-  async function rotate() {
-    setErr("");
-    setMsg("");
-    setBusy(true);
-    try {
-      const r = await api.rotateRecoveryKey();
-      setNewRecovery(r.recoveryKey);
-    } catch (e) {
-      setErr(errMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function toggleLaunch(enabled: boolean) {
     setErr("");
@@ -1594,6 +1596,7 @@ export function SettingsView() {
           {activeTab === "general" && (
             <>
               <LanguageCard />
+              <OnboardingSettingsCard />
 
               <Card title={t("settings.themeCard")}>
                 <div className="stack">
@@ -2160,31 +2163,7 @@ export function SettingsView() {
                 </div>
               </Card>
 
-              <Card title={t("settings.rotateTitle")}>
-                <div className="stack">
-                  <div className="muted">{t("settings.rotateIntro")}</div>
-                  {newRecovery ? (
-                    <>
-                      <div className="callout danger">{t("settings.rotateOnce")}</div>
-                      <div className="reckey">{newRecovery}</div>
-                      <div className="row">
-                        <button className="btn sm" onClick={() => writeClipboard(newRecovery, true)}>
-                          {t("common.copy")}
-                        </button>
-                        <button className="btn ghost sm" onClick={() => setNewRecovery("")}>
-                          {t("settings.rotateSaved")}
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <div>
-                      <button className="btn danger sm" disabled={busy} onClick={rotate}>
-                        {t("settings.rotateBtn")}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </Card>
+              <Card title={t("settings.rotateTitle")}><RecoveryKeyRotation /></Card>
             </>
           )}
 

@@ -296,9 +296,149 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
+// V2 requests never fall back to the destructive legacy API.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct V2Metadata {
+    pub item_id: String,
+    pub version: String,
+    pub cipher_size: u64,
+    pub expire_at: Option<String>,
+    pub max_pulls: Option<u32>,
+    pub pulls_left: Option<u32>,
+    pub status: String,
+    pub cleanup_status: String,
+    pub share_slug: Option<String>,
+    #[serde(default)]
+    pub in_flight_claims: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct V2Claim {
+    pub operation_id: String,
+    pub token: String,
+    pub item_id: String,
+    pub version: String,
+    pub state: String,
+    pub recovery_until: String,
+    pub attempts: u32,
+    pub pulls_left: Option<u32>,
+    pub cipher_size: u64,
+    #[serde(default)]
+    pub cleanup_status: Option<String>,
+}
+
+fn public_address(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v) => !(v.is_private() || v.is_loopback() || v.is_link_local() || v.is_unspecified()
+            || v.is_broadcast() || v.is_multicast() || v.octets()[0] == 0 || v.octets()[0] >= 240
+            || (v.octets()[0] == 100 && (64..=127).contains(&v.octets()[1]))),
+        std::net::IpAddr::V6(v) => v.to_ipv4_mapped().map(|v| public_address(v.into())).unwrap_or_else(||
+            !(v.is_loopback() || v.is_unspecified() || v.is_multicast() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80)),
+    }
+}
+
+fn v2_client(endpoint: &WorkerEndpoint, proxy: Option<&NetworkProxy>, timeout: Duration) -> Result<reqwest::blocking::Client> {
+    let url = reqwest::Url::parse(&endpoint.base).map_err(|_| AppError::Invalid("取件服务地址无效".into()))?;
+    let external = endpoint.secret.is_empty();
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() || url.query().is_some() {
+        return Err(AppError::Invalid("取件服务地址不能包含凭据、查询参数或解密信息".into()));
+    }
+    if external {
+        #[cfg(not(test))]
+        if url.scheme() != "https" { return Err(AppError::Invalid("收到的分享必须使用 HTTPS".into())); }
+        let host = url.host_str().ok_or_else(|| AppError::Invalid("分享链接缺少主机名".into()))?;
+        use std::net::ToSocketAddrs;
+        let addresses: Vec<_> = (host, url.port_or_known_default().unwrap_or(443)).to_socket_addrs()
+            .map_err(|_| AppError::Invalid("无法解析分享服务地址".into()))?.collect();
+        if addresses.is_empty() { return Err(AppError::Invalid("分享服务地址无法连接".into())); }
+        #[cfg(not(test))]
+        if addresses.iter().any(|a| !public_address(a.ip())) {
+            return Err(AppError::Invalid("收到的分享不能访问本机或内网地址".into()));
+        }
+        // Bind the validated addresses, preventing DNS rebinding. An external
+        // link does not inherit an HTTP proxy that could resolve a different IP.
+        return reqwest::blocking::Client::builder().no_proxy().resolve_to_addrs(host, &addresses)
+            .redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(8)).timeout(timeout)
+            .build().map_err(|_| AppError::Invalid("无法创建取件连接".into()));
+    }
+    client(proxy, timeout)
+}
+
+fn v2_error(status: reqwest::StatusCode, bytes: &[u8]) -> AppError {
+    let value: serde_json::Value = serde_json::from_slice(bytes).unwrap_or_default();
+    let code = value.get("error").and_then(|v| v.as_str()).unwrap_or("service_error");
+    let message = match status.as_u16() {
+        426 => "取件服务版本过旧，请先升级服务；未执行旧版扣次或删除操作".to_string(),
+        401 | 403 => "取件码或服务验证不正确".to_string(),
+        404 => "找不到该寄存或分享已停止".to_string(),
+        410 => "文件已过期或原领取会话的恢复期限已结束".to_string(),
+        409 => format!("取件状态已改变，请重新查询；原操作不得换 ID 重试 ({})", code.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(60).collect::<String>()),
+        423 | 429 => format!("尝试过多，请 {} 秒后再试", value.get("retryAfter").and_then(|v| v.as_u64()).unwrap_or(60)),
+        _ => format!("取件服务响应异常 (HTTP {})，请查询原操作状态", status.as_u16()),
+    };
+    AppError::Invalid(message)
+}
+
+pub fn v2_json<T: serde::de::DeserializeOwned>(endpoint: &WorkerEndpoint, method: &str, rel: &str, body: Option<&serde_json::Value>, owner: bool, proxy: Option<&NetworkProxy>) -> Result<T> {
+    let (url, path) = join_url(&endpoint.base, rel)?;
+    let bytes = body.map(serde_json::to_vec).transpose()?.unwrap_or_default();
+    let http = v2_client(endpoint, proxy, Duration::from_secs(30))?;
+    let method_value = reqwest::Method::from_bytes(method.as_bytes()).map_err(|_| AppError::Invalid("请求方法无效".into()))?;
+    let mut req = http.request(method_value, url).header("accept", "application/json");
+    if body.is_some() { req = req.header("content-type", "application/json").body(bytes.clone()); }
+    if owner {
+        if endpoint.secret.is_empty() { return Err(AppError::Invalid("请先配置取件服务密钥".into())); }
+        req = apply_auth(req, &endpoint.secret, method, &path, &bytes);
+    }
+    let mut response = req.send().map_err(|_| AppError::Invalid("取件服务连接中断，结果待确认，请查询原操作".into()))?;
+    let status = response.status();
+    let mut raw = Vec::new();
+    (&mut response).take(1024 * 1024 + 1).read_to_end(&mut raw)?;
+    if raw.len() > 1024 * 1024 { return Err(AppError::Invalid("取件服务响应过大".into())); }
+    if !status.is_success() { return Err(v2_error(status, &raw)); }
+    serde_json::from_slice(&raw).map_err(|_| AppError::Invalid("取件服务响应格式无效，操作结果待确认".into()))
+}
+
+pub fn v2_health(endpoint: &WorkerEndpoint, proxy: Option<&NetworkProxy>) -> Result<()> {
+    let health: serde_json::Value = v2_json(endpoint, "GET", "/v2/health", None, false, proxy)?;
+    if !crate::locker::deploy::probe::health_ok(200, &health.to_string()) {
+        return Err(AppError::Invalid("取件服务或数据库需要升级到协议 2，已阻止旧版操作".into()));
+    }
+    Ok(())
+}
+
+pub fn v2_content(endpoint: &WorkerEndpoint, operation_id: &str, token: &str, dest: &Path, expected_size: u64, proxy: Option<&NetworkProxy>) -> Result<()> {
+    let (url, _) = join_url(&endpoint.base, &format!("/v2/claims/{operation_id}/content"))?;
+    let cap = crate::locker::LOCKER_MAX_BYTES + 1024 * 1024;
+    if expected_size < 9 || expected_size > cap { return Err(AppError::Invalid("分享文件大小不合法".into())); }
+    let http = v2_client(endpoint, proxy, Duration::from_secs(900))?;
+    let mut resp = http.post(url).json(&serde_json::json!({"token":token})).send()
+        .map_err(|_| AppError::Invalid("内容交付中断，请恢复原领取，不要新建领取".into()))?;
+    if !resp.status().is_success() {
+        let status = resp.status(); let mut bytes = Vec::new(); (&mut resp).take(4096).read_to_end(&mut bytes)?;
+        return Err(v2_error(status, &bytes));
+    }
+    if resp.content_length().is_some_and(|n| n > cap || n != expected_size) { return Err(AppError::Invalid("返回文件大小与查询结果不一致".into())); }
+    let mut out = std::fs::File::create(dest)?;
+    let copied = std::io::copy(&mut (&mut resp).take(expected_size + 1), &mut out)?;
+    out.flush()?; out.sync_all()?;
+    if copied != expected_size { let _ = std::fs::remove_file(dest); return Err(AppError::Invalid("密文未完整接收，请恢复原领取".into())); }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_sources_do_not_resolve_to_private_or_metadata_addresses() {
+        for address in ["127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "::1", "fc00::1", "fe80::1", "::ffff:127.0.0.1"] {
+            assert!(!public_address(address.parse().unwrap()), "{address}");
+        }
+        assert!(public_address("8.8.8.8".parse().unwrap()));
+    }
 
     #[test]
     fn signature_binds_method_path_and_body() {

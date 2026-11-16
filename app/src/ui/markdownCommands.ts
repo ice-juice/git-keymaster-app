@@ -1,4 +1,5 @@
 import { EditorSelection, EditorState, type ChangeSpec } from "@codemirror/state";
+import { isolateHistory } from "@codemirror/commands";
 import { EditorView } from "@codemirror/view";
 
 /** 命令算出的变更。选区坐标是变更之后的文档。 */
@@ -8,6 +9,7 @@ export interface PlannedEdit {
 }
 
 export type LinePrefixKind = "ul" | "ol" | "quote" | "task";
+export type HeadingLevel = 1 | 2 | 3 | 4 | 5 | 6;
 
 export const EMPTY_MARKDOWN_TABLE = "|  |  |  |\n| --- | --- | --- |\n|  |  |  |";
 
@@ -57,7 +59,7 @@ function headingOf(text: string): { level: number; rest: string } | null {
 }
 
 /** 行内切换标题，不插入换行，因此不会把当前行劈开。 */
-export function planToggleHeading(state: EditorState, level: 1 | 2 | 3): PlannedEdit {
+export function planToggleHeading(state: EditorState, level: HeadingLevel): PlannedEdit {
   const lines = targetLines(state);
   const allOn = lines.length > 0 && lines.every((line) => headingOf(line.text)?.level === level);
   const mark = "#".repeat(level);
@@ -264,12 +266,13 @@ export function dispatchMarkdownEdit(view: EditorView, edit: PlannedEdit) {
   view.dispatch({
     changes: edit.changes,
     selection: edit.selection,
+    annotations: isolateHistory.of("full"),
     effects: EditorView.scrollIntoView(edit.selection.main.head, SCROLL),
   });
   if (!view.hasFocus) view.contentDOM.focus({ preventScroll: true });
 }
 
-export function toggleHeading(view: EditorView, level: 1 | 2 | 3) {
+export function toggleHeading(view: EditorView, level: HeadingLevel) {
   dispatchMarkdownEdit(view, planToggleHeading(view.state, level));
 }
 

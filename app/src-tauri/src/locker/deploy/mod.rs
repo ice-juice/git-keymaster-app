@@ -572,6 +572,10 @@ fn deploy_via_api(
     } else {
         p.done(5, "寄存表已存在，已跳过");
     }
+    p.begin(5, "正在安装可恢复领取协议，保留已有寄存表");
+    emit(ctx, p);
+    cf.apply_locker_v2_sql(&account.id, &db_id)?;
+    p.done(5, "寄存表与领取会话表已就绪");
     emit(ctx, p);
 
     p.begin(6, &format!("正在确认桶 {bucket} 属于该账号"));
@@ -649,6 +653,10 @@ fn deploy_via_wrangler(
     } else {
         p.done(5, "寄存表已存在，已跳过");
     }
+    p.begin(5, "正在安装可恢复领取协议，保留已有寄存表");
+    emit(ctx, p);
+    wrangler::apply_locker_v2_sql(&project)?;
+    p.done(5, "寄存表与领取会话表已就绪");
     emit(ctx, p);
 
     p.begin(6, &format!("正在确认桶 {bucket} 属于该账号"));

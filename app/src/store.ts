@@ -7,10 +7,12 @@ import {
   getUnlockAnimStyle,
   setUnlockAnimStyleStored,
   type UnlockAnimStyle,
+  prefersReducedMotion,
 } from "./lib/prefs";
 import { forgetAgentStatus } from "./lib/agentCache";
 import { createLatestReader } from "./shared/latestRead";
 import { clearAllDrafts } from "./shared/noteDrafts";
+import { invalidateSensitiveAssets } from "./lib/secureAssets";
 
 type StatusPull = { ok: true; status: VaultStatus } | { ok: false };
 
@@ -70,7 +72,7 @@ export const useApp = create<AppStore>((set, get) => ({
     set({ unlockAnimStyle: style });
   },
   startUnlockAnim: (style?: UnlockAnimStyle) =>
-    set((s) => ({
+    !prefersReducedMotion() && set((s) => ({
       playUnlockAnim: true,
       animPreviewStyle: style,
       animPlayId: s.animPlayId + 1,
@@ -98,8 +100,14 @@ export const useApp = create<AppStore>((set, get) => ({
       },
       (result) => {
         if (!result.ok) {
+          invalidateSensitiveAssets();
           set({ loading: false, statusError: true });
           return;
+        }
+        const previous = get().status;
+        if (previous?.unlocked !== result.status.unlocked || previous?.workspaceId !== result.status.workspaceId || previous?.workspacePath !== result.status.workspacePath) {
+          invalidateSensitiveAssets();
+          clearAllDrafts();
         }
         set({
           status: result.status,
@@ -112,6 +120,7 @@ export const useApp = create<AppStore>((set, get) => ({
     );
   },
   lock: async () => {
+    invalidateSensitiveAssets();
     await api.vaultLock();
     forgetAgentStatus();
     // 内存里的备忘录草稿也要丢，否则重新解锁还能读到上一个人没保存的正文。

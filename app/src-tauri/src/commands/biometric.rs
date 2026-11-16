@@ -2,9 +2,11 @@
 
 use crate::biometric;
 use crate::commands::vault::{ensure_loaded, resolve_workspace_id};
-use crate::commands::{recover_lock, refresh_reveal_grace, AppState};
+use crate::commands::{recover_lock, AppState};
 use crate::error::{AppError, Result};
+use std::sync::{atomic::Ordering, Mutex};
 use tauri::{AppHandle, State};
+static BIOMETRIC_OPERATION: Mutex<()> = Mutex::new(());
 
 #[tauri::command(async)]
 pub fn biometric_status(app: AppHandle, state: State<'_, AppState>) -> biometric::BiometricStatus {
@@ -17,24 +19,40 @@ pub fn biometric_status(app: AppHandle, state: State<'_, AppState>) -> biometric
 }
 
 #[tauri::command(async)]
-pub fn biometric_enable(app: AppHandle, state: State<'_, AppState>, password: String) -> Result<()> {
+pub fn biometric_enable(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    password: String,
+) -> Result<()> {
+    let _operation = recover_lock(&BIOMETRIC_OPERATION);
+    let password = zeroize::Zeroizing::new(password);
     biometric::bind_window(&app);
     ensure_loaded(&state)?;
-    let (workspace_id, mk) = {
+    let (auth_vault, epoch) = {
         let vault = recover_lock(&state.vault);
         let v = vault.as_ref().ok_or(AppError::Locked)?;
         if !v.is_unlocked() {
             return Err(AppError::Locked);
         }
         v.verify_password(&password)?;
-        (v.workspace_id().to_string(), v.master_key()?.clone())
+        (v.clone(), state.session_epoch.load(Ordering::SeqCst))
     };
     let method = {
         let cfg = recover_lock(&state.config);
         crate::app_config::clamp_biometric_method(&cfg.biometric_method)
     };
-    biometric::enable(&workspace_id, &mk, &method)?;
+    biometric::enable(&auth_vault, &method)?;
     let mut cfg = recover_lock(&state.config);
+    let guard = recover_lock(&state.vault);
+    if state.session_epoch.load(Ordering::SeqCst) != epoch
+        || !auth_vault.is_unlocked()
+        || !guard
+            .as_ref()
+            .is_some_and(|v| v.is_unlocked() && v.workspace_id() == auth_vault.workspace_id())
+    {
+        let _ = biometric::disable();
+        return Err(AppError::Locked);
+    }
     cfg.biometric_unlock_enabled = true;
     cfg.biometric_reveal_enabled = true;
     cfg.biometric_method = method;
@@ -43,6 +61,7 @@ pub fn biometric_enable(app: AppHandle, state: State<'_, AppState>, password: St
 
 #[tauri::command(async)]
 pub fn biometric_disable(state: State<'_, AppState>) -> Result<()> {
+    let _operation = recover_lock(&BIOMETRIC_OPERATION);
     biometric::disable()?;
     let mut cfg = recover_lock(&state.config);
     cfg.biometric_unlock_enabled = false;
@@ -51,14 +70,16 @@ pub fn biometric_disable(state: State<'_, AppState>) -> Result<()> {
 
 #[tauri::command(async)]
 pub fn reveal_authorize_biometric(app: AppHandle, state: State<'_, AppState>) -> Result<()> {
+    let _operation = recover_lock(&BIOMETRIC_OPERATION);
     biometric::bind_window(&app);
-    {
+    let epoch = {
         let vault = recover_lock(&state.vault);
         let v = vault.as_ref().ok_or(AppError::Locked)?;
         if !v.is_unlocked() {
             return Err(AppError::Locked);
         }
-    }
+        state.session_epoch.load(Ordering::SeqCst)
+    };
     let (enabled, reveal_enabled) = {
         let cfg = recover_lock(&state.config);
         (cfg.biometric_unlock_enabled, cfg.biometric_reveal_enabled)
@@ -71,7 +92,20 @@ pub fn reveal_authorize_biometric(app: AppHandle, state: State<'_, AppState>) ->
         return Err(AppError::BiometricStale);
     }
     biometric::verify_presence("确认查看敏感信息")?;
-    refresh_reveal_grace(&state);
+    let minutes = recover_lock(&state.config).reveal_grace_minutes;
+    let vault = recover_lock(&state.vault);
+    if state.session_epoch.load(Ordering::SeqCst) != epoch
+        || !vault
+            .as_ref()
+            .is_some_and(|v| v.is_unlocked() && v.workspace_id() == workspace_id)
+    {
+        return Err(AppError::Locked);
+    }
+    *recover_lock(&state.reveal_grace) = if minutes > 0 {
+        Some(std::time::Instant::now() + std::time::Duration::from_secs(u64::from(minutes) * 60))
+    } else {
+        None
+    };
     Ok(())
 }
 

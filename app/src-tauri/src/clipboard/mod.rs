@@ -27,6 +27,9 @@ mod ios;
 #[cfg(target_os = "android")]
 struct ClipboardHandle<R: Runtime>(tauri::plugin::PluginHandle<R>);
 
+#[cfg(target_os = "android")]
+static ANDROID_CLEAR: std::sync::OnceLock<Box<dyn Fn() -> Result<(), String> + Send + Sync>> = std::sync::OnceLock::new();
+
 /// 注册 Android 原生剪贴板插件。桌面端为空插件。
 pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("app-clipboard")
@@ -34,6 +37,11 @@ pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
             #[cfg(target_os = "android")]
             {
                 let handle = api.register_android_plugin("com.jeck.gitkeymaster", "ClipboardPlugin")?;
+                let clear_handle = handle.clone();
+                let _ = ANDROID_CLEAR.set(Box::new(move || {
+                    clear_handle.run_mobile_plugin::<()>("clear", ())
+                        .map_err(|e| format!("清空系统剪贴板失败：{e}"))
+                }));
                 app.manage(ClipboardHandle(handle));
             }
             #[cfg(not(target_os = "android"))]
@@ -46,15 +54,15 @@ pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
 }
 
 #[cfg(target_os = "android")]
-pub fn write_android(app: &AppHandle, text: &str) -> Result<WriteOutcome, String> {
+pub fn write_android(app: &AppHandle, text: &str, secret: bool, clear_seconds: u32) -> Result<WriteOutcome, String> {
     let handle = app.state::<ClipboardHandle<tauri::Wry>>();
     handle
         .0
-        .run_mobile_plugin::<()>("writeText", serde_json::json!({ "text": text }))
+        .run_mobile_plugin::<()>("writeText", serde_json::json!({ "text": text, "secret": secret, "clearSeconds": clear_seconds }))
         .map_err(|e| format!("写入系统剪贴板失败：{e}"))?;
     remember_write(text, None);
     Ok(WriteOutcome {
-        excluded: false,
+        excluded: secret,
         fallback: false,
     })
 }
@@ -203,6 +211,9 @@ pub fn write(text: &str, secret: bool) -> Result<WriteOutcome, String> {
 pub fn clear_if_ours() -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
+        if let Some(clear) = ANDROID_CLEAR.get() {
+            clear()?;
+        }
         forget_write();
         return Ok(());
     }

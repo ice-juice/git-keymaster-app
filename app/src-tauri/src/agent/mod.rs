@@ -285,6 +285,9 @@ pub fn load_key(v: &Vault, env: &AgentEnv, key_id: &str) -> Result<()> {
 }
 
 fn add_private_key(env: &AgentEnv, pem: &[u8]) -> Result<()> {
+    // SSH 授权跟随 agent 生命周期，独立于保险库自动锁定。
+    // 不强加短期 -t：开发者在其他应用工作时无法靠保险库活动续期，
+    // 这会让正常的 fetch/push 每隔 15 分钟失去身份。撤销走显式卸载。
     let os = crate::ssh::toolchain::host_os();
     let (err, code) = if prefers_file_add_for(os) {
         add_via_tempfile(env, pem)?
@@ -333,15 +336,12 @@ fn write_secret_file(path: &Path, pem: &[u8]) -> Result<()> {
             .create_new(true)
             .open(path)
             .map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
-        f.write_all(pem)
-            .map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
-        drop(f);
         // Unix 分支有 0600，Windows 分支原先什么都不做，明文私钥就这么带着
         // 继承来的 ACL 躺在 TEMP 里等 ssh-add 读完。这里补上同等的收权。
         use crate::platform::PlatformOps;
-        if let Err(e) = crate::platform::current().secure_key_file(path) {
-            log::warn!("收紧临时私钥权限失败 {}：{e}", path.display());
-        }
+        crate::platform::current().secure_key_file(path)?;
+        f.write_all(pem)
+            .map_err(|e| AppError::Io(format!("写入临时私钥失败：{e}")))?;
     }
     Ok(())
 }
@@ -964,6 +964,68 @@ fn extract_env(line: &str, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uses a separate socket and disposable keys; never touches the user's agent.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "requires local Git OpenSSH; starts an isolated test agent"]
+    fn native_reload_removes_old_expiry_and_preserves_signing() {
+        use std::process::{Child, Command, Stdio};
+        struct TestAgent {
+            child: Child,
+            dir: PathBuf,
+        }
+        impl Drop for TestAgent {
+            fn drop(&mut self) {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                let _ = std::fs::remove_dir_all(&self.dir);
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("gam-agent-test-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&dir).unwrap();
+        let sock = to_msys_sock_path(&dir.join("agent.sock"));
+        let mut cmd = Command::new(git_ssh_agent().expect("Git ssh-agent required"));
+        cmd.args(["-D", "-a", &sock])
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        sys::hide_console(&mut cmd);
+        let _agent = TestAgent { child: cmd.spawn().unwrap(), dir: dir.clone() };
+        let env = AgentEnv {
+            auth_sock: Some(sock),
+            ssh_add: Some(git_ssh_add().unwrap().display().to_string()),
+            ..AgentEnv::default()
+        };
+        let start = std::time::Instant::now();
+        loop {
+            if list(&env).is_ok() { break; }
+            assert!(start.elapsed() < Duration::from_secs(10), "test agent did not start");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        for via_file in [false, true] {
+            let key = ssh_key::PrivateKey::random(&mut rand_core::OsRng, ssh_key::Algorithm::Ed25519).unwrap();
+            let pem = key.to_openssh(ssh_key::LineEnding::LF).unwrap();
+            let public = key.public_key().to_openssh().unwrap();
+            let public_path = dir.join("test.pub");
+            std::fs::write(&public_path, &public).unwrap();
+            let (_, err, code) = run_ssh_add(&env, &["-t", "1", "-"], Some(pem.as_bytes()), SSH_ADD_MUTATE_TIMEOUT).unwrap();
+            assert_eq!(code, 0, "{err}");
+            if via_file {
+                let (err, code) = add_via_tempfile(&env, pem.as_bytes()).unwrap();
+                assert_eq!(code, 0, "{err}");
+                assert!(!err.to_ascii_lowercase().contains("lifetime"), "unexpected expiry: {err}");
+            } else {
+                add_private_key(&env, pem.as_bytes()).unwrap();
+            }
+            drop(pem);
+            drop(key);
+            std::thread::sleep(Duration::from_secs(2));
+            assert_eq!(list(&env).unwrap().len(), 1, "old expiry must be removed");
+            let (_, err, code) = run_ssh_add(&env, &["-T", &public_path.display().to_string()], None, SSH_ADD_MUTATE_TIMEOUT).unwrap();
+            assert_eq!(code, 0, "agent must still sign after source key is dropped: {err}");
+            unload_public(&env, &public).unwrap();
+            assert!(list(&env).unwrap().is_empty(), "manual revocation must still work");
+        }
+    }
 
     fn rec(id: &str, name: &str, fp: &str) -> KeyRecord {
         KeyRecord {

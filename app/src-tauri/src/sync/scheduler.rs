@@ -1,17 +1,15 @@
 //! 进程级云同步。
 //!
 //! 真·首次（配置里 `initial_cloud_sync_done == false`）解锁后后台强制拉一次，不锁界面。
-//! 之后按持久化的真实时钟到期，先拉后推。锁定、托盘、锁屏都不停这条循环。
-//! 界面锁定会清掉 Vault 里的主密钥；这里另留一份进程级副本，后台仍能同步。
+//! 之后按持久化的真实时钟到期，先拉后推。只有已解锁会话允许解密同步。
+//! Vault 克隆共享可撤销密钥；锁定立即撤销，不保留后台主密钥副本。
 
 use crate::commands::AppState;
 use crate::error::{AppError, Result};
 use crate::sync::engine::{self, SyncResult};
 use crate::sync::s3::{S3Client, S3Config};
-use crate::vault::crypto::MasterKey;
 use crate::vault::Vault;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
@@ -93,11 +91,7 @@ fn background_sync_enabled(state: &AppState) -> bool {
     if minutes == 0 || !mobile {
         return false;
     }
-    let has_key = state
-        .sync_key
-        .lock()
-        .ok()
-        .is_some_and(|slot| slot.is_some());
+    let has_key = crate::commands::vault_is_unlocked(state);
     if !has_key {
         return false;
     }
@@ -123,7 +117,11 @@ fn should_force_startup_sync(state: &AppState) -> bool {
     cloud_secret_usable(state, &sync_config, &workspace)
 }
 
-fn cloud_secret_usable(state: &AppState, sync_config: &S3Config, workspace: &Option<String>) -> bool {
+fn cloud_secret_usable(
+    state: &AppState,
+    sync_config: &S3Config,
+    workspace: &Option<String>,
+) -> bool {
     if sync_config.has_usable_secret() {
         return true;
     }
@@ -164,27 +162,12 @@ pub fn kick_full_sync(app: AppHandle) {
     });
 }
 
-pub fn capture_sync_key_from_state(state: &AppState) {
-    let bytes = {
-        let Ok(guard) = state.vault.lock() else {
-            return;
-        };
-        let Some(v) = guard.as_ref().filter(|v| v.is_unlocked()) else {
-            return;
-        };
-        v.master_key_bytes().ok()
-    };
-    if let Some(bytes) = bytes {
-        if let Ok(mut slot) = state.sync_key.lock() {
-            *slot = Some(MasterKey::from_bytes(bytes));
-        }
-    }
-}
+// Kept as compatibility hooks for callers; there is deliberately no independent MK cache.
+pub fn capture_sync_key_from_state(_state: &AppState) {}
 
 pub fn clear_sync_key(state: &AppState) {
-    if let Ok(mut slot) = state.sync_key.lock() {
-        *slot = None;
-    }
+    state.pending_edit_publish.store(false, Ordering::SeqCst);
+    state.pending_full_sync.store(false, Ordering::SeqCst);
 }
 
 /// 间隔是否到点。`minutes == 0` 表示用户关了定时同步。
@@ -360,7 +343,10 @@ fn mark_initial_cloud_sync_done(state: &AppState) {
 
 fn run_locked(app: &AppHandle, state: &AppState, trigger: &str) -> Result<Option<SyncResult>> {
     let (sync_config, app_cfg) = {
-        let cfg = state.config.lock().map_err(|_| AppError::Other("配置锁损坏".into()))?;
+        let cfg = state
+            .config
+            .lock()
+            .map_err(|_| AppError::Other("配置锁损坏".into()))?;
         (cfg.cloud_sync.clone(), cfg.clone())
     };
     let Some(mut sync_config) = sync_config else {
@@ -401,6 +387,9 @@ fn run_locked(app: &AppHandle, state: &AppState, trigger: &str) -> Result<Option
         // startup / periodic / config / manual：都是先拉再推，不因「云端已有对象」跳过本地变更。
         engine::pull_then_maybe_push_with(&vault, &client, blob_scope, Some(&progress))?
     };
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
     crate::commands::sync::remember_view_after_sync(&vault, &client);
     if let Ok(mut last) = state.last_periodic_sync.lock() {
         *last = Some(Instant::now());
@@ -408,22 +397,10 @@ fn run_locked(app: &AppHandle, state: &AppState, trigger: &str) -> Result<Option
     Ok(Some(result))
 }
 
-/// 界面已解锁就用内存里的 Vault；锁定后用进程级主密钥打开一份副本，不把界面解锁。
-fn vault_for_sync(state: &AppState, workspace_path: &Option<String>) -> Result<Option<Vault>> {
-    if let Ok(guard) = state.vault.lock() {
-        if let Some(v) = guard.as_ref().filter(|v| v.is_unlocked()) {
-            return Ok(Some(v.clone()));
-        }
-    }
-    let Some(path) = workspace_path.as_ref().filter(|p| !p.trim().is_empty()) else {
-        return Ok(None);
-    };
-    let Some(mk) = state.sync_key.lock().ok().and_then(|g| g.clone()) else {
-        return Ok(None);
-    };
-    let mut vault = Vault::load(Path::new(path))?;
-    vault.unlock_with_master_key(mk)?;
-    Ok(Some(vault))
+/// Only clone the current revocable session. Never reopen a locked workspace.
+fn vault_for_sync(state: &AppState, _workspace_path: &Option<String>) -> Result<Option<Vault>> {
+    let guard = crate::commands::recover_lock(&state.vault);
+    Ok(guard.as_ref().filter(|v| v.is_unlocked()).cloned())
 }
 
 fn persist_sync_note(state: &AppState, at: &str, message: &str) {

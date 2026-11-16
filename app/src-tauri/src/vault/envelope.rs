@@ -12,6 +12,7 @@ use crate::vault::recovery::RecoverySecret;
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use hkdf::Hkdf;
 use sha2::Sha256;
+use zeroize::Zeroizing;
 
 const RECOVERY_HKDF_INFO: &[u8] = b"gam-recovery-kek-v1";
 const BIOMETRIC_HKDF_INFO: &[u8] = b"gam-biometric-kek-v1";
@@ -21,7 +22,8 @@ fn b64(bytes: &[u8]) -> String {
 }
 
 fn unb64(s: &str) -> Result<Vec<u8>> {
-    B64.decode(s).map_err(|_| AppError::Serde("base64 解码失败".into()))
+    B64.decode(s)
+        .map_err(|_| AppError::Serde("base64 解码失败".into()))
 }
 
 fn to_nonce(v: &[u8]) -> Result<[u8; XNONCE_LEN]> {
@@ -45,7 +47,7 @@ fn recovery_kek(secret: &RecoverySecret, salt: &[u8]) -> [u8; KEY_LEN] {
 /// 用访问密码包裹 MK。
 pub fn wrap_with_password(mk: &MasterKey, password: &str, kdf: &KdfParams) -> Result<Envelope> {
     let salt = new_salt();
-    let kek = derive_kek(password.as_bytes(), &salt, kdf)?;
+    let kek = Zeroizing::new(derive_kek(password.as_bytes(), &salt, kdf)?);
     let nonce = new_nonce();
     let wrapped = aead_encrypt(&kek, &nonce, mk.as_bytes())?;
     Ok(Envelope {
@@ -61,22 +63,23 @@ pub fn unwrap_with_password(env: &Envelope, password: &str, kdf: &KdfParams) -> 
     if salt.len() != SALT_LEN {
         return Err(AppError::Crypto);
     }
-    let kek = derive_kek(password.as_bytes(), &salt, kdf)?;
+    let kek = Zeroizing::new(derive_kek(password.as_bytes(), &salt, kdf)?);
     let nonce = to_nonce(&unb64(&env.nonce)?)?;
     let wrapped = unb64(&env.wrapped_key)?;
-    let mk_bytes = aead_decrypt(&kek, &nonce, &wrapped).map_err(|_| AppError::BadPassword)?;
+    let mk_bytes =
+        Zeroizing::new(aead_decrypt(&kek, &nonce, &wrapped).map_err(|_| AppError::BadPassword)?);
     if mk_bytes.len() != KEY_LEN {
         return Err(AppError::Crypto);
     }
-    let mut arr = [0u8; KEY_LEN];
+    let mut arr = Zeroizing::new([0u8; KEY_LEN]);
     arr.copy_from_slice(&mk_bytes);
-    Ok(MasterKey::from_bytes(arr))
+    Ok(MasterKey::from_bytes(*arr))
 }
 
 /// 用恢复密钥包裹 MK。
 pub fn wrap_with_recovery(mk: &MasterKey, secret: &RecoverySecret) -> Result<Envelope> {
     let salt = new_salt();
-    let kek = recovery_kek(secret, &salt);
+    let kek = Zeroizing::new(recovery_kek(secret, &salt));
     let nonce = new_nonce();
     let wrapped = aead_encrypt(&kek, &nonce, mk.as_bytes())?;
     Ok(Envelope {
@@ -89,17 +92,19 @@ pub fn wrap_with_recovery(mk: &MasterKey, secret: &RecoverySecret) -> Result<Env
 /// 用恢复密钥解开 MK。
 pub fn unwrap_with_recovery(env: &Envelope, secret: &RecoverySecret) -> Result<MasterKey> {
     let salt = unb64(&env.salt)?;
-    let kek = recovery_kek(secret, &salt);
+    let kek = Zeroizing::new(recovery_kek(secret, &salt));
     let nonce = to_nonce(&unb64(&env.nonce)?)?;
     let wrapped = unb64(&env.wrapped_key)?;
-    let mk_bytes = aead_decrypt(&kek, &nonce, &wrapped)
-        .map_err(|_| AppError::BadRecoveryKey("无法用该恢复密钥解开数据".into()))?;
+    let mk_bytes = Zeroizing::new(
+        aead_decrypt(&kek, &nonce, &wrapped)
+            .map_err(|_| AppError::BadRecoveryKey("无法用该恢复密钥解开数据".into()))?,
+    );
     if mk_bytes.len() != KEY_LEN {
         return Err(AppError::Crypto);
     }
-    let mut arr = [0u8; KEY_LEN];
+    let mut arr = Zeroizing::new([0u8; KEY_LEN]);
     arr.copy_from_slice(&mk_bytes);
-    Ok(MasterKey::from_bytes(arr))
+    Ok(MasterKey::from_bytes(*arr))
 }
 
 fn biometric_kek(raw: &[u8], salt: &[u8]) -> [u8; KEY_LEN] {
@@ -116,7 +121,7 @@ pub fn wrap_with_biometric(mk: &MasterKey, raw: &[u8]) -> Result<Envelope> {
         return Err(AppError::Crypto);
     }
     let salt = new_salt();
-    let kek = biometric_kek(raw, &salt);
+    let kek = Zeroizing::new(biometric_kek(raw, &salt));
     let nonce = new_nonce();
     let wrapped = aead_encrypt(&kek, &nonce, mk.as_bytes())?;
     Ok(Envelope {
@@ -132,16 +137,17 @@ pub fn unwrap_with_biometric(env: &Envelope, raw: &[u8]) -> Result<MasterKey> {
     if salt.len() != SALT_LEN {
         return Err(AppError::Crypto);
     }
-    let kek = biometric_kek(raw, &salt);
+    let kek = Zeroizing::new(biometric_kek(raw, &salt));
     let nonce = to_nonce(&unb64(&env.nonce)?)?;
     let wrapped = unb64(&env.wrapped_key)?;
-    let mk_bytes = aead_decrypt(&kek, &nonce, &wrapped).map_err(|_| AppError::BiometricStale)?;
+    let mk_bytes =
+        Zeroizing::new(aead_decrypt(&kek, &nonce, &wrapped).map_err(|_| AppError::BiometricStale)?);
     if mk_bytes.len() != KEY_LEN {
         return Err(AppError::Crypto);
     }
-    let mut arr = [0u8; KEY_LEN];
+    let mut arr = Zeroizing::new([0u8; KEY_LEN]);
     arr.copy_from_slice(&mk_bytes);
-    Ok(MasterKey::from_bytes(arr))
+    Ok(MasterKey::from_bytes(*arr))
 }
 
 #[cfg(test)]

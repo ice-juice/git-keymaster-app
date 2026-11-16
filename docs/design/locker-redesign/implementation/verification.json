@@ -1,0 +1,25 @@
+{
+  "date": "2026-11-15T12:21:19.6609197+08:00",
+  "branch": "dev",
+  "result": "local-acceptance-passed",
+  "checks": {
+    "frontendUnitTests": 178,
+    "rsa4096": "passed in preceding full run; skipped in final serial repeat",
+    "workerTests": 35,
+    "rustSerialPassed": 492,
+    "lockerRustTests": 15,
+    "native": "final packaged EXE isolated startup, locked native IPC and actual WebView2 synthetic UI passed",
+    "reactUiGroups": 16
+  },
+  "package": "release/windows/1.12.1-locker-20261115-1219",
+  "exeSha256": "C41AA62CE80FAB8F3C4C2A9CDE57B2DE57B6021F83B1CB0EB91B54389F313A43",
+  "installerSha256": "41BB3CCD3DB375DBC3D44CA547E2E7DFBFCD306EC07D6B1AF4C8F17ADC49CFCD",
+  "workerSha256": "4F5EACCF20393709ADA2084773C0DFBB3C218F75DE7ED7552189E8A751D01938",
+  "limits": [
+    "No real cloud deployment or user vault/credentials used",
+    "React/native UI uses synthetic IPC; Rust and Worker cover real local protocol and files",
+    "Concurrent security work was preserved; test results refer to logged source snapshots",
+    "Browser delivery cannot prove OS file persistence",
+    "Only-storage mode cannot promise offline server cleanup"
+  ]
+}

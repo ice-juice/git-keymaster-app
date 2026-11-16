@@ -1,0 +1,12 @@
+﻿{
+    "passed":  true,
+    "beforeCaptureAffinity":  0,
+    "afterCaptureAffinity":  17,
+    "checkedDraftDidNotApply":  true,
+    "completed":  true,
+    "uiAcknowledged":  true,
+    "autoLockMinutes":  5,
+    "clipboardClearSeconds":  20,
+    "revealGraceMinutes":  1,
+    "workspaceCreated":  false
+}

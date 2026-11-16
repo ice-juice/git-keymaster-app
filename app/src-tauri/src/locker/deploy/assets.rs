@@ -2,6 +2,7 @@
 
 pub const WORKER_SCRIPT: &str = include_str!("../../../assets/file-locker.js");
 pub const LOCKER_MIGRATION_SQL: &str = include_str!("../../../assets/0001_locker.sql");
+pub const LOCKER_V2_MIGRATION_SQL: &str = include_str!("../../../assets/0002_locker_v2.sql");
 const COMPATIBILITY_DATE_RAW: &str = include_str!("../../../assets/compatibility_date.txt");
 
 pub const SCRIPT_NAME: &str = "file-locker";

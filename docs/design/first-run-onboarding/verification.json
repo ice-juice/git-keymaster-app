@@ -1,0 +1,32 @@
+{
+  "passed": true,
+  "viewportWidths": [
+    1068,
+    736,
+    390,
+    320
+  ],
+  "themes": [
+    "light",
+    "dark",
+    "navy"
+  ],
+  "checked": [
+    "wizard navigation",
+    "draft capture state",
+    "preserved back navigation",
+    "save on/off",
+    "skip retains initial off",
+    "disclosures",
+    "theme selection",
+    "dark text contrast",
+    "motion preview",
+    "reduced motion",
+    "carousel",
+    "narrow layout",
+    "hover",
+    "keyboard activation",
+    "touch interaction"
+  ],
+  "errors": []
+}

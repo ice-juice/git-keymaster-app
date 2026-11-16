@@ -16,6 +16,15 @@ pub fn normalize_worker_url(raw: &str) -> Result<String> {
     if url.host_str().map(str::is_empty).unwrap_or(true) {
         return Err(AppError::Invalid("分享服务地址缺少主机名".into()));
     }
+    if !url.username().is_empty() || url.password().is_some() || url.query().is_some() || url.fragment().is_some() {
+        return Err(AppError::Invalid("服务地址不能包含账号密码、查询参数或解密片段".into()));
+    }
+    let host = url.host_str().unwrap_or_default().trim_matches(['[', ']']);
+    let loopback = host.eq_ignore_ascii_case("localhost")
+        || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback());
+    if url.scheme() != "https" && !loopback {
+        return Err(AppError::Invalid("取件服务必须使用 HTTPS；仅本机测试允许 HTTP".into()));
+    }
     Ok(trimmed.trim_end_matches('/').to_string())
 }
 
@@ -58,6 +67,20 @@ mod tests {
             normalize_worker_url(" http://127.0.0.1:8787/app/ ").unwrap(),
             "http://127.0.0.1:8787/app"
         );
+    }
+
+    #[test]
+    fn service_url_does_not_transport_credentials_or_fragment_secrets() {
+        for value in [
+            "https://user:password@example.com",
+            "https://example.com/?token=secret",
+            "https://example.com/#content-key",
+            "http://example.com",
+        ] {
+            assert!(normalize_worker_url(value).is_err());
+        }
+        assert!(normalize_worker_url("http://[::1]:8787").is_ok());
+        assert!(normalize_worker_url("https://example.com/proxy").is_ok());
     }
 
     #[test]

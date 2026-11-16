@@ -21,6 +21,7 @@ use crate::error::{AppError, Result};
 use crypto::MasterKey;
 use header::{Envelopes, KdfParams, VaultHeader, VAULT_VERSION};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 pub const VAULT_FILE: &str = "vault.json";
 
@@ -30,7 +31,8 @@ pub struct Vault {
     root: PathBuf,
     header: VaultHeader,
     /// Some 表示已解锁；MasterKey 在 Drop 时清零。
-    mk: Option<MasterKey>,
+    // Clones share one revocable key slot; background jobs cannot retain a second MK.
+    mk: Arc<Mutex<Option<MasterKey>>>,
 }
 
 impl Vault {
@@ -38,7 +40,10 @@ impl Vault {
         &self.root
     }
     pub fn is_unlocked(&self) -> bool {
-        self.mk.is_some()
+        self.mk.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+    pub fn same_session(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.mk, &other.mk)
     }
     pub fn workspace_id(&self) -> &str {
         &self.header.workspace_id
@@ -72,7 +77,9 @@ impl Vault {
         }
         std::fs::create_dir_all(root)?;
         restrict_dir_to_owner(root);
-        for sub in ["data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons", "blobs"] {
+        for sub in [
+            "data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons", "blobs",
+        ] {
             let dir = root.join(sub);
             std::fs::create_dir_all(&dir)?;
             restrict_dir_to_owner(&dir);
@@ -101,7 +108,7 @@ impl Vault {
         let vault = Vault {
             root: root.to_path_buf(),
             header,
-            mk: Some(mk),
+            mk: Arc::new(Mutex::new(Some(mk))),
         };
         vault.persist_header()?;
         Ok((vault, recovery_display))
@@ -115,13 +122,16 @@ impl Vault {
             return Err(AppError::NotInitialized);
         }
         let raw = std::fs::read_to_string(&path)?;
-        let mut header: VaultHeader = serde_json::from_str(&raw)?;
-        // 防头部被篡改成弱/非法 KDF 参数。
-        header.kdf.clamp_to_safe_bounds();
+        let header: VaultHeader = serde_json::from_str(&raw)?;
+        if header.version != VAULT_VERSION {
+            return Err(AppError::Invalid("不支持的保险库格式版本".into()));
+        }
+        // Validate KDF only when deriving a password key. Recovery remains available
+        // even for a damaged/over-budget KDF header, and no parameter is silently changed.
         Ok(Vault {
             root: root.to_path_buf(),
             header,
-            mk: None,
+            mk: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -133,7 +143,7 @@ impl Vault {
             password,
             &self.header.kdf,
         )?;
-        self.mk = Some(mk);
+        self.install_master_key(mk);
         Ok(())
     }
 
@@ -141,7 +151,7 @@ impl Vault {
     pub fn unlock_with_recovery(&mut self, recovery_input: &str) -> Result<()> {
         let secret = recovery::parse(recovery_input)?;
         let mk = envelope::unwrap_with_recovery(&self.header.envelopes.recovery, &secret)?;
-        self.mk = Some(mk);
+        self.install_master_key(mk);
         Ok(())
     }
 
@@ -195,7 +205,7 @@ impl Vault {
             self.header.envelopes.password = old_env;
             return Err(e);
         }
-        self.mk = Some(mk);
+        self.install_master_key(mk);
         Ok(Some(target))
     }
 
@@ -203,12 +213,14 @@ impl Vault {
     /// 云同步 / 代理密钥在 AppConfig 内存里，由 `lock_in_memory` 一并清掉；
     /// 这里只动主密钥，避免 Vault 反过来依赖本机配置。
     pub fn lock(&mut self) {
-        self.mk = None; // MasterKey 的 Drop 会 zeroize
+        *self.mk.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// 装上主密钥，不读业务数据。调用方应先放开保险库锁，再自行校验。
     pub fn install_master_key(&mut self, mk: MasterKey) {
-        self.mk = Some(mk);
+        self.lock();
+        // Do not reactivate a slot held by stale jobs from an earlier session.
+        self.mk = Arc::new(Mutex::new(Some(mk)));
     }
 
     /// 用已恢复的主密钥解锁，并确认能解开身份库。
@@ -237,24 +249,25 @@ impl Vault {
 
     /// 复制主密钥字节（仅用于写入本机免验证会话）。
     pub fn master_key_bytes(&self) -> Result<[u8; crypto::KEY_LEN]> {
-        Ok(*self.mk()?.as_bytes())
+        self.with_key(|mk| *mk.as_bytes())
     }
 
-    pub fn master_key(&self) -> Result<&MasterKey> {
-        self.mk()
+    pub fn master_key(&self) -> Result<MasterKey> {
+        self.with_key(Clone::clone)
     }
 
     pub fn object_name(&self, logical_path: &str) -> Result<String> {
-        Ok(self.mk()?.object_name(logical_path))
+        self.with_key(|mk| mk.object_name(logical_path))
     }
 
-    fn mk(&self) -> Result<&MasterKey> {
-        self.mk.as_ref().ok_or(AppError::Locked)
+    fn with_key<T>(&self, f: impl FnOnce(&MasterKey) -> T) -> Result<T> {
+        let guard = self.mk.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(f(guard.as_ref().ok_or(AppError::Locked)?))
     }
 
     /// 派生子密钥（需已解锁）。
     pub fn subkey(&self, label: &[u8]) -> Result<[u8; crypto::KEY_LEN]> {
-        Ok(self.mk()?.subkey(label))
+        self.with_key(|mk| mk.subkey(label))
     }
 
     /// 改访问密码：仅用新密码重新包裹 MK（毫秒级，不重加密数据）。
@@ -272,31 +285,72 @@ impl Vault {
             &self.header.kdf,
         )?;
         let new_env = envelope::wrap_with_password(&mk, new_password, &self.header.kdf)?;
-        self.header.envelopes.password = new_env;
-        self.persist_header()?;
+        let old_env = std::mem::replace(&mut self.header.envelopes.password, new_env);
+        if let Err(e) = self.persist_header() {
+            self.header.envelopes.password = old_env;
+            return Err(e);
+        }
         // 保持解锁态一致。
-        self.mk = Some(mk);
+        self.install_master_key(mk);
+        Ok(())
+    }
+
+    /// Recovery authenticates the existing MK before replacing only its password envelope.
+    pub fn reset_password_with_recovery(
+        &mut self,
+        recovery_input: &str,
+        new_password: &str,
+        target: KdfParams,
+    ) -> Result<()> {
+        let secret = recovery::parse(recovery_input)?;
+        let mk = envelope::unwrap_with_recovery(&self.header.envelopes.recovery, &secret)?;
+        target.validate()?;
+        let new_env = envelope::wrap_with_password(&mk, new_password, &target)?;
+        let old_header = self.header.clone();
+        self.header.kdf = target;
+        self.header.envelopes.password = new_env;
+        if let Err(e) = self.persist_header() {
+            self.header = old_header;
+            return Err(e);
+        }
+        self.install_master_key(mk);
         Ok(())
     }
 
     /// 轮换恢复密钥：生成新的一把并作废旧的（需已解锁）。返回新展示串。
     pub fn rotate_recovery_key(&mut self) -> Result<String> {
-        let mk = self.mk()?.clone();
+        let mk = self.master_key()?;
         let (secret, display) = recovery::generate();
         let new_env = envelope::wrap_with_recovery(&mk, &secret)?;
-        self.header.envelopes.recovery = new_env;
-        self.persist_header()?;
+        self.commit_recovery_envelope(new_env)?;
         Ok(display)
+    }
+
+    /// Prepare without changing the current recovery credential.
+    pub fn prepare_recovery_key(&self) -> Result<(header::Envelope, String)> {
+        let mk = self.master_key()?;
+        let (secret, display) = recovery::generate();
+        Ok((envelope::wrap_with_recovery(&mk, &secret)?, display))
+    }
+
+    pub fn commit_recovery_envelope(&mut self, envelope: header::Envelope) -> Result<()> {
+        if !self.is_unlocked() {
+            return Err(AppError::Locked);
+        }
+        let old = std::mem::replace(&mut self.header.envelopes.recovery, envelope);
+        if let Err(e) = self.persist_header() {
+            self.header.envelopes.recovery = old;
+            return Err(e);
+        }
+        Ok(())
     }
 
     /// 仅用于云端预览：用已解开的 MK 构造内存中的 Vault（不落盘）。
     pub fn from_header_unlocked(header: VaultHeader, mk: MasterKey) -> Self {
-        let mut header = header;
-        header.kdf.clamp_to_safe_bounds();
         Vault {
             root: PathBuf::new(),
             header,
-            mk: Some(mk),
+            mk: Arc::new(Mutex::new(Some(mk))),
         }
     }
 
@@ -316,7 +370,9 @@ impl Vault {
         }
         std::fs::create_dir_all(root)?;
         restrict_dir_to_owner(root);
-        for sub in ["data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons", "blobs"] {
+        for sub in [
+            "data", "keys", "backups", "sync", "ssh-keys", "ssh", "icons", "blobs",
+        ] {
             let dir = root.join(sub);
             std::fs::create_dir_all(&dir)?;
             restrict_dir_to_owner(&dir);
@@ -326,7 +382,7 @@ impl Vault {
         let vault = Vault {
             root: root.to_path_buf(),
             header,
-            mk: Some(mk),
+            mk: Arc::new(Mutex::new(Some(mk))),
         };
         vault.persist_header()?;
         Ok(vault)
@@ -355,15 +411,20 @@ pub fn recover_previous_if_missing(path: &Path) {
     if !bak.is_file() {
         return;
     }
-    if std::fs::rename(&bak, path).is_err() {
-        let _ = std::fs::copy(&bak, path);
+    if let Err(error) = std::fs::rename(&bak, path) {
+        log::warn!(
+            "无法原子恢复上一份文件 {}：{error}，保留恢复副本",
+            path.display()
+        );
     }
 }
 
 /// 原子写：先写临时文件，再把正本挪到 `.prev`，最后把新文件改名就位。
 /// 绝不先删除正本；安装更新中途杀进程时，至少还能从 `.prev` 找回。
 pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
-    let dir = path.parent().ok_or_else(|| AppError::Invalid("无效路径".into()))?;
+    let dir = path
+        .parent()
+        .ok_or_else(|| AppError::Invalid("无效路径".into()))?;
     std::fs::create_dir_all(dir)
         .map_err(|e| AppError::Io(format!("创建目录 {} 失败：{e}", dir.display())))?;
     let tmp = dir.join(format!(
@@ -371,7 +432,31 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
         path.file_name().and_then(|s| s.to_str()).unwrap_or("f"),
         uuid::Uuid::new_v4()
     ));
-    if let Err(e) = std::fs::write(&tmp, data) {
+    let write_tmp = || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp)?;
+        #[cfg(windows)]
+        {
+            use crate::platform::PlatformOps;
+            // The file is still empty: establish restrictive ACL before any payload is written.
+            crate::platform::current()
+                .secure_key_file(&tmp)
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::PermissionDenied, e.to_string())
+                })?;
+        }
+        file.write_all(data)?;
+        file.sync_all()
+    };
+    if let Err(e) = write_tmp() {
+        let _ = std::fs::remove_file(&tmp);
         return Err(AppError::Io(format!(
             "写入临时文件 {} 失败：{e}",
             tmp.display()
@@ -381,7 +466,7 @@ pub fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
     // 这条路径写的是 vault.json / *.enc / blobs / config.json，
     // 默认 umask 下同机其他用户可读。
     restrict_to_owner(&tmp);
-    if let Err(e) = replace_file_with_tmp(path, &tmp, data) {
+    if let Err(e) = replace_file_with_tmp(path, &tmp) {
         let _ = std::fs::remove_file(&tmp);
         return Err(AppError::Io(format!("写入 {} 失败：{e}", path.display())));
     }
@@ -427,40 +512,43 @@ fn make_writable(path: &Path) {
     }
 }
 
-fn replace_file_with_tmp(path: &Path, tmp: &Path, data: &[u8]) -> std::io::Result<()> {
+fn sync_parent(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    let _ = path;
+    Ok(())
+}
+
+fn replace_file_with_tmp(path: &Path, tmp: &Path) -> std::io::Result<()> {
     let bak = previous_path(path);
     if path.exists() {
+        if !path.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "目标不是普通文件",
+            ));
+        }
         make_writable(path);
         if bak.exists() {
             make_writable(&bak);
-            let _ = std::fs::remove_file(&bak);
+            std::fs::remove_file(&bak)?;
         }
-        if let Err(e) = rename_with_retry(path, &bak) {
-            log::warn!("无法把 {} 挪到上一份副本，改为直接覆盖：{e}", path.display());
-            make_writable(path);
-            std::fs::write(path, data)?;
-            restrict_to_owner(path);
-            let _ = std::fs::remove_file(tmp);
-            return Ok(());
-        }
+        // Fail closed: never truncate the sole good copy to work around rename errors.
+        rename_with_retry(path, &bak)?;
     }
-    match rename_with_retry(tmp, path) {
-        Ok(()) => {
-            if bak.exists() {
-                make_writable(&bak);
-                let _ = std::fs::remove_file(&bak);
+    match rename_with_retry(tmp, path).and_then(|_| sync_parent(path)) {
+        Ok(()) => Ok(()), // Keep one previous complete version for crash recovery.
+        Err(error) => {
+            if path.is_file() {
+                let _ = rename_with_retry(path, tmp);
             }
-            Ok(())
-        }
-        Err(_) => {
-            if !path.exists() && bak.exists() {
-                let _ = std::fs::rename(&bak, path);
+            if !path.exists() && bak.is_file() {
+                let _ = rename_with_retry(&bak, path);
+                let _ = sync_parent(path);
             }
-            make_writable(path);
-            std::fs::write(path, data)?;
-            restrict_to_owner(path);
-            let _ = std::fs::remove_file(tmp);
-            Ok(())
+            Err(error)
         }
     }
 }
@@ -501,6 +589,77 @@ mod tests {
     }
 
     #[test]
+    fn locking_revokes_all_clones_and_unlock_does_not_reactivate_them() {
+        let root = temp_root();
+        let (mut vault, _) = Vault::init(&root, "pw", fast_kdf()).unwrap();
+        let old_job = vault.clone();
+        assert!(old_job.subkey(crypto::LABEL_METADATA).is_ok());
+        vault.lock();
+        assert!(!old_job.is_unlocked());
+        assert!(old_job.master_key_bytes().is_err());
+        vault.unlock_with_password("pw").unwrap();
+        assert!(vault.is_unlocked());
+        assert!(!old_job.is_unlocked());
+        assert!(old_job.subkey(crypto::LABEL_METADATA).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_recovery_is_not_live_until_commit() {
+        let root = temp_root();
+        let (mut vault, old_code) = Vault::init(&root, "pw", fast_kdf()).unwrap();
+        let (pending, new_code) = vault.prepare_recovery_key().unwrap();
+        let mut disk = Vault::load(&root).unwrap();
+        disk.unlock_with_recovery(&old_code).unwrap();
+        assert!(disk.unlock_with_recovery(&new_code).is_err());
+        vault.commit_recovery_envelope(pending).unwrap();
+        let mut disk = Vault::load(&root).unwrap();
+        disk.unlock_with_recovery(&new_code).unwrap();
+        assert!(disk.unlock_with_recovery(&old_code).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_password_reset_authenticates_before_mutation() {
+        let root = temp_root();
+        let (mut vault, recovery) = Vault::init(&root, "old-password", fast_kdf()).unwrap();
+        let original = std::fs::read(root.join(VAULT_FILE)).unwrap();
+        let (_, wrong_recovery) = recovery::generate();
+        assert!(vault
+            .reset_password_with_recovery(&wrong_recovery, "new-password", fast_kdf())
+            .is_err());
+        assert_eq!(std::fs::read(root.join(VAULT_FILE)).unwrap(), original);
+        let old_clone = vault.clone();
+        vault
+            .reset_password_with_recovery(&recovery, "new-password", fast_kdf())
+            .unwrap();
+        assert!(!old_clone.is_unlocked());
+        let mut disk = Vault::load(&root).unwrap();
+        disk.unlock_with_password("new-password").unwrap();
+        assert!(disk.verify_password("old-password").is_err());
+        disk.unlock_with_recovery(&recovery).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_credential_persistence_keeps_memory_and_disk_unchanged() {
+        let root = temp_root();
+        let (mut vault, old_code) = Vault::init(&root, "pw", fast_kdf()).unwrap();
+        let original = std::fs::read(root.join(VAULT_FILE)).unwrap();
+        // Deterministic storage fault: the reserved previous-file path is a directory.
+        std::fs::create_dir(previous_path(&root.join(VAULT_FILE))).unwrap();
+        assert!(vault.change_password("pw", "new-password").is_err());
+        vault.verify_password("pw").unwrap();
+        assert!(vault.verify_password("new-password").is_err());
+        let (pending, _) = vault.prepare_recovery_key().unwrap();
+        assert!(vault.commit_recovery_envelope(pending).is_err());
+        assert_eq!(std::fs::read(root.join(VAULT_FILE)).unwrap(), original);
+        let mut disk = Vault::load(&root).unwrap();
+        disk.unlock_with_recovery(&old_code).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn atomic_write_replaces_existing_and_readonly_file() {
         let dir = temp_root();
         std::fs::create_dir_all(&dir).unwrap();
@@ -514,7 +673,11 @@ mod tests {
         std::fs::set_permissions(&path, perms).unwrap();
         atomic_write(&path, b"newer").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"newer");
-        assert!(!previous_path(&path).exists(), "写成功后不应留下上一份");
+        assert_eq!(
+            std::fs::read(previous_path(&path)).unwrap(),
+            b"new",
+            "保留上一个完整版本"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -569,7 +732,10 @@ mod tests {
         assert_eq!(v.kdf_params().mem_kib, heavy.mem_kib);
 
         let target = fast_kdf();
-        let applied = v.relax_kdf("pw", target.clone()).unwrap().expect("应发生降参");
+        let applied = v
+            .relax_kdf("pw", target.clone())
+            .unwrap()
+            .expect("应发生降参");
         assert_eq!(applied.mem_kib, target.mem_kib);
         assert_eq!(v.kdf_params().mem_kib, target.mem_kib);
         assert!(v.is_unlocked(), "降参后应保持解锁态");
@@ -599,7 +765,10 @@ mod tests {
         );
         // 目标本身还超出移动端上限 → 拒绝，免得白降一场仍打不开。
         let still_heavy = KdfParams::new(crate::vault::kdf::MEM_CEIL_KIB, ITERS_FLOOR, 1);
-        assert_eq!(v.relax_kdf("pw", still_heavy).unwrap_err().code(), "INVALID");
+        assert_eq!(
+            v.relax_kdf("pw", still_heavy).unwrap_err().code(),
+            "INVALID"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -685,8 +854,14 @@ mod tests {
         assert_ne!(old_rec, new_rec);
 
         let mut v2 = Vault::load(&root).unwrap();
-        assert!(v2.unlock_with_recovery(&old_rec).is_err(), "旧恢复密钥应失效");
-        assert!(v2.unlock_with_recovery(&new_rec).is_ok(), "新恢复密钥应可用");
+        assert!(
+            v2.unlock_with_recovery(&old_rec).is_err(),
+            "旧恢复密钥应失效"
+        );
+        assert!(
+            v2.unlock_with_recovery(&new_rec).is_ok(),
+            "新恢复密钥应可用"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -716,7 +891,10 @@ mod tests {
         let root = temp_root();
         let (v, _) = Vault::init(&root, "access-pw", fast_kdf()).unwrap();
         assert!(v.verify_password("").is_err(), "空密码不得通过二次验证");
-        assert!(v.verify_password("nope").is_err(), "错误密码不得通过二次验证");
+        assert!(
+            v.verify_password("nope").is_err(),
+            "错误密码不得通过二次验证"
+        );
         v.verify_password("access-pw").unwrap();
         std::fs::remove_dir_all(&root).ok();
     }
@@ -733,7 +911,10 @@ mod tests {
         let dest = temp_root();
         let restored = Vault::restore(&dest, header, mk, "new-pw").unwrap();
         assert_eq!(restored.workspace_id(), ws);
-        assert_eq!(restored.subkey(crypto::LABEL_SYNC_OBJECT).unwrap(), sync_key);
+        assert_eq!(
+            restored.subkey(crypto::LABEL_SYNC_OBJECT).unwrap(),
+            sync_key
+        );
 
         let mut by_pw = Vault::load(&dest).unwrap();
         assert!(by_pw.unlock_with_password("old-pw").is_err());

@@ -1,0 +1,27 @@
+
+running 23 tests
+test store::blob::tests::default_limit_is_100_mib ... ok
+test store::blob::tests::content_addressed_dedup ... ok
+test store::blob::tests::chunked_roundtrip_and_plaintext_absent ... ok
+test store::blob::tests::gc_does_not_delete_inflight_or_recoverable_blobs ... ok
+test store::blob::tests::empty_blob_roundtrip ... ok
+test store::blob::tests::rejects_over_size_limit ... ok
+test sync::engine::tests::collect_blob_logical_paths_from_metadata ... ok
+test sync::engine::tests::cloud_vault_header_roundtrip_and_bare_fallback ... ok
+test sync::engine::tests::empty_local_ssh_is_not_uploadable ... ok
+test sync::engine::tests::immutable_object_names_change_with_content_and_reject_mixed_generation ... ok
+test sync::engine::tests::local_sync_anchor_rejects_replay_and_forks_but_allows_upgrade_and_next ... ok
+test sync::engine::tests::manifest_anchor_is_independent_of_hashmap_insertion_order ... ok
+test sync::engine::tests::prune_daily_first_is_earliest_of_that_day ... ok
+test sync::engine::tests::prune_keeps_recent_and_daily_first ... ok
+test sync::engine::tests::qr_history_sync_payload_is_encrypted ... ok
+test sync::engine::tests::remote_presence_does_not_block_upload_of_local_delta ... ok
+test sync::engine::tests::resolve_blob_scope_defers_attachments ... ok
+test sync::engine::tests::skip_blob_when_manifest_sha_matches ... ok
+test sync::engine::tests::snapshot_id_sanitizes_rfc3339 ... ok
+test sync::engine::tests::test_sync_object_hmac_and_encryption ... ok
+test store::blob::tests::swapped_chunks_rejected_by_aad ... ok
+test store::blob::tests::tamper_and_truncate_rejected ... ok
+test sync::engine::tests::committed_manifest_authenticates_recovery_header ... ok
+
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 474 filtered out; finished in 1.77s

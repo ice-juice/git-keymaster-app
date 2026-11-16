@@ -34,9 +34,8 @@ pub fn clipboard_write(
 
     #[cfg(target_os = "android")]
     {
-        let outcome = clipboard::write_android(&app, &text);
+        let outcome = clipboard::write_android(&app, &text, secret.unwrap_or(false), clear_seconds);
         text.zeroize();
-        let _ = (secret, clear_seconds);
         let outcome = outcome.map_err(clipboard_err)?;
         return Ok(ClipboardWriteResult {
             excluded: outcome.excluded,

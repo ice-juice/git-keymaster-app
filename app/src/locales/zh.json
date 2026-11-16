@@ -65,15 +65,33 @@
     "current": "当前主题：{{name}}（点击切换风格）",
     "toggle": "点击切换界面皮肤风格",
     "options": {
-      "light": { "name": "经典蓝紫（默认）", "desc": "深邃侧边栏 + 亮白卡片 + 蓝紫高光，经典耐看" },
-      "dark": { "name": "冷萃深色", "desc": "内敛低饱和、柔和炭灰、夜间护眼不刺眼" },
-      "navy": { "name": "沉稳黛蓝", "desc": "商务蓝调深色、专业典雅" }
+      "light": {
+        "name": "经典蓝紫（默认）",
+        "desc": "深邃侧边栏 + 亮白卡片 + 蓝紫高光，经典耐看"
+      },
+      "dark": {
+        "name": "冷萃深色",
+        "desc": "内敛低饱和、柔和炭灰、夜间护眼不刺眼"
+      },
+      "navy": {
+        "name": "沉稳黛蓝",
+        "desc": "商务蓝调深色、专业典雅"
+      }
     }
   },
   "anim": {
-    "cyber": { "label": "赛博全息", "desc": "全息猫扫描 · 激光能量钥 · 气密舱门" },
-    "classic": { "label": "经典金匙", "desc": "吉祥猫 · 黄金实体钥匙 · 暖光大门旋开" },
-    "minimal": { "label": "极客量子", "desc": "量子核心锁 · 极速代码流 · 瞬间破壁" }
+    "cyber": {
+      "label": "赛博全息",
+      "desc": "全息猫扫描 · 激光能量钥 · 气密舱门"
+    },
+    "classic": {
+      "label": "经典金匙",
+      "desc": "吉祥猫 · 黄金实体钥匙 · 暖光大门旋开"
+    },
+    "minimal": {
+      "label": "极客量子",
+      "desc": "量子核心锁 · 极速代码流 · 瞬间破壁"
+    }
   },
   "nav": {
     "group": "导航菜单",
@@ -656,7 +674,7 @@
     "status": "当前状态",
     "risk": "有风险",
     "caution": "需留意",
-    "safe": "安全",
+    "safe": "配置检查通过",
     "intro1": "这份清单只读本机配置与工作空间路径，全程在本机计算，不上报、零遥测。",
     "intro2": "系统不会告诉本应用谁在监听剪贴板、谁在截屏或录屏，因此无法指认监听者或截屏调用方。",
     "intro3": "剪贴板排除是给系统历史、云剪贴板和守规矩的管理器看的协作式约定，恶意程序可以无视。它不能防木马，也不会让截图变黑。",
@@ -1465,6 +1483,11 @@
     "saved": "已保存",
     "saving": "正在保存…",
     "dirty": "未保存",
+    "layoutLive": "即时编辑",
+    "liveTask": "切换任务完成状态",
+    "liveImage": "图片",
+    "liveEditImage": "点击编辑图片说明或地址",
+    "liveEditTable": "直接编辑表格单元格",
     "layoutEdit": "源码",
     "layoutSplit": "对比",
     "layoutPreview": "预览",
@@ -1528,6 +1551,11 @@
     "tbH1": "标题 1",
     "tbH2": "标题 2",
     "tbH3": "标题 3",
+    "tbH4": "标题 4",
+    "tbH5": "标题 5",
+    "tbH6": "标题 6",
+    "tbMore": "更多",
+    "tbMoreHeadings": "更多标题级别",
     "tbTable": "插入表格",
     "tbUl": "无序列表",
     "tbOl": "有序列表",
@@ -1813,7 +1841,7 @@
     "iconColorPick": "点按图标选择颜色",
     "iconUploadFailed": "上传图标失败",
     "iconHint": "可不选。填 GitHub、Google 等常见平台会自动套对应图标。",
-    "more": "更多选项（显示名、分组、网址、2FA…）",
+    "more": "更多",
     "less": "收起更多选项",
     "displayName": "显示名",
     "displayNameTip": "同一平台有多个号时用来区分，例如「公司号」「个人号」。不填则列表只显示用户名。",
@@ -1859,7 +1887,6 @@
     "copiedAccount": "账号已复制",
     "account": "账号",
     "historyShort": "历史",
-    "more": "更多",
     "showUser": "显示完整账号",
     "hideUser": "隐藏账号中间",
     "allTags": "全部标签",
@@ -1982,7 +2009,7 @@
     "ownersPh": "以逗号分隔，如 nova-labs, polar-box, acme-*",
     "ownersHint": "当识别包含这些组织名的仓库地址时，将自动推荐并映射该身份。",
     "strictMode": "严格私钥安全模式",
-    "strictHint": "严格模式下私钥永不落盘 ~/.ssh，仅存加密库；必须依赖 ssh-agent。",
+    "strictHint": "严格模式不持续部署私钥文件，依赖 ssh-agent；部分系统加载时需使用受限权限的临时文件。",
     "deleteIdentity": "删除身份",
     "saveChanges": "保存修改",
     "confirmAliasTitle": "关键项修改确认：Host 别名变更",
@@ -2475,5 +2502,25 @@
     "otherf2": "存储桶名称 = 桶名",
     "otherf3": "区域 = 文档中的 region，或先试 auto",
     "otherf4": "路径前缀 = gam-sync/"
+  },
+  "securityFix": {
+    "rotationIntro": "先验证访问密码并保存新恢复码，再确认生效。取消不会更改现有恢复码。",
+    "rotationDone": "新恢复码已生效。轮换不会更换主密钥：持有旧头部和旧凭据的人，仍可能解密使用同一主密钥的后续数据。泄露后请迁移到新保险库。",
+    "rotationPending": "新码尚未生效。请保存在独立安全位置，并在 5 分钟内输入完整新码确认。",
+    "rotationConfirm": "输入已保存的完整新恢复码",
+    "rotationCommit": "已安全保存，启用新码",
+    "rotationPassword": "访问密码（本次操作重新验证）",
+    "rotationPrepare": "验证并生成待确认恢复码",
+    "resetBackup": "请先在独立位置保存并验证完整备份。此操作会删除本机保险库，包括文件和笔记附件。",
+    "resetAuth": "清空前重新验证",
+    "passwordRecovered": "访问密码已重设，请使用新密码验证。主密钥未变更；如怀疑凭据泄露，请迁移到新的保险库。",
+    "forgotAccessPassword": "忘记访问密码？使用恢复码重设",
+    "resetPassword": "验证恢复码并重设密码"
+  },
+  "securityBackup": {
+    "coverage": "已校验：账号 {{accounts}} · 2FA {{totp}} · 文件 {{files}} · 笔记 {{notes}} · 附件 {{blobs}} · 寄存记录 {{locker}}",
+    "remoteExcluded": "寄存记录与取回密钥已包含；远端寄存文件不在离线备份内，请另行保存重要文件。",
+    "verifyHint": "备份已通过内容完整性检查；建议在独立空工作空间完成一次恢复演练。",
+    "sshExplicit": "SSH文件部署请在身份页重新应用。"
   }
 }

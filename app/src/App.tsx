@@ -33,8 +33,6 @@ import { startNetworkGuard } from "./shared/networkGuard";
 import { startActivityHeartbeat } from "./shared/activityHeartbeat";
 import { clearAllDrafts } from "./shared/noteDrafts";
 import { useScreenCaptureGuard } from "./shared/hooks/useScreenCaptureGuard";
-import { useImeInset } from "./shared/hooks/useImeInset";
-import { useSafeAreaInset } from "./shared/hooks/useSafeAreaInset";
 import { useClipboardCloneHint } from "./shared/hooks/useClipboardCloneHint";
 import { ClipboardCloneHint } from "./ui/ClipboardCloneHint";
 
@@ -81,8 +79,6 @@ export default function App() {
   } = useApp();
 
   const compact = useIsCompact();
-  useImeInset(compact);
-  useSafeAreaInset(compact);
   const { cover: privacyCover, shotNotice, dismissShotNotice } = useScreenCaptureGuard();
   // 本机 Git / SSH 工具链相关页面在移动端没有消费者，连路由都不注册，
   // 避免深链接或历史记录把用户带到一个必然报错的页面。

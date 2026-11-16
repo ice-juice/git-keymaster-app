@@ -4,13 +4,14 @@ use crate::commands::{recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::model::{Identity, KeyRecord};
 use crate::platform::{self, PlatformOps};
-use crate::ssh::{key, keygen};
 use crate::ssh::managed::{self, ManagedEntry};
+use crate::ssh::{key, keygen};
 use crate::store;
 use crate::sys;
 use crate::util;
 use crate::vault::Vault;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
 
 /// 密钥注释：优先邮箱，否则备注名，再否则提交姓名。
@@ -39,8 +40,94 @@ fn load_workspace_ssh_config(v: &Vault) -> String {
         .unwrap_or_default()
 }
 
+/// Metadata/secrets form one durable transaction. SSH config is an external
+/// projection: keep its exact prior bytes and restore them on pre-commit failure.
+fn with_ssh_transaction<T>(v: &Vault, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    store::with_exclusive_workspace(v.root(), || {
+        let path = sys::workspace_ssh_config(v.root());
+        let previous = match std::fs::read(&path) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        if previous.is_some() {
+            util::backup_file(&path)?;
+        }
+        let result = store::transaction(v, operation);
+        if let Err(error) = result {
+            // A committed redo must finish; rolling its projection back would create
+            // the opposite mismatch. The original config backup remains available.
+            if v.root().join(".store-transaction/COMMITTED").is_file() {
+                return Err(error);
+            }
+            let restored = match previous {
+                Some(bytes) => crate::vault::atomic_write(&path, &bytes),
+                None => match std::fs::remove_file(&path) {
+                    Ok(()) => Ok(()),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    Err(e) => Err(e.into()),
+                },
+            };
+            if let Err(restore_error) = restored {
+                return Err(AppError::Other(format!("身份保存失败：{error}；SSH 配置恢复也失败：{restore_error}。原始配置备份已保留，请勿重复创建身份。")));
+            }
+            return Err(error);
+        }
+        result
+    })
+}
+
+/// Only an explicitly referenced, strict-only key can lose its deployed private
+/// file. Unbound generated keys and keys with any non-strict consumer are retained.
+fn cleanup_strict_private_keys(v: &Vault) -> Result<()> {
+    store::with_exclusive_workspace(v.root(), || {
+        let data = store::load_data(v)?;
+        for record in &data.keys {
+            let references: Vec<_> = data
+                .identities
+                .iter()
+                .filter(|id| id.key_id.as_deref() == Some(record.id.as_str()))
+                .collect();
+            if references.is_empty() || references.iter().any(|id| !id.strict_mode) {
+                continue;
+            }
+            let dir = sys::workspace_ssh_keys_dir(v.root());
+            let private = dir.join(deployed_key_stem(record));
+            if private
+                .symlink_metadata()
+                .is_ok_and(|m| m.file_type().is_symlink())
+            {
+                return Err(AppError::Invalid(
+                    "严格模式清理遇到符号链接，已拒绝删除".into(),
+                ));
+            }
+            if private.is_file() {
+                let expected = zeroize::Zeroizing::new(store::load_key(v, &record.id)?);
+                let actual = zeroize::Zeroizing::new(std::fs::read(&private)?);
+                if actual.as_slice() != expected.as_slice() {
+                    return Err(AppError::Invalid(
+                        "严格模式目标文件并非该密钥，已保留文件".into(),
+                    ));
+                }
+                std::fs::remove_file(&private).map_err(|e| {
+                    AppError::Other(format!(
+                        "身份已保存，但严格模式私钥清理失败：{e}。私钥文件尚在，请检查文件权限。"
+                    ))
+                })?;
+            }
+        }
+        Ok(())
+    })
+}
+
 /// 按库内身份补齐工作空间 SSH Host。正本若被写成 Include stub 会先清空再重建。
 pub fn reconcile_ssh_hosts(v: &Vault) -> Result<u32> {
+    let count = with_ssh_transaction(v, || reconcile_ssh_hosts_inner(v))?;
+    cleanup_strict_private_keys(v)?;
+    Ok(count)
+}
+
+fn reconcile_ssh_hosts_inner(v: &Vault) -> Result<u32> {
     let mut data = store::load_data(v)?;
     let dest = sys::workspace_ssh_config(v.root());
     let mut text = std::fs::read_to_string(&dest).unwrap_or_default();
@@ -71,26 +158,9 @@ pub fn reconcile_ssh_hosts(v: &Vault) -> Result<u32> {
         let Some(record) = data.keys.iter().find(|k| &k.id == kid) else {
             continue;
         };
-        let identity_file = match record
-            .deployed_path
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            Some(p) => {
-                let localized = sys::resolve_identity_file(p, v.root());
-                if sys::expand_path(&localized).exists() {
-                    localized
-                } else {
-                    let stem = sys::key_file_stem(&id.name);
-                    deploy_openssh_files(v, record, &stem, id.strict_mode)?
-                }
-            }
-            None => {
-                let stem = sys::key_file_stem(&id.name);
-                deploy_openssh_files(v, record, &stem, id.strict_mode)?
-            }
-        };
+        // Identity mode decides the path; shared KeyRecord.deployed_path is only
+        // a catalog hint and cannot stand in for each identity's policy.
+        let identity_file = deploy_openssh_files(v, record, "", id.strict_mode)?;
         let existing = managed::list(&text);
         if let Some(cur) = existing
             .iter()
@@ -114,6 +184,29 @@ pub fn reconcile_ssh_hosts(v: &Vault) -> Result<u32> {
                 identities_only: true,
             },
         );
+    }
+    for record in &mut data.keys {
+        let references: Vec<_> = data
+            .identities
+            .iter()
+            .filter(|id| id.key_id.as_deref() == Some(record.id.as_str()))
+            .collect();
+        if references.is_empty() {
+            continue;
+        }
+        let strict_only = references.iter().all(|id| id.strict_mode);
+        let dir = sys::workspace_ssh_keys_dir(v.root());
+        let stem = deployed_key_stem(record);
+        let path = dir.join(if strict_only {
+            format!("{stem}.pub")
+        } else {
+            stem
+        });
+        let portable = sys::portable_deployed_path(&sys::identity_file_for_ssh(&path));
+        if record.deployed_path.as_deref() != Some(portable.as_str()) {
+            record.deployed_path = Some(portable);
+            data_changed = true;
+        }
     }
     if data_changed {
         store::save_data(v, &data)?;
@@ -236,23 +329,87 @@ fn default_key_name(comment: &str) -> String {
 
 /// 把 OpenSSH 公钥（以及非严格模式下的带口令私钥）写到工作空间 `ssh-keys/`。
 /// 返回 IdentityFile 应指向的真实路径。
-fn deploy_openssh_files(v: &Vault, record: &KeyRecord, stem: &str, strict: bool) -> Result<String> {
+fn deployed_key_stem(record: &KeyRecord) -> String {
+    // A display name is mutable and non-unique. The full ID digest is stable,
+    // including for imported legacy IDs that are not UUIDs or contain slashes.
+    let name: String = sys::key_file_stem_for_algo(&record.algorithm, &record.name)
+        .chars()
+        .take(40)
+        .collect();
+    format!("{name}_{:x}", Sha256::digest(record.id.as_bytes()))
+}
+
+pub(crate) fn deploy_openssh_files(
+    v: &Vault,
+    record: &KeyRecord,
+    _stem: &str,
+    strict: bool,
+) -> Result<String> {
     let dir = sys::workspace_ssh_keys_dir(v.root());
     std::fs::create_dir_all(&dir)?;
-    let priv_path = dir.join(stem);
+    let stem = deployed_key_stem(record);
+    let priv_path = dir.join(&stem);
     let pub_path = dir.join(format!("{stem}.pub"));
-    std::fs::write(&pub_path, format!("{}\n", record.public_openssh.trim()))?;
+    // Never follow a planted link or silently replace a different public key.
+    for path in [&pub_path, &priv_path] {
+        if path
+            .symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        {
+            return Err(AppError::Invalid("密钥目标是符号链接，已拒绝写入".into()));
+        }
+    }
+    if pub_path.exists() {
+        let existing = std::fs::read_to_string(&pub_path)?;
+        if existing.trim() != record.public_openssh.trim() {
+            return Err(AppError::Invalid(
+                "目标文件已属于另一把密钥，已拒绝覆盖".into(),
+            ));
+        }
+    } else {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&pub_path)?;
+        writeln!(file, "{}", record.public_openssh.trim())?;
+        file.sync_all()?;
+    }
 
     let target = if strict {
-        if priv_path.exists() {
-            let _ = std::fs::remove_file(&priv_path);
-        }
+        // Never delete here: another identity/draft may still require this private
+        // file. Destructive cleanup happens only after committed reference changes.
         pub_path
     } else {
         let priv_bytes = store::load_key(v, &record.id)?;
-        std::fs::write(&priv_path, &priv_bytes)?;
-        if let Err(e) = platform::current().secure_key_file(&priv_path) {
-            log::warn!("收紧密钥文件权限失败 {}：{e}", priv_path.display());
+        if priv_path.exists() {
+            if std::fs::read(&priv_path)? != priv_bytes {
+                return Err(AppError::Invalid("目标私钥内容不匹配，已拒绝覆盖".into()));
+            }
+            platform::current().secure_key_file(&priv_path)?;
+        } else {
+            use std::io::Write;
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let mut file = options.open(&priv_path)?;
+            // Establish owner-only access while still empty, fail closed.
+            let result = platform::current()
+                .secure_key_file(&priv_path)
+                .and_then(|_| {
+                    file.write_all(&priv_bytes)?;
+                    file.sync_all()?;
+                    Ok(())
+                });
+            drop(file);
+            if let Err(e) = result {
+                let _ = std::fs::remove_file(&priv_path);
+                return Err(e);
+            }
         }
         priv_path
     };
@@ -261,17 +418,25 @@ fn deploy_openssh_files(v: &Vault, record: &KeyRecord, stem: &str, strict: bool)
 
 /// 生成新密钥（供密钥管理界面单独使用）。
 #[tauri::command]
-pub fn generate_key(app: AppHandle, state: State<AppState>, comment: String, name: Option<String>) -> Result<KeyRecord> {
+pub fn generate_key(
+    app: AppHandle,
+    state: State<AppState>,
+    comment: String,
+    name: Option<String>,
+) -> Result<KeyRecord> {
     crate::commands::ensure_writes_allowed(&state)?;
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let record = generate_and_store_key(v, &comment, name)?;
-    let mut data = store::load_data(v)?;
-    data.keys.push(record.clone());
-    store::save_data(v, &data)?;
+    let record = store::transaction(v, || {
+        let record = generate_and_store_key(v, &comment, name)?;
+        let mut data = store::load_data(v)?;
+        data.keys.push(record.clone());
+        store::save_data(v, &data)?;
+        Ok(record)
+    })?;
     util::audit(v.root(), &format!("生成密钥 {}", record.name));
     drop(vault);
     crate::sync::scheduler::kick_publish(app);
@@ -291,7 +456,11 @@ pub struct GeneratedSshMaterial {
 
 /// 在本机内存生成 OpenSSH 密钥。不入库、不写磁盘、不装 agent、不创建身份。
 #[tauri::command]
-pub fn generate_ssh_material(algorithm: String, bits: Option<u32>, comment: String) -> Result<GeneratedSshMaterial> {
+pub fn generate_ssh_material(
+    algorithm: String,
+    bits: Option<u32>,
+    comment: String,
+) -> Result<GeneratedSshMaterial> {
     let g = match algorithm.trim().to_ascii_lowercase().as_str() {
         "ed25519" => keygen::generate_ed25519(&comment)?,
         "rsa" => keygen::generate_rsa(bits.unwrap_or(2048), &comment)?,
@@ -390,7 +559,9 @@ pub fn save_generated_ssh_key(
         return Err(AppError::Invalid("没有可保存的密钥，请先生成".into()));
     }
     if !crate::ssh::key::pair_matches(&args.private_openssh, &args.public_openssh)? {
-        return Err(AppError::Invalid("提供的公钥与私钥不配对，疑似张冠李戴".into()));
+        return Err(AppError::Invalid(
+            "提供的公钥与私钥不配对，疑似张冠李戴".into(),
+        ));
     }
     let info = key::parse_private_openssh(&args.private_openssh)?;
     if info.algorithm != "rsa" && info.algorithm != "ed25519" {
@@ -398,17 +569,20 @@ pub fn save_generated_ssh_key(
     }
     let raw_name = args.name.as_deref().unwrap_or("").trim();
     let stem = sys::key_file_stem_for_algo(&info.algorithm, raw_name);
-    let record = store_prepared_key(
-        v,
-        &args.private_openssh,
-        &args.passphrase,
-        stem.clone(),
-        &stem,
-        intent,
-    )?;
-    let mut data = store::load_data(v)?;
-    data.keys.push(record.clone());
-    store::save_data(v, &data)?;
+    let record = store::transaction(v, || {
+        let record = store_prepared_key(
+            v,
+            &args.private_openssh,
+            &args.passphrase,
+            stem.clone(),
+            &stem,
+            intent,
+        )?;
+        let mut data = store::load_data(v)?;
+        data.keys.push(record.clone());
+        store::save_data(v, &data)?;
+        Ok(record)
+    })?;
     util::audit(v.root(), &format!("保存 SSH 密钥 {}", record.name));
     drop(vault);
     crate::sync::scheduler::kick_publish(app);
@@ -449,7 +623,11 @@ pub struct ApplyResult {
 
 /// 备份并写入 config（原子替换 + ssh -G 反向校验）。
 #[tauri::command]
-pub fn apply_config(app: AppHandle, state: State<AppState>, entry: ManagedEntry) -> Result<ApplyResult> {
+pub fn apply_config(
+    app: AppHandle,
+    state: State<AppState>,
+    entry: ManagedEntry,
+) -> Result<ApplyResult> {
     crate::commands::ensure_writes_allowed(&state)?;
     let ws = state
         .vault
@@ -493,8 +671,7 @@ fn verify_with_ssh_g(entry: &ManagedEntry, workspace: Option<&std::path::Path>) 
     match sys::run("ssh", &args) {
         Ok((out, _e, _c)) => {
             let want = format!("hostname {}", entry.host_name.to_lowercase());
-            out.lines()
-                .any(|l| l.trim().to_lowercase() == want)
+            out.lines().any(|l| l.trim().to_lowercase() == want)
         }
         Err(_) => false,
     }
@@ -530,7 +707,11 @@ pub struct CreateIdentityResult {
 /// 新建身份：生成/复用密钥 → 投放公钥（严格模式）或私钥（默认）→ 收紧 ACL →
 /// 备份并写 config → 登记身份。
 #[tauri::command]
-pub fn create_identity(app: AppHandle, state: State<AppState>, args: CreateIdentityArgs) -> Result<CreateIdentityResult> {
+pub fn create_identity(
+    app: AppHandle,
+    state: State<AppState>,
+    args: CreateIdentityArgs,
+) -> Result<CreateIdentityResult> {
     crate::commands::ensure_writes_allowed(&state)?;
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
@@ -538,70 +719,79 @@ pub fn create_identity(app: AppHandle, state: State<AppState>, args: CreateIdent
         return Err(AppError::Locked);
     }
 
-    let mut data = store::load_data(v)?;
+    let (identity, record, backup, verified, entry) = with_ssh_transaction(v, || {
+        let mut data = store::load_data(v)?;
 
-    // 解析密钥。
-    let record = if let Some(id) = &args.key_id {
-        data.keys
-            .iter()
-            .find(|k| &k.id == id)
-            .cloned()
-            .ok_or_else(|| AppError::Invalid("指定的密钥不存在".into()))?
-    } else {
-        let comment = {
-            let raw = args.key_comment.as_deref().unwrap_or("").trim();
-            if !raw.is_empty() {
-                raw.to_string()
-            } else {
-                suggest_key_comment(args.email.as_deref(), &args.name, args.git_user_name.as_deref())
-            }
+        // 解析密钥。
+        let record = if let Some(id) = &args.key_id {
+            data.keys
+                .iter()
+                .find(|k| &k.id == id)
+                .cloned()
+                .ok_or_else(|| AppError::Invalid("指定的密钥不存在".into()))?
+        } else {
+            let comment = {
+                let raw = args.key_comment.as_deref().unwrap_or("").trim();
+                if !raw.is_empty() {
+                    raw.to_string()
+                } else {
+                    suggest_key_comment(
+                        args.email.as_deref(),
+                        &args.name,
+                        args.git_user_name.as_deref(),
+                    )
+                }
+            };
+            let rec =
+                generate_and_store_key(v, &comment, Some(format!("id_ed25519_{}", args.name)))?;
+            data.keys.push(rec.clone());
+            rec
         };
-        let rec = generate_and_store_key(v, &comment, Some(format!("id_ed25519_{}", args.name)))?;
-        data.keys.push(rec.clone());
-        rec
-    };
 
-    // 投放 OpenSSH 文件到工作空间 ssh-keys/（不再写到 ~/.ssh）。
-    let stem = sys::key_file_stem(&args.name);
-    let identity_file = deploy_openssh_files(v, &record, &stem, args.strict_mode)?;
-    if let Some(k) = data.keys.iter_mut().find(|k| k.id == record.id) {
-        k.deployed_path = Some(sys::portable_deployed_path(&identity_file));
-    }
+        // 投放 OpenSSH 文件到工作空间 ssh-keys/（不再写到 ~/.ssh）。
+        let stem = sys::key_file_stem(&args.name);
+        let identity_file = deploy_openssh_files(v, &record, &stem, args.strict_mode)?;
+        if let Some(k) = data.keys.iter_mut().find(|k| k.id == record.id) {
+            k.deployed_path = Some(sys::portable_deployed_path(&identity_file));
+        }
 
-    // 写 config（备份 + 原子 + 校验）。
-    let entry = ManagedEntry {
-        alias: args.host_alias.clone(),
-        host_name: args.real_host.clone(),
-        user: args.user.clone().unwrap_or_else(|| "git".into()),
-        identity_file,
-        identities_only: true,
-    };
-    // 带换行的 HostName 会往托管区块注入 ProxyCommand，必须在落盘前拦住。
-    entry.validate()?;
-    let cfg_path = sys::workspace_ssh_config(v.root());
-    let old_cfg = load_workspace_ssh_config(v);
-    let backup = util::backup_file(&cfg_path)?;
-    let new_cfg = managed::upsert(&old_cfg, entry.clone());
-    persist_workspace_ssh_config(v, &new_cfg)?;
-    let verified = verify_with_ssh_g(&entry, Some(v.root()));
+        // 写 config（备份 + 原子 + 校验）。
+        let entry = ManagedEntry {
+            alias: args.host_alias.clone(),
+            host_name: args.real_host.clone(),
+            user: args.user.clone().unwrap_or_else(|| "git".into()),
+            identity_file,
+            identities_only: true,
+        };
+        // 带换行的 HostName 会往托管区块注入 ProxyCommand，必须在落盘前拦住。
+        entry.validate()?;
+        let cfg_path = sys::workspace_ssh_config(v.root());
+        let old_cfg = load_workspace_ssh_config(v);
+        let backup = util::backup_file(&cfg_path)?;
+        let new_cfg = managed::upsert(&old_cfg, entry.clone());
+        persist_workspace_ssh_config(v, &new_cfg)?;
+        let verified = verify_with_ssh_g(&entry, Some(v.root()));
 
-    // 登记身份。
-    let identity = Identity {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: args.name.clone(),
-        platform: args.platform.clone(),
-        host_alias: args.host_alias.clone(),
-        real_host: args.real_host.clone(),
-        user: args.user.clone().unwrap_or_else(|| "git".into()),
-        email: args.email.clone(),
-        git_user_name: args.git_user_name.clone(),
-        key_id: Some(record.id.clone()),
-        owners: args.owners.clone().unwrap_or_default(),
-        strict_mode: args.strict_mode,
-        updated_at: now_iso8601(),
-    };
-    data.identities.push(identity.clone());
-    store::save_data(v, &data)?;
+        // 登记身份。
+        let identity = Identity {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: args.name.clone(),
+            platform: args.platform.clone(),
+            host_alias: args.host_alias.clone(),
+            real_host: args.real_host.clone(),
+            user: args.user.clone().unwrap_or_else(|| "git".into()),
+            email: args.email.clone(),
+            git_user_name: args.git_user_name.clone(),
+            key_id: Some(record.id.clone()),
+            owners: args.owners.clone().unwrap_or_default(),
+            strict_mode: args.strict_mode,
+            updated_at: now_iso8601(),
+        };
+        data.identities.push(identity.clone());
+        store::save_data(v, &data)?;
+        Ok((identity, record, backup, verified, entry))
+    })?;
+    cleanup_strict_private_keys(v)?;
     if args.strict_mode {
         if let Ok(env) = ready_agent(&state) {
             let _ = crate::agent::load_key(v, &env, &record.id);
@@ -662,44 +852,50 @@ pub fn stage_identity_draft(
         return Err(AppError::Locked);
     }
 
-    let mut data = store::load_data(v)?;
-    if data
-        .identities
-        .iter()
-        .any(|i| i.host_alias.eq_ignore_ascii_case(alias))
-    {
-        return Err(AppError::Invalid(format!("Host 别名「{alias}」已被占用")));
-    }
-    let record = data
-        .keys
-        .iter()
-        .find(|k| k.id == key_id)
-        .cloned()
-        .ok_or_else(|| AppError::Invalid("指定的密钥不存在".into()))?;
+    let (record, identity_file, verified) = with_ssh_transaction(v, || {
+        let mut data = store::load_data(v)?;
+        if data
+            .identities
+            .iter()
+            .any(|i| i.host_alias.eq_ignore_ascii_case(alias))
+        {
+            return Err(AppError::Invalid(format!("Host 别名「{alias}」已被占用")));
+        }
+        let record = data
+            .keys
+            .iter()
+            .find(|k| k.id == key_id)
+            .cloned()
+            .ok_or_else(|| AppError::Invalid("指定的密钥不存在".into()))?;
 
-    let stem = sys::key_file_stem(&args.name);
-    let identity_file = deploy_openssh_files(v, &record, &stem, args.strict_mode)?;
-    if let Some(k) = data.keys.iter_mut().find(|k| k.id == record.id) {
-        k.deployed_path = Some(sys::portable_deployed_path(&identity_file));
-    }
-    store::save_data(v, &data)?;
+        let stem = sys::key_file_stem(&args.name);
+        let identity_file = deploy_openssh_files(v, &record, &stem, args.strict_mode)?;
+        if let Some(k) = data.keys.iter_mut().find(|k| k.id == record.id) {
+            k.deployed_path = Some(sys::portable_deployed_path(&identity_file));
+        }
+        store::save_data(v, &data)?;
 
-    let entry = ManagedEntry {
-        alias: alias.to_string(),
-        host_name: host.to_string(),
-        user: args.user.clone().unwrap_or_else(|| "git".into()),
-        identity_file: identity_file.clone(),
-        identities_only: true,
-    };
-    let cfg_path = sys::workspace_ssh_config(v.root());
-    let old_cfg = load_workspace_ssh_config(v);
-    let _ = util::backup_file(&cfg_path)?;
-    persist_workspace_ssh_config(v, &managed::upsert(&old_cfg, entry.clone()))?;
-    let verified = verify_with_ssh_g(&entry, Some(v.root()));
+        let entry = ManagedEntry {
+            alias: alias.to_string(),
+            host_name: host.to_string(),
+            user: args.user.clone().unwrap_or_else(|| "git".into()),
+            identity_file: identity_file.clone(),
+            identities_only: true,
+        };
+        let cfg_path = sys::workspace_ssh_config(v.root());
+        let old_cfg = load_workspace_ssh_config(v);
+        let _ = util::backup_file(&cfg_path)?;
+        persist_workspace_ssh_config(v, &managed::upsert(&old_cfg, entry.clone()))?;
+        let verified = verify_with_ssh_g(&entry, Some(v.root()));
 
+        Ok((record, identity_file, verified))
+    })?;
     let env = ready_agent(&state)?;
     crate::agent::load_key(v, &env, &record.id)?;
-    util::audit(v.root(), &format!("向导验证预加载密钥 {} (alias={alias})", record.name));
+    util::audit(
+        v.root(),
+        &format!("向导验证预加载密钥 {} (alias={alias})", record.name),
+    );
 
     Ok(StageIdentityDraftResult {
         identity_file,
@@ -822,7 +1018,11 @@ pub fn openssh_rsa_to_pem(private_openssh: String, passphrase: String) -> Result
 
 /// 二次验证后，把库内 RSA 私钥导出为无口令 PKCS#1 PEM。不改库存格式。
 #[tauri::command]
-pub fn export_vault_key_pem(state: State<AppState>, password: String, key_id: String) -> Result<String> {
+pub fn export_vault_key_pem(
+    state: State<AppState>,
+    password: String,
+    key_id: String,
+) -> Result<String> {
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
     if !v.is_unlocked() {
@@ -833,7 +1033,11 @@ pub fn export_vault_key_pem(state: State<AppState>, password: String, key_id: St
     let private_openssh = String::from_utf8(raw)
         .map_err(|_| AppError::Invalid("私钥不是可显示的 OpenSSH 文本".into()))?;
     let secrets = store::load_secrets(v)?;
-    let passphrase = secrets.key_passphrases.get(&key_id).cloned().unwrap_or_default();
+    let passphrase = secrets
+        .key_passphrases
+        .get(&key_id)
+        .cloned()
+        .unwrap_or_default();
     let pem = key::rsa_openssh_to_pkcs1_pem(&private_openssh, &passphrase)?;
     util::audit(v.root(), &format!("二次验证导出 PEM 私钥 key_id={key_id}"));
     Ok(pem.to_string())
@@ -856,7 +1060,11 @@ pub struct UpdateIdentityArgs {
 
 /// 修改已有身份信息，并同步更新工作空间 SSH config。
 #[tauri::command]
-pub fn update_identity(app: AppHandle, state: State<AppState>, args: UpdateIdentityArgs) -> Result<Identity> {
+pub fn update_identity(
+    app: AppHandle,
+    state: State<AppState>,
+    args: UpdateIdentityArgs,
+) -> Result<Identity> {
     crate::commands::ensure_writes_allowed(&state)?;
     let vault = recover_lock(&state.vault);
     let v = vault.as_ref().ok_or(AppError::Locked)?;
@@ -864,87 +1072,97 @@ pub fn update_identity(app: AppHandle, state: State<AppState>, args: UpdateIdent
         return Err(AppError::Locked);
     }
 
-    let mut data = store::load_data(v)?;
-    let idx = data
-        .identities
-        .iter()
-        .position(|i| i.id == args.id)
-        .ok_or_else(|| AppError::Invalid("身份不存在".into()))?;
+    let updated = with_ssh_transaction(v, || {
+        let mut data = store::load_data(v)?;
+        let idx = data
+            .identities
+            .iter()
+            .position(|i| i.id == args.id)
+            .ok_or_else(|| AppError::Invalid("身份不存在".into()))?;
 
-    let old_alias = data.identities[idx].host_alias.clone();
-    let key_id = data.identities[idx].key_id.clone();
+        let old_alias = data.identities[idx].host_alias.clone();
+        let key_id = data.identities[idx].key_id.clone();
 
-    // 检查重名与别名冲突（排除自身）
-    if data
-        .identities
-        .iter()
-        .any(|i| i.id != args.id && i.name.eq_ignore_ascii_case(&args.name))
-    {
-        return Err(AppError::Invalid(format!("备注名「{}」已存在", args.name)));
-    }
-    if data
-        .identities
-        .iter()
-        .any(|i| i.id != args.id && i.host_alias.eq_ignore_ascii_case(&args.host_alias))
-    {
-        return Err(AppError::Invalid(format!("Host 别名「{}」已被占用", args.host_alias)));
-    }
+        // 检查重名与别名冲突（排除自身）
+        if data
+            .identities
+            .iter()
+            .any(|i| i.id != args.id && i.name.eq_ignore_ascii_case(&args.name))
+        {
+            return Err(AppError::Invalid(format!("备注名「{}」已存在", args.name)));
+        }
+        if data
+            .identities
+            .iter()
+            .any(|i| i.id != args.id && i.host_alias.eq_ignore_ascii_case(&args.host_alias))
+        {
+            return Err(AppError::Invalid(format!(
+                "Host 别名「{}」已被占用",
+                args.host_alias
+            )));
+        }
 
-    // 重新部署密钥文件（如果严格模式改变或名字改变）
-    let identity_file = if let Some(ref kid) = key_id {
-        if let Some(record) = data.keys.iter().find(|k| &k.id == kid).cloned() {
-            let stem = sys::key_file_stem(&args.name);
-            let identity_file = deploy_openssh_files(v, &record, &stem, args.strict_mode)?;
-            if let Some(k) = data.keys.iter_mut().find(|k| k.id == record.id) {
-                k.deployed_path = Some(sys::portable_deployed_path(&identity_file));
+        // 重新部署密钥文件（如果严格模式改变或名字改变）
+        let identity_file = if let Some(ref kid) = key_id {
+            if let Some(record) = data.keys.iter().find(|k| &k.id == kid).cloned() {
+                let stem = sys::key_file_stem(&args.name);
+                let identity_file = deploy_openssh_files(v, &record, &stem, args.strict_mode)?;
+                if let Some(k) = data.keys.iter_mut().find(|k| k.id == record.id) {
+                    k.deployed_path = Some(sys::portable_deployed_path(&identity_file));
+                }
+                identity_file
+            } else {
+                "".to_string()
             }
-            identity_file
         } else {
             "".to_string()
-        }
-    } else {
-        "".to_string()
-    };
-
-    let config_path = sys::workspace_ssh_config(v.root());
-    let old_config = load_workspace_ssh_config(v);
-    let mut intermediate = if old_alias != args.host_alias {
-        managed::remove(&old_config, &old_alias)
-    } else {
-        old_config
-    };
-
-    if !identity_file.is_empty() {
-        let entry = ManagedEntry {
-            alias: args.host_alias.clone(),
-            host_name: args.real_host.clone(),
-            user: args.user.clone().unwrap_or_else(|| "git".into()),
-            identity_file,
-            identities_only: true,
         };
-        entry.validate()?;
-        intermediate = managed::upsert(&intermediate, entry);
-    }
-    let _ = util::backup_file(&config_path);
-    persist_workspace_ssh_config(v, &intermediate)?;
 
-    let mut updated = data.identities[idx].clone();
-    updated.name = args.name;
-    updated.platform = args.platform;
-    updated.host_alias = args.host_alias;
-    updated.real_host = args.real_host;
-    updated.user = args.user.unwrap_or_else(|| "git".into());
-    updated.email = args.email;
-    updated.git_user_name = args.git_user_name;
-    updated.strict_mode = args.strict_mode;
-    updated.updated_at = now_iso8601();
-    if let Some(owners) = args.owners {
-        updated.owners = owners;
-    }
+        let config_path = sys::workspace_ssh_config(v.root());
+        let old_config = load_workspace_ssh_config(v);
+        let mut intermediate = if old_alias != args.host_alias {
+            managed::remove(&old_config, &old_alias)
+        } else {
+            old_config
+        };
 
-    data.identities[idx] = updated.clone();
-    store::save_data(v, &data)?;
-    util::audit(v.root(), &format!("更新身份 {} (alias={})", updated.name, updated.host_alias));
+        if !identity_file.is_empty() {
+            let entry = ManagedEntry {
+                alias: args.host_alias.clone(),
+                host_name: args.real_host.clone(),
+                user: args.user.clone().unwrap_or_else(|| "git".into()),
+                identity_file,
+                identities_only: true,
+            };
+            entry.validate()?;
+            intermediate = managed::upsert(&intermediate, entry);
+        }
+        let _ = util::backup_file(&config_path);
+        persist_workspace_ssh_config(v, &intermediate)?;
+
+        let mut updated = data.identities[idx].clone();
+        updated.name = args.name;
+        updated.platform = args.platform;
+        updated.host_alias = args.host_alias;
+        updated.real_host = args.real_host;
+        updated.user = args.user.unwrap_or_else(|| "git".into());
+        updated.email = args.email;
+        updated.git_user_name = args.git_user_name;
+        updated.strict_mode = args.strict_mode;
+        updated.updated_at = now_iso8601();
+        if let Some(owners) = args.owners {
+            updated.owners = owners;
+        }
+
+        data.identities[idx] = updated.clone();
+        store::save_data(v, &data)?;
+        Ok(updated)
+    })?;
+    cleanup_strict_private_keys(v)?;
+    util::audit(
+        v.root(),
+        &format!("更新身份 {} (alias={})", updated.name, updated.host_alias),
+    );
     drop(vault);
     crate::sync::scheduler::kick_publish(app);
 
@@ -1006,7 +1224,10 @@ fn remove_file_directly_inside(dir: &std::path::Path, path: &std::path::Path) ->
     Ok(())
 }
 
-fn remove_workspace_key_pair(workspace: &std::path::Path, deployed_path: Option<&str>) -> Result<()> {
+fn remove_workspace_key_pair(
+    workspace: &std::path::Path,
+    deployed_path: Option<&str>,
+) -> Result<()> {
     let Some(raw) = deployed_path.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(());
     };
@@ -1033,31 +1254,51 @@ fn delete_stored_key(v: &Vault, key_id: &str) -> Result<()> {
     if key_id.is_empty() {
         return Err(AppError::Invalid("密钥不存在".into()));
     }
-    let mut data = store::load_data(v)?;
-    let idx = data
-        .keys
-        .iter()
-        .position(|k| k.id == key_id)
-        .ok_or_else(|| AppError::Invalid("密钥不存在".into()))?;
-    if git_hosting_blocks_key_delete(&data.identities, key_id) {
-        return Err(AppError::Invalid("已被 Git 托管身份使用，不能删除".into()));
-    }
-    let removed = data.keys.remove(idx);
-    let now = now_iso8601();
-    data.deleted_keys.insert(key_id.to_string(), now.clone());
-    for identity in &mut data.identities {
-        if identity.key_id.as_deref() == Some(key_id) {
-            identity.key_id = None;
-            identity.updated_at = now.clone();
+    let (removed, shares_deployment) = store::transaction(v, || {
+        let mut data = store::load_data(v)?;
+        let idx = data
+            .keys
+            .iter()
+            .position(|k| k.id == key_id)
+            .ok_or_else(|| AppError::Invalid("密钥不存在".into()))?;
+        if git_hosting_blocks_key_delete(&data.identities, key_id) {
+            return Err(AppError::Invalid("已被 Git 托管身份使用，不能删除".into()));
         }
+        let removed = data.keys.remove(idx);
+        let now = now_iso8601();
+        data.deleted_keys.insert(key_id.to_string(), now.clone());
+        for identity in &mut data.identities {
+            if identity.key_id.as_deref() == Some(key_id) {
+                identity.key_id = None;
+                identity.updated_at = now.clone();
+            }
+        }
+        let shares_deployment = removed.deployed_path.as_deref().is_some_and(|path| {
+            let name =
+                sys::workspace_key_filename(path).map(|s| s.trim_end_matches(".pub").to_owned());
+            data.keys.iter().any(|key| {
+                key.deployed_path.as_deref().is_some_and(|other| {
+                    sys::workspace_key_filename(other)
+                        .map(|s| s.trim_end_matches(".pub").to_owned())
+                        == name
+                })
+            })
+        });
+        store::delete_key(v, key_id)?;
+        let mut secrets = store::load_secrets(v)?;
+        if secrets.key_passphrases.remove(key_id).is_some() {
+            store::save_secrets(v, &secrets)?;
+        }
+        store::save_data(v, &data)?;
+        Ok((removed, shares_deployment))
+    })?;
+    if !shares_deployment {
+        remove_workspace_key_pair(v.root(), removed.deployed_path.as_deref()).map_err(|e| {
+            AppError::Other(format!(
+                "密钥记录已删除，但部署文件清理失败，请检查文件权限：{e}"
+            ))
+        })?;
     }
-    remove_workspace_key_pair(v.root(), removed.deployed_path.as_deref())?;
-    store::delete_key(v, key_id)?;
-    let mut secrets = store::load_secrets(v)?;
-    if secrets.key_passphrases.remove(key_id).is_some() {
-        store::save_secrets(v, &secrets)?;
-    }
-    store::save_data(v, &data)?;
     util::audit(v.root(), &format!("删除密钥 {}", removed.name));
     Ok(())
 }
@@ -1069,7 +1310,9 @@ pub fn delete_key(app: AppHandle, state: State<AppState>, key_id: String) -> Res
         .as_ref()
         .is_some_and(|v| v.is_unlocked());
     gate_key_delete(
-        state.writes_locked.load(std::sync::atomic::Ordering::SeqCst),
+        state
+            .writes_locked
+            .load(std::sync::atomic::Ordering::SeqCst),
         unlocked,
     )?;
     let vault = recover_lock(&state.vault);
@@ -1090,25 +1333,32 @@ pub fn delete_identity(app: AppHandle, state: State<AppState>, identity_id: Stri
         return Err(AppError::Locked);
     }
 
-    let mut data = store::load_data(v)?;
-    let idx = data
-        .identities
-        .iter()
-        .position(|i| i.id == identity_id)
-        .ok_or_else(|| AppError::Invalid("身份不存在".into()))?;
+    let removed = with_ssh_transaction(v, || {
+        let mut data = store::load_data(v)?;
+        let idx = data
+            .identities
+            .iter()
+            .position(|i| i.id == identity_id)
+            .ok_or_else(|| AppError::Invalid("身份不存在".into()))?;
 
-    let removed = data.identities.remove(idx);
-    data.deleted_identities
-        .insert(removed.id.clone(), now_iso8601());
+        let removed = data.identities.remove(idx);
+        data.deleted_identities
+            .insert(removed.id.clone(), now_iso8601());
 
-    let config_path = sys::workspace_ssh_config(v.root());
-    let old_config = load_workspace_ssh_config(v);
-    let new_config = managed::remove(&old_config, &removed.host_alias);
-    let _ = util::backup_file(&config_path);
-    persist_workspace_ssh_config(v, &new_config)?;
+        let config_path = sys::workspace_ssh_config(v.root());
+        let old_config = load_workspace_ssh_config(v);
+        let new_config = managed::remove(&old_config, &removed.host_alias);
+        let _ = util::backup_file(&config_path);
+        persist_workspace_ssh_config(v, &new_config)?;
 
-    store::save_data(v, &data)?;
-    util::audit(v.root(), &format!("删除身份 {} (alias={})", removed.name, removed.host_alias));
+        store::save_data(v, &data)?;
+        Ok(removed)
+    })?;
+    cleanup_strict_private_keys(v)?;
+    util::audit(
+        v.root(),
+        &format!("删除身份 {} (alias={})", removed.name, removed.host_alias),
+    );
     drop(vault);
     crate::sync::scheduler::kick_publish(app);
 
@@ -1157,13 +1407,107 @@ mod tests {
     }
 
     #[test]
+    fn duplicate_names_deploy_to_distinct_owned_files() {
+        let (v, root) = unlocked_vault();
+        let a = sample_key("first-id");
+        let mut b = sample_key("second-id");
+        b.public_openssh = "ssh-ed25519 BBBB second".into();
+        let first = deploy_openssh_files(&v, &a, "same-name", true).unwrap();
+        let second = deploy_openssh_files(&v, &b, "same-name", true).unwrap();
+        assert_ne!(first, second);
+        let first_path =
+            sys::workspace_ssh_keys_dir(&root).join(format!("{}.pub", deployed_key_stem(&a)));
+        let before = std::fs::read(&first_path).unwrap();
+        let mut intruder = a.clone();
+        intruder.public_openssh = b.public_openssh.clone();
+        assert!(deploy_openssh_files(&v, &intruder, "same-name", true).is_err());
+        assert_eq!(std::fs::read(&first_path).unwrap(), before);
+        drop(v);
+        std::fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn shared_key_strict_identity_never_removes_non_strict_deployment() {
+        let (v, root) = unlocked_vault();
+        let mut key = sample_key("shared-id");
+        store::save_key(&v, &key.id, b"synthetic-private").unwrap();
+        let private_path = deploy_openssh_files(&v, &key, "ignored", false).unwrap();
+        let public_path = deploy_openssh_files(&v, &key, "ignored", true).unwrap();
+        assert!(public_path.ends_with(".pub"));
+        assert!(!private_path.ends_with(".pub"));
+        let private = sys::workspace_ssh_keys_dir(&root).join(deployed_key_stem(&key));
+        assert_eq!(std::fs::read(&private).unwrap(), b"synthetic-private");
+        // A catalog last written by the strict consumer must not change the other path.
+        key.deployed_path = Some(sys::portable_deployed_path(&public_path));
+        assert_eq!(
+            deploy_openssh_files(&v, &key, "ignored", false).unwrap(),
+            private_path
+        );
+        let mut data = store::load_data(&v).unwrap();
+        data.keys.push(key.clone());
+        let mut strict = identity("strict", "Strict", "other", Some(&key.id));
+        strict.strict_mode = true;
+        data.identities.push(strict);
+        data.identities
+            .push(identity("normal", "Normal", "other", Some(&key.id)));
+        store::save_data(&v, &data).unwrap();
+        cleanup_strict_private_keys(&v).unwrap();
+        assert!(private.is_file());
+        // Only after the last non-strict consumer's metadata has committed may removal occur.
+        data.identities.retain(|id| id.id != "normal");
+        store::transaction(&v, || store::save_data(&v, &data)).unwrap();
+        cleanup_strict_private_keys(&v).unwrap();
+        assert!(!private.exists());
+        assert!(store::load_key(&v, &key.id).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn strict_cleanup_preserves_generated_unbound_keys() {
+        let (v, root) = unlocked_vault();
+        let key = sample_key("unbound-id");
+        store::save_key(&v, &key.id, b"synthetic-private").unwrap();
+        deploy_openssh_files(&v, &key, "ignored", false).unwrap();
+        let mut data = store::load_data(&v).unwrap();
+        data.keys.push(key.clone());
+        store::save_data(&v, &data).unwrap();
+        cleanup_strict_private_keys(&v).unwrap();
+        assert!(sys::workspace_ssh_keys_dir(&root)
+            .join(deployed_key_stem(&key))
+            .is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ssh_projection_is_restored_when_metadata_transaction_aborts() {
+        let (v, root) = unlocked_vault();
+        let config = sys::workspace_ssh_config(&root);
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, b"# original user config\n").unwrap();
+        let outcome: Result<()> = with_ssh_transaction(&v, || {
+            // Direct fixture write: never call the production home-SSH bridge in tests.
+            std::fs::write(&config, b"# partial new projection\n")?;
+            Err(AppError::Invalid("injected metadata failure".into()))
+        });
+        assert!(outcome.is_err());
+        assert_eq!(std::fs::read(&config).unwrap(), b"# original user config\n");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn key_comment_prefers_email_then_name_then_git_user() {
         assert_eq!(
             suggest_key_comment(Some("a@b.com"), "nova", Some("Nova Reyes")),
             "a@b.com"
         );
-        assert_eq!(suggest_key_comment(None, "nova-labs", Some("Nova")), "nova-labs@gam");
-        assert_eq!(suggest_key_comment(Some("  "), "", Some("Nova Reyes")), "Nova.Reyes@gam");
+        assert_eq!(
+            suggest_key_comment(None, "nova-labs", Some("Nova")),
+            "nova-labs@gam"
+        );
+        assert_eq!(
+            suggest_key_comment(Some("  "), "", Some("Nova Reyes")),
+            "Nova.Reyes@gam"
+        );
         assert_eq!(suggest_key_comment(None, "", None), "");
     }
 
@@ -1198,11 +1542,14 @@ mod tests {
         assert_eq!(rec.algorithm, "rsa");
         assert_eq!(rec.purpose_intent, "server");
         assert!(rec.public_openssh.starts_with("ssh-rsa "));
-        let pub_path = sys::workspace_ssh_keys_dir(v.root()).join("id_rsa_lab.pub");
+        let deployed_stem = deployed_key_stem(&rec);
+        let pub_path = sys::workspace_ssh_keys_dir(v.root()).join(format!("{deployed_stem}.pub"));
         let text = std::fs::read_to_string(&pub_path).unwrap();
         assert!(text.starts_with("ssh-rsa "));
         assert!(text.ends_with('\n'));
-        assert!(sys::workspace_ssh_keys_dir(v.root()).join("id_rsa_lab").is_file());
+        assert!(sys::workspace_ssh_keys_dir(v.root())
+            .join(&deployed_stem)
+            .is_file());
         let secrets = store::load_secrets(&v).unwrap();
         assert_eq!(secrets.key_passphrases.get(&rec.id).unwrap(), &g.passphrase);
 
@@ -1242,7 +1589,9 @@ mod tests {
     fn put_key(v: &Vault, id: &str, name: &str, deployed: Option<String>) {
         store::save_key(v, id, b"OPENSSH PRIVATE KEY").unwrap();
         let mut secrets = store::load_secrets(v).unwrap();
-        secrets.key_passphrases.insert(id.into(), format!("pass-{id}"));
+        secrets
+            .key_passphrases
+            .insert(id.into(), format!("pass-{id}"));
         store::save_secrets(v, &secrets).unwrap();
         let mut data = store::load_data(v).unwrap();
         data.keys.push(KeyRecord {
@@ -1347,9 +1696,12 @@ mod tests {
         );
 
         let mut data = store::load_data(&v).unwrap();
-        data.identities.push(identity("gh-id", "GitHub 工作", "GitHub", Some("gh")));
-        data.identities.push(identity("lab-id", "机房登录", "other", Some("lab")));
-        data.identities.push(identity("bak-id", "备份机", "custom", Some("lab")));
+        data.identities
+            .push(identity("gh-id", "GitHub 工作", "GitHub", Some("gh")));
+        data.identities
+            .push(identity("lab-id", "机房登录", "other", Some("lab")));
+        data.identities
+            .push(identity("bak-id", "备份机", "custom", Some("lab")));
         data.keys
             .iter_mut()
             .find(|k| k.id == "export")

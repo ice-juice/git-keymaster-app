@@ -115,6 +115,16 @@ impl CfClient {
         Ok(())
     }
 
+    /// V2 uses additive, idempotent tables. Always replay the complete migration,
+    /// including after an interrupted deploy; a single table's existence is not
+    /// evidence that the remaining tables and indexes were installed.
+    pub fn apply_locker_v2_sql(&self, account_id: &str, db_id: &str) -> Result<()> {
+        for stmt in sql::split_sql_statements(assets::LOCKER_V2_MIGRATION_SQL) {
+            self.query_d1(account_id, db_id, &stmt)?;
+        }
+        Ok(())
+    }
+
     pub fn r2_bucket_exists(&self, account_id: &str, bucket: &str) -> Result<bool> {
         let path = format!(
             "/accounts/{account_id}/r2/buckets/{}",

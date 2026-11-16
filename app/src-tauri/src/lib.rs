@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod app_config;
+pub mod onboarding;
 pub mod autolock;
 pub mod identity;
 pub mod autostart;
@@ -98,6 +99,13 @@ pub fn run() {
 
     builder
         .invoke_handler(tauri::generate_handler![
+            commands::onboarding::onboarding_get,
+            commands::onboarding::onboarding_save_draft,
+            commands::onboarding::onboarding_commit,
+            commands::onboarding::onboarding_ack_ui,
+            commands::onboarding::onboarding_skip,
+            commands::onboarding::onboarding_reopen,
+            commands::onboarding::onboarding_dismiss_biometrics,
             commands::vault::vault_status,
             commands::vault::default_workspace_path,
             commands::vault::check_workspace_path,
@@ -111,6 +119,12 @@ pub fn run() {
             commands::vault::get_kdf_info,
             commands::vault::relax_kdf_for_mobile,
             commands::vault::rotate_recovery_key,
+            commands::vault::commit_recovery_key,
+            commands::vault::cancel_recovery_key,
+            commands::vault::reset_access_password_with_recovery,
+            commands::security_migration::security_migration_prepare,
+            commands::security_migration::security_migration_activate,
+            commands::security_migration::security_migration_cancel,
             commands::vault::vault_try_grace_unlock,
             commands::vault::set_launch_at_login,
             commands::vault::set_grace_days,
@@ -277,6 +291,16 @@ pub fn run() {
             commands::files::reveal_path,
             commands::files::file_save_groups,
             commands::locker::locker_list,
+            commands::locker::locker_connection_status,
+            commands::locker::locker_source_stat,
+            commands::locker::locker_lookup,
+            commands::locker::locker_receive,
+            commands::locker::locker_operation_status,
+            commands::locker::locker_operations_list,
+            commands::locker::locker_operation_resume,
+            commands::locker::locker_operation_retarget,
+            commands::locker::locker_clear_history,
+            commands::locker::locker_migrate_legacy,
             commands::locker::locker_put_from_path,
             commands::locker::locker_put_bytes,
             commands::locker::locker_put_from_vault,

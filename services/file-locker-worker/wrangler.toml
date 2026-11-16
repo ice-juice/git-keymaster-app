@@ -1,0 +1,21 @@
+# 文件寄存柜分享侧。每个用户自己部署，御钥师不运营这份 Worker。
+# 密钥不要写进本文件。生产用 `wrangler secret put LOCKER_HMAC_SECRET`，
+# 本地用项目根目录的 .dev.vars（已在 .gitignore 里）。
+
+name = "file-locker"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "file-locker"
+# `wrangler d1 create file-locker` 输出的 database_id 贴到这里。
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "migrations"
+
+[[r2_buckets]]
+binding = "LOCKER_BUCKET"
+bucket_name = "file-locker-example"
+
+[triggers]
+crons = ["* * * * *"]

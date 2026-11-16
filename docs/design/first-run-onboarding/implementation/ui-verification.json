@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "results": [
+    "save, draft restart, rapid changes, UI acknowledgement",
+    "skip preserves initial capture permission",
+    "lost commit response recovered without replay",
+    "partial local preference failure is recoverable",
+    "unreadable configuration blocks setup",
+    "legacy users are not reset",
+    "unsupported capture disabled",
+    "mobile layout, native safe insets and honest iOS capability",
+    "English locale and no forced animation before first use",
+    "partial OS failure resumes the original operation",
+    "settings reopen keeps existing capture protection",
+    "post-workspace biometric prompt can be declined without enabling",
+    "lost final acknowledgement resolves by readback without a new commit",
+    "system reduced motion disables animation previews"
+  ]
+}

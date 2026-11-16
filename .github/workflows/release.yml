@@ -55,6 +55,11 @@ jobs:
       - name: Check branding and packaging invariants
         run: node scripts/check-release-invariants.mjs --test
 
+      - name: Setup Node for embedded Worker
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 

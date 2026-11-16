@@ -3,7 +3,7 @@ package com.jeck.gitkeymaster
 import android.app.Activity
 import android.view.WindowManager
 
-/** Activity 窗口 FLAG_SECURE。冷启动先按默认禁止截屏，等 Rust 读完配置再改。 */
+/** 配置未知时先保护窗口；Rust 读完后按真实配置应用，新设备默认允许截图。 */
 object ScreenProtectGate {
   @Volatile
   var rustConfigured: Boolean = false

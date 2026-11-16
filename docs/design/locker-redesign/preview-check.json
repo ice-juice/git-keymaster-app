@@ -1,0 +1,13 @@
+{
+  "date": "2026-11-15T02:26:21.438Z",
+  "result": "passed",
+  "scope": "local design prototype, no product or cloud operations",
+  "results": [
+    "search, clear, active/ended filters, cleanup, partial sharing retry, revoke preserves item, delete confirmation",
+    "select first, explicit deposit, rule summary, async simulated progress, sharing handoff",
+    "real text input, invalid code, fullwidth code normalization, external full-link validation and target selection",
+    "own item pickup skips code entry; editing lookup credentials invalidates the previous result",
+    "desktop/narrow 840/390/320 layouts, dark theme, repeat interactions after resize",
+    "variant carousel, first-use setup, separate configured state, vault-source selection, mobile alternative"
+  ]
+}

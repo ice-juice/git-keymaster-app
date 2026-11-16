@@ -9,7 +9,7 @@ class MainActivity : TauriActivity() {
   private var appWebView: WebView? = null
 
   override fun onCreate(savedInstanceState: Bundle?) {
-    // 读配置之前先按默认禁止截屏，避免启动瞬间被系统截到。
+    // 未识别配置时保守防护，避免老用户启动瞬间泄露；新配置由 Rust 在引导显示前放开。
     ScreenProtectGate.applyDefault(this)
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)

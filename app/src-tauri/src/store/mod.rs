@@ -2,12 +2,13 @@
 //! 文件格式：`nonce(24) || XChaCha20-Poly1305 密文`。
 
 pub mod blob;
+mod transaction;
+pub use transaction::{transaction, with_exclusive_workspace};
 
 use crate::error::{AppError, Result};
 use crate::model::{
     AccountData, FileData, LockerData, NoteData, QrHistoryData, Secrets, TotpData, VaultData,
 };
-use crate::vault::atomic_write;
 use crate::vault::crypto::{self, KEY_LEN, LABEL_KEYFILE, LABEL_METADATA, XNONCE_LEN};
 use crate::vault::Vault;
 use serde::de::DeserializeOwned;
@@ -136,17 +137,27 @@ fn load_cached<T: Clone + Default + DeserializeOwned>(
     path: PathBuf,
     slot: &Mutex<Option<PlainCache<T>>>,
 ) -> Result<T> {
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
     let gen = PLAINTEXT_GEN.load(Ordering::Acquire);
     let mut guard = cache_lock(slot);
     if let Some(hit) = guard.as_ref() {
         if hit.gen == gen && hit.path == path {
+            if !vault.is_unlocked() {
+                return Err(AppError::Locked);
+            }
             return Ok(hit.value.clone());
         }
     }
     // 同一类文件同时来的读在这把锁上排队，解密一次，后来的命中缓存。
     // 不拿保险库锁，窗口线程查状态不用等冷文件。
     let value: T = load_sealed(vault, &path)?;
-    if PLAINTEXT_GEN.load(Ordering::Acquire) == gen {
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    if vault.is_unlocked() && PLAINTEXT_GEN.load(Ordering::Acquire) == gen {
         *guard = Some(PlainCache {
             gen,
             path,
@@ -157,13 +168,18 @@ fn load_cached<T: Clone + Default + DeserializeOwned>(
 }
 
 fn load_sealed<T: Default + DeserializeOwned>(vault: &Vault, path: &Path) -> Result<T> {
+    let _access = transaction::access(vault.root())?;
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    // WAL recovery above runs first; then recover an interrupted single-file replace.
+    // A present but unusable previous copy is an error, never an empty container.
     crate::vault::recover_previous_if_missing(path);
-    if !path.exists() {
-        return Ok(T::default());
+    if !path.exists() && crate::vault::previous_path(path).exists() {
+        return Err(AppError::Io("元数据正本缺失且上一份副本无法恢复".into()));
     }
-    let key = vault.subkey(LABEL_METADATA)?;
-    let raw = std::fs::read(path)?;
-    let plain = open(&key, &raw)?;
+    let Some(raw) = transaction::read(vault.root(), path)? else {
+        return Ok(T::default());
+    };
+    let plain = zeroize::Zeroizing::new(open(&key, &raw)?);
     Ok(serde_json::from_slice(&plain)?)
 }
 
@@ -178,10 +194,14 @@ pub fn load_data_uncached(vault: &Vault) -> Result<VaultData> {
 }
 
 pub fn save_data(vault: &Vault, data: &VaultData) -> Result<()> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let json = serde_json::to_vec(data)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(data)?);
     let sealed = seal(&key, &json)?;
-    atomic_write(&data_path(vault), &sealed)?;
+    transaction::write(vault.root(), &data_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -191,10 +211,14 @@ pub fn load_secrets(vault: &Vault) -> Result<Secrets> {
 }
 
 pub fn save_secrets(vault: &Vault, secrets: &Secrets) -> Result<()> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let json = serde_json::to_vec(secrets)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(secrets)?);
     let sealed = seal(&key, &json)?;
-    atomic_write(&secrets_path(vault), &sealed)?;
+    transaction::write(vault.root(), &secrets_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -272,29 +296,40 @@ pub fn cloud_sync_secret(vault: &Vault) -> Result<Option<String>> {
 
 /// 保存私钥密文副本（keys/<id>.enc）。
 pub fn save_key(vault: &Vault, key_id: &str, private_bytes: &[u8]) -> Result<()> {
-    let key = vault.subkey(LABEL_KEYFILE)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_KEYFILE)?);
     let sealed = seal(&key, private_bytes)?;
-    atomic_write(&key_path(vault, key_id)?, &sealed)
+    transaction::write(vault.root(), &key_path(vault, key_id)?, &sealed)
 }
 
 /// 读取私钥密文副本明文（需已解锁）。
 pub fn load_key(vault: &Vault, key_id: &str) -> Result<Vec<u8>> {
-    let key = vault.subkey(LABEL_KEYFILE)?;
-    let raw = std::fs::read(key_path(vault, key_id)?)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_KEYFILE)?);
+    let raw = transaction::read(vault.root(), &key_path(vault, key_id)?)?
+        .ok_or_else(|| AppError::Invalid("密钥文件缺失".into()))?;
     open(&key, &raw)
 }
 
 pub fn key_exists(vault: &Vault, key_id: &str) -> bool {
-    key_path(vault, key_id).is_ok_and(|p| p.exists())
+    key_path(vault, key_id)
+        .is_ok_and(|p| transaction::read(vault.root(), &p).is_ok_and(|b| b.is_some()))
 }
 
 /// 删除私钥密文副本（`keys/<id>.enc`）。文件已不在时视为成功。
 pub fn delete_key(vault: &Vault, key_id: &str) -> Result<()> {
-    let path = key_path(vault, key_id)?;
-    if path.is_file() {
-        std::fs::remove_file(path)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
     }
-    Ok(())
+    let path = key_path(vault, key_id)?;
+    transaction::delete(vault.root(), &path)
 }
 
 pub fn load_totp(vault: &Vault) -> Result<TotpData> {
@@ -302,10 +337,14 @@ pub fn load_totp(vault: &Vault) -> Result<TotpData> {
 }
 
 pub fn save_totp(vault: &Vault, data: &TotpData) -> Result<()> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let json = serde_json::to_vec(data)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(data)?);
     let sealed = seal(&key, &json)?;
-    atomic_write(&totp_path(vault), &sealed)?;
+    transaction::write(vault.root(), &totp_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -315,10 +354,14 @@ pub fn load_accounts(vault: &Vault) -> Result<AccountData> {
 }
 
 pub fn save_accounts(vault: &Vault, data: &AccountData) -> Result<()> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let json = serde_json::to_vec(data)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(data)?);
     let sealed = seal(&key, &json)?;
-    atomic_write(&accounts_path(vault), &sealed)?;
+    transaction::write(vault.root(), &accounts_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -328,10 +371,14 @@ pub fn load_files(vault: &Vault) -> Result<FileData> {
 }
 
 pub fn save_files(vault: &Vault, data: &FileData) -> Result<()> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let json = serde_json::to_vec(data)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(data)?);
     let sealed = seal(&key, &json)?;
-    atomic_write(&files_path(vault), &sealed)?;
+    transaction::write(vault.root(), &files_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -341,10 +388,14 @@ pub fn load_notes(vault: &Vault) -> Result<NoteData> {
 }
 
 pub fn save_notes(vault: &Vault, data: &NoteData) -> Result<()> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let json = serde_json::to_vec(data)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(data)?);
     let sealed = seal(&key, &json)?;
-    atomic_write(&notes_path(vault), &sealed)?;
+    transaction::write(vault.root(), &notes_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -354,12 +405,16 @@ pub fn load_qr_history(vault: &Vault) -> Result<QrHistoryData> {
 }
 
 pub fn save_qr_history(vault: &Vault, data: &QrHistoryData) -> Result<()> {
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
     let mut data = data.clone();
     crate::model::normalize_qr_history(&mut data);
-    let key = vault.subkey(LABEL_METADATA)?;
-    let json = serde_json::to_vec(&data)?;
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(&data)?);
     let sealed = seal(&key, &json)?;
-    atomic_write(&qr_history_path(vault), &sealed)?;
+    transaction::write(vault.root(), &qr_history_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
@@ -369,24 +424,34 @@ pub fn load_locker(vault: &Vault) -> Result<LockerData> {
 }
 
 pub fn save_locker(vault: &Vault, data: &LockerData) -> Result<()> {
-    let key = vault.subkey(LABEL_METADATA)?;
-    let json = serde_json::to_vec(data)?;
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(data)?);
     let sealed = seal(&key, &json)?;
-    atomic_write(&locker_path(vault), &sealed)?;
+    transaction::write(vault.root(), &locker_path(vault), &sealed)?;
     invalidate_plaintext_cache();
     Ok(())
 }
 
 pub fn save_icon(vault: &Vault, hash: &str, webp: &[u8]) -> Result<()> {
-    atomic_write(&icon_path(vault, hash)?, webp)
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    transaction::write(vault.root(), &icon_path(vault, hash)?, webp)
 }
 
 pub fn load_icon(vault: &Vault, hash: &str) -> Result<Vec<u8>> {
-    let path = icon_path(vault, hash)?;
-    if !path.is_file() {
-        return Err(AppError::Invalid("自定义图标不存在".into()));
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
     }
-    Ok(std::fs::read(path)?)
+    let path = icon_path(vault, hash)?;
+    transaction::read(vault.root(), &path)?
+        .ok_or_else(|| AppError::Invalid("自定义图标不存在".into()))
 }
 
 pub fn icon_exists(vault: &Vault, hash: &str) -> bool {
@@ -411,13 +476,166 @@ pub fn list_icon_hashes(vault: &Vault) -> Vec<String> {
     out
 }
 
+/// Synchronization base revision commits together with merged local metadata.
+pub fn save_sync_revision(vault: &Vault, etag: &str) -> Result<()> {
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    transaction::write(
+        vault.root(),
+        &vault.root().join("sync/remote-revision"),
+        etag.as_bytes(),
+    )
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SyncAnchor {
+    pub protocol: u32,
+    pub generation: u64,
+    pub digest: String,
+}
+
+pub fn load_sync_anchor(vault: &Vault, scope: &str) -> Result<Option<SyncAnchor>> {
+    if !blob::is_sha256_hex(scope) {
+        return Err(AppError::Invalid("同步版本锚范围无效".into()));
+    }
+    load_sealed(
+        vault,
+        &vault.root().join(format!("data/sync-anchor-{scope}.enc")),
+    )
+}
+
+pub fn save_sync_anchor(vault: &Vault, scope: &str, anchor: &SyncAnchor) -> Result<()> {
+    if !blob::is_sha256_hex(scope) {
+        return Err(AppError::Invalid("同步版本锚范围无效".into()));
+    }
+    let _access = transaction::access(vault.root())?;
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_METADATA)?);
+    let json = zeroize::Zeroizing::new(serde_json::to_vec(anchor)?);
+    let sealed = seal(&key, &json)?;
+    transaction::write(
+        vault.root(),
+        &vault.root().join(format!("data/sync-anchor-{scope}.enc")),
+        &sealed,
+    )
+}
+
+/// Both directions matter: a deleted container must not look like a legitimately
+/// empty one while secrets still prove that live entries used to exist.
+pub fn validate_secret_references(
+    secrets: &Secrets,
+    totp: &TotpData,
+    accounts: &AccountData,
+) -> Result<()> {
+    if crate::model::secrets_incomplete_for_entries(secrets, totp, accounts) {
+        return Err(AppError::Invalid(
+            "数据不完整：账号密码或 TOTP 种子缺失".into(),
+        ));
+    }
+    if secrets.account_secrets.keys().any(|id| {
+        !accounts.deleted_entries.contains_key(id) && !accounts.entries.iter().any(|e| &e.id == id)
+    }) {
+        return Err(AppError::Invalid(
+            "数据不完整：存在未关联账号的机密，账号容器可能缺失；请先保留原库并恢复完整备份".into(),
+        ));
+    }
+    if secrets.totp_seeds.keys().any(|id| {
+        !totp.deleted_entries.contains_key(id) && !totp.entries.iter().any(|e| &e.id == id)
+    }) {
+        return Err(AppError::Invalid(
+            "数据不完整：存在未关联条目的 TOTP 种子，条目容器可能缺失；请先保留原库并恢复完整备份"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
+/// A complete encrypted workspace checkpoint before a user-requested restore.
+/// It remains usable with the existing access/recovery credentials. Blob hard links
+/// are safe because content-addressed blobs are immutable and never overwritten.
+pub fn create_recovery_checkpoint(vault: &Vault) -> Result<PathBuf> {
+    let _access = transaction::access(vault.root())?;
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    invalidate_plaintext_cache();
+    let data = load_data(vault)?;
+    let secrets = load_secrets(vault)?;
+    let totp = load_totp(vault)?;
+    let accounts = load_accounts(vault)?;
+    let files = load_files(vault)?;
+    let notes = load_notes(vault)?;
+    let _ = load_qr_history(vault)?;
+    let _ = load_locker(vault)?;
+    validate_secret_references(&secrets, &totp, &accounts)?;
+    if crate::model::secrets_incomplete_for_entries(&secrets, &totp, &accounts) {
+        return Err(AppError::Invalid(
+            "现用库缺少密码或种子，无法先建立完整恢复点；请先抢救备份".into(),
+        ));
+    }
+    for key in &data.keys {
+        let _ = zeroize::Zeroizing::new(load_key(vault, &key.id)?);
+    }
+    for hash in crate::model::collect_blob_hashes_all(&files, &notes, &accounts) {
+        blob::read_blob(vault, &hash, std::io::sink())?;
+    }
+    let base = vault.root().join("backups");
+    std::fs::create_dir_all(&base)?;
+    let id = uuid::Uuid::new_v4();
+    let staging = base.join(format!(".security-stage-{id}"));
+    let ready = base.join(format!("security-{id}"));
+    std::fs::create_dir(&staging)?;
+    for (directory, suffix) in [
+        ("data", ".enc"),
+        ("keys", ".enc"),
+        ("icons", ".webp"),
+        ("blobs", ".blob"),
+    ] {
+        let source = vault.root().join(directory);
+        let target = staging.join(directory);
+        std::fs::create_dir(&target)?;
+        if !source.exists() {
+            continue;
+        }
+        for entry in std::fs::read_dir(&source)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            if !name.to_string_lossy().ends_with(suffix) {
+                continue;
+            }
+            if !entry.file_type()?.is_file() {
+                return Err(AppError::Invalid("恢复点来源包含非普通文件，已中止".into()));
+            }
+            let dest = target.join(name);
+            if directory == "blobs" && std::fs::hard_link(entry.path(), &dest).is_ok() {
+                continue;
+            }
+            std::fs::copy(entry.path(), &dest)?;
+            // Windows FlushFileBuffers requires a writable file handle.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&dest)?
+                .sync_all()?;
+        }
+    }
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    crate::vault::atomic_write(
+        &staging.join("vault.json"),
+        &serde_json::to_vec_pretty(vault.header())?,
+    )?;
+    std::fs::rename(&staging, &ready)?;
+    Ok(ready)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{AccountSecret, Identity, KeyRecord};
-    use std::collections::HashMap;
     use crate::vault::header::KdfParams;
     use crate::vault::kdf::{ITERS_FLOOR, MEM_FLOOR_KIB};
+    use std::collections::HashMap;
 
     fn unlocked_vault() -> (Vault, PathBuf) {
         let root = std::env::temp_dir().join(format!("gam-store-{}", uuid::Uuid::new_v4()));
@@ -583,7 +801,12 @@ mod tests {
         );
 
         cfg.clear_runtime_secrets();
-        assert!(cfg.cloud_sync.as_ref().unwrap().secret_access_key.is_empty());
+        assert!(cfg
+            .cloud_sync
+            .as_ref()
+            .unwrap()
+            .secret_access_key
+            .is_empty());
         assert!(!migrate_and_hydrate_config_secrets(&v, &mut cfg).unwrap());
         assert_eq!(
             cfg.cloud_sync.as_ref().unwrap().secret_access_key,
@@ -605,6 +828,28 @@ mod tests {
         assert_eq!(got.totp_seeds.get("t1").unwrap(), "JBSWY3DPEHPK3PXP");
         assert!(path.is_file());
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn recovery_checkpoint_retains_previous_credentials_and_data() {
+        let (v, root) = unlocked_vault();
+        let mut secrets = Secrets::default();
+        secrets.github_pat = Some("synthetic-before".into());
+        save_secrets(&v, &secrets).unwrap();
+        let checkpoint = create_recovery_checkpoint(&v).unwrap();
+        secrets.github_pat = Some("synthetic-after".into());
+        save_secrets(&v, &secrets).unwrap();
+        let mut previous = Vault::load(&checkpoint).unwrap();
+        previous.unlock_with_password("pw").unwrap();
+        assert_eq!(
+            load_secrets(&previous).unwrap().github_pat.as_deref(),
+            Some("synthetic-before")
+        );
+        assert_eq!(
+            load_secrets(&v).unwrap().github_pat.as_deref(),
+            Some("synthetic-after")
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -702,7 +947,10 @@ mod tests {
         assert!(!disk.contains("otpauth"));
         let loaded = load_qr_history(&v).unwrap();
         assert_eq!(loaded.scans[0].text, "otpauth://totp/qr-secret-payload");
-        assert_eq!(loaded.generations[0].text, "https://example.test/qr-gen-secret");
+        assert_eq!(
+            loaded.generations[0].text,
+            "https://example.test/qr-gen-secret"
+        );
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -1,0 +1,19 @@
+{
+  "date": "2026-11-15T02:04:28.198Z",
+  "results": [
+    "default live rendering leaves original Markdown unchanged",
+    "click rendered heading, type, undo and redo",
+    "toolbar keeps selection, Ctrl+B and undo preserve Markdown",
+    "desktop table insertion at caret and H4-H6 dropdown, keyboard navigation, dismissal and undo",
+    "Chromium IME composition and emoji stay synchronized",
+    "task toggles and directly editable table cells, undo and escaped pipe",
+    "save payload/readback and note switch undo isolation (mock IPC)",
+    "failed save keeps unsaved note and leave confirmation; Ctrl+S saves successfully",
+    "all optional modes preserve text",
+    "write lock covers text, table, tasks and toolbar commands",
+    "vault images render, remote images do not fetch, unknown syntax preserved",
+    "1600-line note scrolls and accepts edits at the end",
+    "4 desktop/mobile dimensions × 3 themes, mobile tap editing",
+    "Tauri-equivalent nonce CSP keeps CodeMirror stylesheet and source gutter intact"
+  ]
+}

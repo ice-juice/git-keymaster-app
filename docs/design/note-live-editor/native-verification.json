@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-15T00:57:38.890Z",
+  "appProcessId": 52764,
+  "engine": "157.0.4341.46",
+  "geometry": {
+    "aligned": true,
+    "side": true,
+    "display": "flex",
+    "nonce": "notes-test"
+  },
+  "noteStorage": "synthetic IPC fixture",
+  "checks": [
+    "native WebView2 editing",
+    "Ctrl+S save payload",
+    "nonce CSP stylesheet",
+    "aligned source gutter"
+  ]
+}

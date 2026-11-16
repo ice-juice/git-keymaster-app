@@ -9,9 +9,7 @@
 
 use crate::app_config;
 use crate::error::{AppError, Result};
-use crate::vault::crypto::{
-    self, LABEL_FILE_BLOB, XNONCE_LEN,
-};
+use crate::vault::crypto::{self, LABEL_FILE_BLOB, XNONCE_LEN};
 use crate::vault::Vault;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -83,7 +81,7 @@ pub fn write_blob_limited<R: Read>(
     if !(MIN_CHUNK_SIZE..=MAX_CHUNK_SIZE).contains(&chunk_size) {
         return Err(AppError::Invalid("无效的分块大小".into()));
     }
-    let key = vault.subkey(LABEL_FILE_BLOB)?;
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_FILE_BLOB)?);
     let dir = blobs_dir(vault);
     std::fs::create_dir_all(&dir)?;
 
@@ -103,9 +101,7 @@ pub fn write_blob_limited<R: Read>(
             if let Err(e) = std::fs::rename(&tmp, &dest) {
                 if let Err(copy_err) = std::fs::copy(&tmp, &dest) {
                     let _ = std::fs::remove_file(&tmp);
-                    return Err(AppError::Io(format!(
-                        "写入 blob 失败：{e} / {copy_err}"
-                    )));
+                    return Err(AppError::Io(format!("写入 blob 失败：{e} / {copy_err}")));
                 }
                 let _ = std::fs::remove_file(&tmp);
             }
@@ -194,6 +190,17 @@ pub fn blob_ciphertext_len(vault: &Vault, sha256: &str) -> Option<u64> {
         .map(|m| m.len())
 }
 
+/// Verify a downloaded immutable blob before making its content-addressed path visible.
+pub fn verify_blob_ciphertext(vault: &Vault, path: &Path, sha256: &str) -> Result<u64> {
+    if !is_sha256_hex(sha256) {
+        return Err(AppError::Invalid("无效的附件哈希".into()));
+    }
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_FILE_BLOB)?);
+    let file = std::fs::File::open(path)?;
+    let total = file.metadata()?.len();
+    decrypt_blob_file(file, total, &key, sha256, std::io::sink())
+}
+
 pub fn read_blob<W: Write>(vault: &Vault, sha256: &str, writer: W) -> Result<u64> {
     if !vault.is_unlocked() {
         return Err(AppError::Locked);
@@ -206,7 +213,7 @@ pub fn read_blob<W: Write>(vault: &Vault, sha256: &str, writer: W) -> Result<u64
     if !path.is_file() {
         return Err(AppError::Invalid("附件内容不存在".into()));
     }
-    let key = vault.subkey(LABEL_FILE_BLOB)?;
+    let key = zeroize::Zeroizing::new(vault.subkey(LABEL_FILE_BLOB)?);
     let file = std::fs::File::open(&path)?;
     let total = file.metadata()?.len();
     decrypt_blob_file(file, total, &key, sha256, writer)
@@ -246,7 +253,8 @@ fn decrypt_blob_file<R: Read, W: Write>(
         if left < (XNONCE_LEN + TAG_LEN) as u64 {
             return Err(AppError::Crypto);
         }
-        let cipher_len = (left - XNONCE_LEN as u64).min(u64::from(chunk_size) + TAG_LEN as u64) as usize;
+        let cipher_len =
+            (left - XNONCE_LEN as u64).min(u64::from(chunk_size) + TAG_LEN as u64) as usize;
         let mut nonce = [0u8; XNONCE_LEN];
         file.read_exact(&mut nonce)?;
         let mut ct = vec![0u8; cipher_len];
@@ -293,18 +301,13 @@ pub fn list_blob_hashes(vault: &Vault) -> Vec<String> {
     out
 }
 
-pub fn gc_unreferenced_blobs(vault: &Vault, referenced: &HashSet<String>) -> Result<usize> {
-    let mut removed = 0usize;
-    for hash in list_blob_hashes(vault) {
-        if referenced.contains(&hash) {
-            continue;
-        }
-        let path = blob_path(vault, &hash);
-        if std::fs::remove_file(&path).is_ok() {
-            removed += 1;
-        }
+/// Logical deletion must not race an in-flight attachment save or destroy a recovery
+/// generation. Physical reclamation is deferred to a separate verified-retention job.
+pub fn gc_unreferenced_blobs(vault: &Vault, _referenced: &HashSet<String>) -> Result<usize> {
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
     }
-    Ok(removed)
+    Ok(0)
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -428,15 +431,15 @@ mod tests {
     }
 
     #[test]
-    fn gc_keeps_referenced_only() {
+    fn gc_does_not_delete_inflight_or_recoverable_blobs() {
         let (v, root) = unlocked_vault();
         let keep = write_blob_limited(&v, Cursor::new(b"keep-me"), 8, 1024).unwrap();
         let drop = write_blob_limited(&v, Cursor::new(b"drop-me"), 8, 1024).unwrap();
         let mut refs = HashSet::new();
         refs.insert(keep.sha256.clone());
-        assert_eq!(gc_unreferenced_blobs(&v, &refs).unwrap(), 1);
+        assert_eq!(gc_unreferenced_blobs(&v, &refs).unwrap(), 0);
         assert!(blob_exists(&v, &keep.sha256));
-        assert!(!blob_exists(&v, &drop.sha256));
+        assert!(blob_exists(&v, &drop.sha256));
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -80,9 +80,14 @@ pub fn save(file: &BiometricEnvFile) -> Result<()> {
 
 pub fn clear() {
     let _ = std::fs::remove_file(file_path());
+    let _ = std::fs::remove_file(crate::vault::previous_path(&file_path()));
 }
 
 pub fn binding_matches(file: &BiometricEnvFile, workspace_id: &str) -> bool {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if !file.key_ref.starts_with(super::apple::KEY_PREFIX) {
+        return false;
+    }
     file.workspace_id == workspace_id && file.platform == current_platform()
 }
 
@@ -114,7 +119,7 @@ mod tests {
             version: VERSION,
             platform: current_platform().into(),
             workspace_id: workspace_id.into(),
-            key_ref: "gam-vault-ws-1".into(),
+            key_ref: "gam-vault-acl-v2-ws-1".into(),
             challenge: encode_challenge(&[1, 2, 3, 4]),
             envelope: Envelope {
                 salt: "c2FsdA==".into(),

@@ -1,0 +1,6 @@
+
+running 2 tests
+test commands::security_migration::tests::fresh_key_copy_preserves_content_and_guards_activation ... ok
+test commands::security_migration::tests::publish_never_replaces_an_existing_empty_directory ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 495 filtered out; finished in 19.21s

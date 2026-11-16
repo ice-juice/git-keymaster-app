@@ -1,0 +1,16 @@
+{
+  "result": "passed",
+  "checks": [
+    "repeat migration preserves legacy object and remaining allowance",
+    "partial migration replay completes all six v2 tables including token aliases"
+  ],
+  "engine": "3.43.1",
+  "tables": [
+    "locker_v2_items",
+    "locker_v2_shares",
+    "locker_v2_claims",
+    "locker_v2_claim_tokens",
+    "locker_v2_operations",
+    "locker_v2_nonces"
+  ]
+}

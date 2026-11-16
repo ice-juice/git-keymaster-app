@@ -83,7 +83,6 @@ export function useSettingsModel() {
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
-  const [newRecovery, setNewRecovery] = useState("");
   const [bio, setBio] = useState<BiometricStatus | null>(null);
   const [bioPw, setBioPw] = useState("");
   const [allowScreenshots, setAllowScreenshots] = useState(false);
@@ -146,19 +145,6 @@ export function useSettingsModel() {
     }
   }
 
-  async function rotate() {
-    setErr("");
-    setMsg("");
-    setBusy(true);
-    try {
-      const r = await api.rotateRecoveryKey();
-      setNewRecovery(r.recoveryKey);
-    } catch (e) {
-      setErr(errMessage(e));
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function toggleMobileBackgroundRun(enabled: boolean) {
     setErr("");
@@ -390,9 +376,6 @@ export function useSettingsModel() {
     msg,
     setMsg,
     busy,
-    newRecovery,
-    setNewRecovery,
-    rotate,
     bio,
     setBio,
     bioPw,

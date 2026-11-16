@@ -36,7 +36,9 @@ pub fn pickup_code_hash(code: &str) -> String {
 }
 
 pub fn normalize_pickup_code(raw: &str) -> Result<String> {
-    let digits: String = raw.chars().filter(|c| !c.is_whitespace()).collect();
+    let digits: String = raw.chars().filter(|c| !c.is_whitespace()).map(|c| {
+        if ('０'..='９').contains(&c) { char::from_u32(c as u32 - 0xfee0).unwrap() } else { c }
+    }).collect();
     if digits.len() != 6 || !digits.chars().all(|c| c.is_ascii_digit()) {
         return Err(AppError::Invalid("取件码必须是 6 位数字".into()));
     }
@@ -143,16 +145,69 @@ pub fn download_filename(name: &str) -> String {
     }
 }
 
-/// `#<ck>.<文件名的 base64url>`。文件名只留在 fragment，不进路径，服务器看不到。
-pub fn share_link(base: &str, slug: &str, ck: &[u8; KEY_LEN], filename: &str) -> String {
+const SHARE_AUTH_KEY_LABEL: &[u8] = b"gam-locker-share-auth-key-v2";
+
+fn share_base(base: &str) -> Result<String> {
+    let url = url::Url::parse(base.trim()).map_err(|_| AppError::Invalid("取件服务地址无效".into()))?;
+    if !matches!(url.scheme(), "http" | "https") || !url.has_host()
+        || !url.username().is_empty() || url.password().is_some()
+        || url.query().is_some() || url.fragment().is_some() {
+        return Err(AppError::Invalid("取件服务地址无效".into()));
+    }
+    Ok(url.as_str().trim_end_matches('/').to_owned())
+}
+
+fn share_mac_key(ck: &[u8; KEY_LEN]) -> [u8; KEY_LEN] {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(ck).expect("HMAC key");
+    mac.update(SHARE_AUTH_KEY_LABEL);
+    mac.finalize().into_bytes().into()
+}
+
+fn share_auth_payload(base: &str, slug: &str, size: u64, name: &str) -> String {
+    format!("gam-locker-share-v2\n{base}\n{slug}\n{size}\n{name}")
+}
+
+/// Authenticated size prevents a valid prefix of GKB1 chunks being accepted as
+/// a complete file. Filename, service and slug are bound to the same metadata.
+/// All integrity material remains in the URL fragment and is not sent to Worker.
+pub fn share_link(base: &str, slug: &str, ck: &[u8; KEY_LEN], filename: &str, plain_size: u64) -> Result<String> {
+    if plain_size > LOCKER_MAX_BYTES || slug.len() != 10 || !slug.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(AppError::Invalid("分享文件大小或短码无效".into()));
+    }
+    let base = share_base(base)?;
     let name = URL_SAFE_NO_PAD.encode(download_filename(filename).as_bytes());
-    format!(
-        "{}/d/{}#{}.{}",
-        base.trim().trim_end_matches('/'),
-        slug,
-        ck_fragment(ck),
-        name
-    )
+    let mut auth_key = share_mac_key(ck);
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(&auth_key).expect("HMAC key");
+    auth_key.zeroize();
+    mac.update(share_auth_payload(&base, slug, plain_size, &name).as_bytes());
+    let tag = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    Ok(format!("{base}/d/{slug}#v2.{}.{plain_size}.{name}.{tag}", ck_fragment(ck)))
+}
+
+pub fn verify_share_fragment(base: &str, slug: &str, fragment: &str) -> Result<([u8; KEY_LEN], String, u64)> {
+    let parts: Vec<_> = fragment.split('.').collect();
+    if parts.len() != 5 || parts[0] != "v2" {
+        return Err(AppError::Invalid("旧分享链接缺少完整性信息，请发送方重新复制分享链接".into()));
+    }
+    let invalid = || AppError::Invalid("分享链接完整性校验失败，请重新复制完整链接".into());
+    if fragment.len() > 2048 || slug.len() != 10 || !slug.bytes().all(|b| b.is_ascii_alphanumeric()) {
+        return Err(invalid());
+    }
+    let size = parts[2].parse::<u64>().map_err(|_| invalid())?;
+    if size > LOCKER_MAX_BYTES || size.to_string() != parts[2] { return Err(invalid()); }
+    let raw_key = zeroize::Zeroizing::new(URL_SAFE_NO_PAD.decode(parts[1]).map_err(|_| invalid())?);
+    if raw_key.len() != KEY_LEN { return Err(invalid()); }
+    let mut ck = zeroize::Zeroizing::new([0u8; KEY_LEN]);
+    ck.copy_from_slice(&raw_key);
+    let tag = URL_SAFE_NO_PAD.decode(parts[4]).map_err(|_| invalid())?;
+    let name = String::from_utf8(URL_SAFE_NO_PAD.decode(parts[3]).map_err(|_| invalid())?).map_err(|_| invalid())?;
+    let base = share_base(base)?;
+    let mut auth_key = share_mac_key(&ck);
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(&auth_key).expect("HMAC key");
+    auth_key.zeroize();
+    mac.update(share_auth_payload(&base, slug, size, parts[3]).as_bytes());
+    mac.verify_slice(&tag).map_err(|_| invalid())?;
+    Ok((*ck, download_filename(&name), size))
 }
 
 /// `expire_at` 为空表示永久。`now >= expire_at` 视为到期。
@@ -501,24 +556,30 @@ mod tests {
     #[test]
     fn share_link_keeps_the_original_filename_out_of_the_path() {
         let ck = [9u8; 32];
-        let url = share_link("https://locker.example.com/", "aB3dE6gH9k", &ck, "trip.jpg");
+        let url = share_link("https://locker.example.com/", "aB3dE6gH9k", &ck, "trip.jpg", 8).unwrap();
         assert!(url.starts_with("https://locker.example.com/d/aB3dE6gH9k#"));
         let hash = url.split_once('#').unwrap().1;
         assert!(!url.split_once('#').unwrap().0.contains("trip"));
-        let (key, name) = hash.split_once('.').unwrap();
-        assert_eq!(key, ck_fragment(&ck));
-        let bytes = URL_SAFE_NO_PAD.decode(name).unwrap();
-        assert_eq!(std::str::from_utf8(&bytes).unwrap(), "trip.jpg");
+        assert_eq!(hash, "v2.CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk.8.dHJpcC5qcGc.s7Ue520jW4iJJyFDcD3MXf76XCiLj_vO9wfduVU_X_Q");
+        let (key, name, size) = verify_share_fragment("https://locker.example.com", "aB3dE6gH9k", hash).unwrap();
+        assert_eq!(key, ck);
+        assert_eq!(name, "trip.jpg");
+        assert_eq!(size, 8);
+        assert!(verify_share_fragment("https://locker.example.com", "aB3dE6gH9k", &hash.replace(".8.", ".4.")).is_err());
+        assert!(verify_share_fragment("https://other.example.com", "aB3dE6gH9k", hash).is_err());
+        assert!(verify_share_fragment("https://locker.example.com", "0123456789", hash).is_err());
+        assert!(verify_share_fragment("https://locker.example.com", "aB3dE6gH9k", &ck_fragment(&ck)).is_err());
 
         let from_path = share_link(
             "https://locker.example.com",
             "aB3dE6gH9k",
             &ck,
             r"C:\Users\a\scan.jpg",
-        );
-        let encoded = from_path.split_once('#').unwrap().1.split_once('.').unwrap().1;
-        let bytes = URL_SAFE_NO_PAD.decode(encoded).unwrap();
-        assert_eq!(std::str::from_utf8(&bytes).unwrap(), "scan.jpg");
+            0,
+        ).unwrap();
+        let (_, name, size) = verify_share_fragment("https://locker.example.com", "aB3dE6gH9k", from_path.split_once('#').unwrap().1).unwrap();
+        assert_eq!(name, "scan.jpg");
+        assert_eq!(size, 0);
         assert_eq!(download_filename("..\\..\\secret.jpg"), "secret.jpg");
         assert_eq!(download_filename("..."), "download.bin");
     }

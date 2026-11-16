@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import './lib/i18n'
 import App from './App.tsx'
+import { OnboardingBoundary } from './ui/OnboardingBoundary'
 import { LocaleProvider } from './lib/locale'
 import { isAndroid, isIOS, resolvePlatform } from './platform/resolve'
 
@@ -21,7 +22,7 @@ async function bootstrap() {
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
       <LocaleProvider>
-        <App />
+        <OnboardingBoundary><App /></OnboardingBoundary>
       </LocaleProvider>
     </StrictMode>,
   )

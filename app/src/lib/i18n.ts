@@ -3,6 +3,10 @@ import { initReactI18next, useTranslation } from "react-i18next";
 import { displayNameFor } from "../../../scripts/brand.mjs";
 import zh from "../locales/zh.json" with { type: "json" };
 import en from "../locales/en.json" with { type: "json" };
+import onboardingZh from "../locales/onboarding.zh.json" with { type: "json" };
+import onboardingEn from "../locales/onboarding.en.json" with { type: "json" };
+import lockerZh from "../locales/locker.zh.json" with { type: "json" };
+import lockerEn from "../locales/locker.en.json" with { type: "json" };
 
 export type UiLocale = "system" | "zh" | "en";
 export type ResolvedLang = "zh" | "en";
@@ -55,8 +59,8 @@ export function useAppName(): string {
 
 void i18n.use(initReactI18next).init({
   resources: {
-    zh: { translation: zh },
-    en: { translation: en },
+    zh: { translation: { ...zh, onboarding: onboardingZh, locker: lockerZh } },
+    en: { translation: { ...en, onboarding: onboardingEn, locker: lockerEn } },
   },
   lng: resolveLang(peekSavedLocale()),
   fallbackLng: "zh",

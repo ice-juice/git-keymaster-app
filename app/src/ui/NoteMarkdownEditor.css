@@ -1,0 +1,273 @@
+/* Layout essentials also live in the static bundle, so a failed dynamic theme
+   cannot separate line numbers from text or place the cursor outside its pane. */
+.md-tb-heading-more { position: relative; }
+.md-tb-btn.md-tb-more-btn { width: auto; gap: 3px; padding-inline: 7px; font-size: 12px; }
+.md-tb-more-btn[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
+.md-tb-heading-menu { position: absolute; top: calc(100% + 7px); left: 0; z-index: 60; min-width: 142px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--panel); box-shadow: var(--shadow-lg); }
+.md-tb-heading-menu button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 0; border-radius: 5px; background: transparent; color: var(--text); font-size: 13px; text-align: left; cursor: pointer; }
+.md-tb-heading-menu button:hover, .md-tb-heading-menu button:focus-visible { background: var(--accent-soft); color: var(--accent); outline: none; }
+.md-tb-heading-number { font-size: 12px; font-weight: 650; color: var(--text-soft); }
+html[data-platform="mobile"] .m-acc-heading-menu { max-height: min(320px, calc(100dvh - 100px - var(--km-ime-inset, 0px))); overflow-y: auto; }
+.note-cm .cm-editor {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+.note-cm .cm-scroller {
+  display: flex;
+  align-items: flex-start;
+  position: relative;
+  height: 100%;
+  overflow: auto;
+  font-family: var(--mono);
+  line-height: 1.75;
+}
+.note-cm .cm-content {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 0;
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 16px 18px 28px;
+}
+.note-cm .cm-line {
+  display: block;
+  padding: 0 2px;
+}
+.note-cm .cm-gutters {
+  display: flex;
+  flex: 0 0 auto;
+  height: 100%;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+}
+.note-cm .cm-gutter {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+}
+.note-cm .cm-gutterElement {
+  box-sizing: border-box;
+}
+.notes-panes {
+  position: relative;
+}
+.note-pane.is-parked {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+  overflow: hidden;
+}
+.note-pane.is-parked .cm-cursorLayer {
+  display: none !important;
+}
+.note-cm.is-live .cm-scroller {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+}
+.note-cm.is-live .cm-content {
+  padding: 24px clamp(18px, 4vw, 56px) 48px;
+  font-size: 15px;
+  line-height: 1.85;
+}
+.note-cm.is-live .md-live-heading {
+  font-weight: 700;
+  line-height: 1.5;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.note-cm.is-live .md-live-h1 {
+  font-size: 28px;
+  letter-spacing: -0.025em;
+}
+.note-cm.is-live .md-live-h2 {
+  font-size: 22px;
+  border-bottom: 1px solid var(--border);
+}
+.note-cm.is-live .md-live-h3 {
+  font-size: 18px;
+}
+.note-cm.is-live .md-live-h4,
+.note-cm.is-live .md-live-h5,
+.note-cm.is-live .md-live-h6 {
+  font-size: 16px;
+}
+.note-cm.is-live .cm-md-heading,
+.note-cm.is-live .cm-md-h1,
+.note-cm.is-live .cm-md-h2,
+.note-cm.is-live .cm-md-h3 {
+  color: var(--text);
+}
+.md-live-strong {
+  font-weight: 700;
+}
+.md-live-em {
+  font-style: italic;
+}
+.md-live-strike {
+  text-decoration: line-through;
+  color: var(--text-soft);
+}
+.md-live-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.md-live-code {
+  font-family: var(--mono);
+  color: var(--reckey-color);
+  background: var(--reckey-bg);
+  border-radius: 4px;
+  padding: 2px 0;
+}
+.note-cm .md-live-code-line {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.75;
+  background: var(--code-bg);
+  padding-inline: 14px;
+}
+.note-cm .md-live-fence-line {
+  font-size: 6px;
+  line-height: 1;
+  min-height: 8px;
+}
+.note-cm .md-live-quote {
+  border-left: 3px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-soft);
+  padding-left: 14px;
+}
+.md-live-bullet {
+  display: inline-block;
+  width: 12px;
+  color: var(--accent);
+  text-align: center;
+}
+.note-cm input.md-live-task {
+  appearance: auto;
+  display: inline-block;
+  width: 15px;
+  height: 15px;
+  margin: 0 4px 0 1px;
+  vertical-align: -2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.note-cm input.md-live-task:focus-visible,
+.md-live-table :is(th, td):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.md-live-rule {
+  display: inline-block;
+  vertical-align: middle;
+  width: 100%;
+  height: 1px;
+  border: none;
+  background: var(--border-strong);
+  cursor: text;
+}
+.md-live-image {
+  display: inline-block;
+  max-width: 100%;
+  color: var(--text-soft);
+  background: var(--panel-2);
+  border-radius: 8px;
+  cursor: text;
+}
+.md-live-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.md-live-table {
+  overflow-x: auto;
+  margin: 8px 0;
+  max-width: 100%;
+}
+.md-live-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.md-live-table th,
+.md-live-table td {
+  border: 1px solid var(--border-strong);
+  padding: 8px 12px;
+  text-align: left;
+  min-width: 72px;
+  cursor: text;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.md-live-table th {
+  font-weight: 650;
+  background: var(--panel-2);
+}
+.md-live-cell {
+  display: block;
+  min-height: 1.6em;
+  min-width: 32px;
+  outline: none;
+}
+.md-live-cell:focus {
+  box-shadow: 0 2px var(--accent);
+}
+.note-cm.is-live.is-mobile .cm-content {
+  padding: 16px 18px 48px;
+  font-size: 16px;
+}
+.note-cm.is-live.is-mobile .md-live-h1 {
+  font-size: 25px;
+}
+html[data-platform="mobile"] .m-note-editor-host .note-cm.is-live .cm-scroller {
+  padding: 0;
+}
+html[data-platform="mobile"] .m-note-editor-host .note-cm.is-live .cm-content {
+  padding: 18px 18px 48px;
+}
+html[data-platform="mobile"] .m-note-editor-host .note-cm.is-live .cm-line {
+  text-indent: 0;
+  padding-inline: 0;
+  background-image: none;
+}
+html[data-platform="mobile"]
+  .m-note-editor-host
+  .note-cm.is-live
+  .md-live-code-line {
+  padding-inline: 12px;
+}
+html[data-platform="mobile"]
+  .m-note-editor-host
+  .note-cm.is-live
+  .md-live-quote {
+  padding-inline: 12px;
+}
+html[data-platform="mobile"]
+  .m-note-editor-host
+  .note-cm.is-live
+  :is(.cm-md-h1, .cm-md-h2, .cm-md-h3, .cm-md-heading) {
+  color: var(--text);
+  font-size: inherit;
+}
+.note-cm .cm-editor:not(.cm-focused) .cm-cursor,
+html[data-platform="mobile"] .note-cm .cm-editor:not(.cm-focused) .cm-cursor {
+  visibility: hidden !important;
+}
+html[data-platform="mobile"] .m-note-save-action {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+html[data-platform="mobile"] .m-note-topbar-actions .m-note-layout-select {
+  max-width: 112px;
+}
+html[data-platform="mobile"] .note-cm.is-live .md-live-table :is(th, td) {
+  border: 1px solid var(--border-strong) !important;
+}

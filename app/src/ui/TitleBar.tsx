@@ -45,9 +45,10 @@ const appWindow = (() => {
  * 左段承接侧边栏（品牌），右段承接主区（工作空间路径 / 主题 / 状态 / 窗口按钮）。
  * 非按钮区域标记为拖拽域，可拖动窗口、双击最大化。
  */
-export function TitleBar() {
+export function TitleBar({ preferencesLocked = false, previewTheme }: { preferencesLocked?: boolean; previewTheme?: "light" | "dark" | "navy" } = {}) {
   const { t } = useTranslation();
-  const { status, theme, toggleTheme } = useApp();
+  const { status, theme: savedTheme, toggleTheme } = useApp();
+  const theme = previewTheme ?? savedTheme;
   const APP_NAME = useAppName();
   const themeLabel =
     theme === "light" ? t("theme.light") : theme === "dark" ? t("theme.dark") : t("theme.navy");
@@ -117,6 +118,7 @@ export function TitleBar() {
           className="tb-chip"
           title={t("theme.current", { name: themeLabel })}
           onClick={toggleTheme}
+          disabled={preferencesLocked}
         >
           {theme === "light" ? <Sun size={13} /> : theme === "dark" ? <Moon size={13} /> : <Palette size={13} />}
           <span>{themeLabel}</span>

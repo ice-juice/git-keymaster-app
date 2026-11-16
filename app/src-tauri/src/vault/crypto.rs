@@ -47,10 +47,14 @@ impl MasterKey {
     pub fn random() -> Self {
         let mut k = [0u8; KEY_LEN];
         fill_random(&mut k);
-        MasterKey(k)
+        let result = MasterKey(k);
+        k.zeroize();
+        result
     }
-    pub fn from_bytes(b: [u8; KEY_LEN]) -> Self {
-        MasterKey(b)
+    pub fn from_bytes(mut b: [u8; KEY_LEN]) -> Self {
+        let result = MasterKey(b);
+        b.zeroize();
+        result
     }
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
@@ -67,8 +71,9 @@ impl MasterKey {
 
     /// 云对象名 HMAC（十六进制），用于隐藏逻辑路径信息（v1.1）。
     pub fn object_name(&self, logical_path: &str) -> String {
-        let key = self.subkey(LABEL_SYNC_NAME);
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&key).expect("HMAC 接受任意长度密钥");
+        let key = zeroize::Zeroizing::new(self.subkey(LABEL_SYNC_NAME));
+        let mut mac =
+            <Hmac<Sha256> as Mac>::new_from_slice(key.as_slice()).expect("HMAC 接受任意长度密钥");
         mac.update(logical_path.as_bytes());
         let out = mac.finalize().into_bytes();
         hex_encode(&out)
@@ -87,12 +92,20 @@ pub fn random_vec(n: usize) -> Vec<u8> {
 }
 
 /// XChaCha20-Poly1305 加密，返回 密文||tag。
-pub fn aead_encrypt(key: &[u8; KEY_LEN], nonce: &[u8; XNONCE_LEN], plaintext: &[u8]) -> Result<Vec<u8>> {
+pub fn aead_encrypt(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; XNONCE_LEN],
+    plaintext: &[u8],
+) -> Result<Vec<u8>> {
     aead_encrypt_with_aad(key, nonce, plaintext, &[])
 }
 
 /// XChaCha20-Poly1305 解密（AEAD，tag 校验失败即返回错误）。
-pub fn aead_decrypt(key: &[u8; KEY_LEN], nonce: &[u8; XNONCE_LEN], ciphertext: &[u8]) -> Result<Vec<u8>> {
+pub fn aead_decrypt(
+    key: &[u8; KEY_LEN],
+    nonce: &[u8; XNONCE_LEN],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>> {
     aead_decrypt_with_aad(key, nonce, ciphertext, &[])
 }
 

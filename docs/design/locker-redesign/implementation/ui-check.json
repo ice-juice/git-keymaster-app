@@ -1,0 +1,22 @@
+{
+  "date": "2026-11-15T03:58:44.684Z",
+  "scope": "actual React UI with isolated synthetic IPC",
+  "results": [
+    "search/reset and failed refresh preserve current records",
+    "staged selection, integer rules, defaults, duplicate submit guard, partial share retry without reupload",
+    "back during upload keeps pending operation visible and does not expose completed code on home",
+    "partial share intent survives fresh page and retries original stored item",
+    "lost upload reply resolves original operation without duplicate upload",
+    "code validation/normalization, invalidate lookup, cancelled picker consumes nothing, lost receive reply resolved",
+    "atomic vault destination and saved-but-unacknowledged recovery retain original operation",
+    "accepted reauthentication followed by lost mutation response closes dialog and checks original operation",
+    "stop sharing preserves item; delete requires confirmation and retains pending cleanup",
+    "reserved last allowance stays in progress and forbids new receive",
+    "old service gates finite/shared operations while explicit unlimited self remains available",
+    "cancelled reauthentication does not continue lookup or leave UI busy",
+    "locking during async lookup discards old-session results",
+    "five viewport/locale combinations × three themes, narrow form and mobile file staging",
+    "safe retarget preserves original claim and operation; cancelled picker has no effect",
+    "legacy private migration explicitly warns, requires confirmation and preserves remaining quota"
+  ]
+}

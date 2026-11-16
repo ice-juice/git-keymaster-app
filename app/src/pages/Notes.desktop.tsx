@@ -210,7 +210,7 @@ export function NotesDesktop() {
               m={m}
               layout={m.viewLayout}
               onLayout={m.setViewLayout}
-              modes={["edit", "split", "preview"]}
+              modes={["live", "edit", "split", "preview"]}
               onInsertImage={() => void m.uploadAndInsertAsset()}
               expanded={editorExpanded}
               onToggleExpand={() => setEditorExpanded((open) => !open)}

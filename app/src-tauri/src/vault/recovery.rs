@@ -7,7 +7,7 @@
 use crate::error::{AppError, Result};
 use crate::vault::crypto::{fill_random, KEY_LEN};
 use sha2::{Digest, Sha256};
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const PREFIX: &str = "GAM1";
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -21,7 +21,9 @@ impl RecoverySecret {
     pub fn random() -> Self {
         let mut b = [0u8; KEY_LEN];
         fill_random(&mut b);
-        RecoverySecret(b)
+        let result = RecoverySecret(b);
+        b.zeroize();
+        result
     }
     pub fn as_bytes(&self) -> &[u8; KEY_LEN] {
         &self.0
@@ -44,30 +46,33 @@ pub fn generate() -> (RecoverySecret, String) {
 
 /// 把秘密编码成分组展示字符串。
 pub fn format_display(secret: &RecoverySecret) -> String {
-    let mut payload = Vec::with_capacity(KEY_LEN + CHECKSUM_LEN);
+    let mut payload = Zeroizing::new(Vec::with_capacity(KEY_LEN + CHECKSUM_LEN));
     payload.extend_from_slice(secret.as_bytes());
     payload.extend_from_slice(&checksum(secret.as_bytes()));
-    let body = b32_encode(&payload);
-    let raw = format!("{}{}", PREFIX, body);
-    // 每 4 个字符一组，用连字符连接。
-    raw.as_bytes()
-        .chunks(4)
-        .map(|c| String::from_utf8_lossy(c).to_string())
-        .collect::<Vec<_>>()
-        .join("-")
+    let body = Zeroizing::new(b32_encode(&payload));
+    let raw = Zeroizing::new(format!("{}{}", PREFIX, body.as_str()));
+    let mut display = String::with_capacity(raw.len() + raw.len() / 4);
+    for (i, byte) in raw.bytes().enumerate() {
+        if i > 0 && i % 4 == 0 {
+            display.push('-');
+        }
+        display.push(byte as char);
+    }
+    display
 }
 
 /// 解析并校验用户输入的恢复密钥，成功返回 32 字节秘密。
 pub fn parse(input: &str) -> Result<RecoverySecret> {
-    let cleaned = normalize(input);
+    let cleaned = Zeroizing::new(normalize(input));
     if !cleaned.starts_with(PREFIX) {
         return Err(AppError::BadRecoveryKey("缺少或错误的版本前缀".into()));
     }
     let body = &cleaned[PREFIX.len()..];
-    let decoded = b32_decode(body)
-        .map_err(|_| AppError::BadRecoveryKey("包含无法识别的字符".into()))?;
-    if decoded.len() < KEY_LEN + CHECKSUM_LEN {
-        return Err(AppError::BadRecoveryKey("长度不足".into()));
+    let decoded = Zeroizing::new(
+        b32_decode(body).map_err(|_| AppError::BadRecoveryKey("包含无法识别的字符".into()))?,
+    );
+    if decoded.len() != KEY_LEN + CHECKSUM_LEN {
+        return Err(AppError::BadRecoveryKey("长度不正确".into()));
     }
     let (secret_bytes, rest) = decoded.split_at(KEY_LEN);
     let got = &rest[..CHECKSUM_LEN];
@@ -75,9 +80,9 @@ pub fn parse(input: &str) -> Result<RecoverySecret> {
     if got != expect {
         return Err(AppError::BadRecoveryKey("校验未通过，可能抄写有误".into()));
     }
-    let mut arr = [0u8; KEY_LEN];
+    let mut arr = Zeroizing::new([0u8; KEY_LEN]);
     arr.copy_from_slice(secret_bytes);
-    Ok(RecoverySecret(arr))
+    Ok(RecoverySecret(*arr))
 }
 
 /// 规范化：大写、去连字符/空白、混淆字符纠正。

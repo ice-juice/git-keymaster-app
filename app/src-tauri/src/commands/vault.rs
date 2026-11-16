@@ -43,6 +43,38 @@ pub struct InitResult {
 
 pub use crate::workspace_path::PathCheck;
 
+/// Applies only when choosing a new access password. Existing passwords remain unlockable.
+pub fn validate_new_access_password(password: &str) -> Result<()> {
+    if password.chars().count() < 8 || password.len() > 4096 {
+        return Err(AppError::Invalid(
+            "访问密码至少需要 8 个字符，且不超过 4096 字节".into(),
+        ));
+    }
+    let comparison = password.trim().to_lowercase();
+    let common = [
+        "12345678",
+        "123456789",
+        "1234567890",
+        "87654321",
+        "password",
+        "password123",
+        "qwerty123",
+        "abcdefgh",
+    ];
+    if comparison.is_empty()
+        || common.contains(&comparison.as_str())
+        || comparison
+            .chars()
+            .next()
+            .is_some_and(|first| comparison.chars().all(|c| c == first))
+    {
+        return Err(AppError::Invalid(
+            "访问密码过于常见，请使用较长且独特的口令".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(mobile)]
 fn discover_existing_workspace() -> Option<PathBuf> {
     crate::identity::workspace_search_roots()
@@ -152,6 +184,9 @@ pub fn vault_init(
     path: String,
     password: String,
 ) -> Result<InitResult> {
+    crate::commands::ensure_writes_allowed(&state)?;
+    validate_new_access_password(&password)?;
+    let password = zeroize::Zeroizing::new(password);
     crate::workspace_path::reject_if_invalid(&path)?;
     let root = PathBuf::from(&path);
     if Vault::exists(&root) {
@@ -172,10 +207,25 @@ pub fn vault_init(
     // 记录工作空间路径（非机密）。
     {
         let mut cfg = recover_lock(&state.config);
+        if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::Busy);
+        }
         cfg.workspace_path = Some(path);
         cfg.save()?;
     }
-    *recover_lock(&state.vault) = Some(vault);
+    {
+        let mut current = recover_lock(&state.vault);
+        if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::Busy);
+        }
+        state
+            .session_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(old) = current.as_mut() {
+            old.lock();
+        }
+        *current = Some(vault);
+    }
     recover_lock(&state.unlock_guard).reset();
     grant_grace_if_configured(&state);
     let _ = crate::sys::adopt_ssh_config(&root);
@@ -193,8 +243,12 @@ pub(crate) fn adopt_unlocked_vault(
     workspace_path: String,
     cloud_sync: Option<crate::sync::s3::S3Config>,
 ) -> Result<()> {
+    crate::commands::ensure_writes_allowed(state)?;
     {
         let mut cfg = recover_lock(&state.config);
+        if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::Busy);
+        }
         cfg.workspace_path = Some(workspace_path.clone());
         if let Some(sync) = cloud_sync {
             cfg.cloud_sync = Some(sync);
@@ -202,7 +256,19 @@ pub(crate) fn adopt_unlocked_vault(
         cfg.save()?;
     }
     let root = PathBuf::from(&workspace_path);
-    *recover_lock(&state.vault) = Some(vault);
+    {
+        let mut current = recover_lock(&state.vault);
+        if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::Busy);
+        }
+        state
+            .session_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(old) = current.as_mut() {
+            old.lock();
+        }
+        *current = Some(vault);
+    }
     recover_lock(&state.unlock_guard).reset();
     crate::commands::hydrate_config_secrets(state);
     grant_grace_if_configured(state);
@@ -211,6 +277,9 @@ pub(crate) fn adopt_unlocked_vault(
 }
 
 pub(crate) fn ensure_loaded(state: &AppState) -> Result<()> {
+    if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(AppError::Busy);
+    }
     let cfg_path = {
         let cfg = recover_lock(&state.config);
         cfg.workspace_path.clone()
@@ -218,6 +287,9 @@ pub(crate) fn ensure_loaded(state: &AppState) -> Result<()> {
     let path = cfg_path.ok_or(AppError::NotInitialized)?;
     let mut vault = recover_lock(&state.vault);
     if vault.is_none() {
+        state
+            .session_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         *vault = Some(Vault::load(&PathBuf::from(path))?);
     }
     Ok(())
@@ -232,6 +304,7 @@ pub(crate) fn resolve_workspace_id(state: &AppState) -> Option<String> {
 /// 用访问密码解锁（带限速）。
 #[tauri::command(async)]
 pub fn vault_unlock(app: AppHandle, state: State<'_, AppState>, password: String) -> Result<()> {
+    let password = zeroize::Zeroizing::new(password);
     {
         let guard = recover_lock(&state.unlock_guard);
         if guard.remaining_ms() > 0 {
@@ -241,10 +314,17 @@ pub fn vault_unlock(app: AppHandle, state: State<'_, AppState>, password: String
     ensure_loaded(&state)?;
     // 先抄出信封和 KDF，再放开锁做 Argon2。派生要几十到几百 MiB，放置久了这些页会被系统收回，
     // 耗时远超刚锁定时的热缓存。这段时间不能占着保险库锁。
-    let (envelope, kdf) = {
+    let (envelope, kdf, epoch, workspace_id) = {
         let vault = recover_lock(&state.vault);
         let v = vault.as_ref().ok_or(AppError::NotInitialized)?;
-        (v.header().envelopes.password.clone(), v.kdf_params().clone())
+        (
+            v.header().envelopes.password.clone(),
+            v.kdf_params().clone(),
+            state
+                .session_epoch
+                .load(std::sync::atomic::Ordering::SeqCst),
+            v.workspace_id().to_string(),
+        )
     };
     crate::vault::kdf::ensure_affordable(&kdf)?;
     match crate::vault::envelope::unwrap_with_password(&envelope, &password, &kdf) {
@@ -252,6 +332,20 @@ pub fn vault_unlock(app: AppHandle, state: State<'_, AppState>, password: String
             {
                 let mut vault = recover_lock(&state.vault);
                 let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
+                if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(AppError::Busy);
+                }
+                if v.workspace_id() != workspace_id
+                    || state
+                        .session_epoch
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                        != epoch
+                {
+                    return Err(AppError::Locked);
+                }
+                state
+                    .session_epoch
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 v.install_master_key(mk);
             }
             finish_unlock(&app, &state);
@@ -271,10 +365,17 @@ pub fn vault_unlock_recovery(
     state: State<'_, AppState>,
     recovery_key: String,
 ) -> Result<()> {
+    let recovery_key = zeroize::Zeroizing::new(recovery_key);
     ensure_loaded(&state)?;
     let mut vault = recover_lock(&state.vault);
     let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
+    if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(AppError::Busy);
+    }
     v.unlock_with_recovery(&recovery_key)?;
+    state
+        .session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     drop(vault);
     finish_unlock(&app, &state);
     Ok(())
@@ -291,12 +392,35 @@ pub fn vault_unlock_biometric(app: AppHandle, state: State<'_, AppState>) -> Res
         }
     }
     ensure_loaded(&state)?;
-    let workspace_id = resolve_workspace_id(&state).ok_or(AppError::NotInitialized)?;
+    let (workspace_id, epoch) = {
+        let guard = recover_lock(&state.vault);
+        let v = guard.as_ref().ok_or(AppError::NotInitialized)?;
+        (
+            v.workspace_id().to_string(),
+            state
+                .session_epoch
+                .load(std::sync::atomic::Ordering::SeqCst),
+        )
+    };
     match crate::biometric::unlock_master_key(&workspace_id) {
         Ok(mk) => {
             {
                 let mut vault = recover_lock(&state.vault);
                 let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
+                if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+                    return Err(AppError::Busy);
+                }
+                if v.workspace_id() != workspace_id
+                    || state
+                        .session_epoch
+                        .load(std::sync::atomic::Ordering::SeqCst)
+                        != epoch
+                {
+                    return Err(AppError::Locked);
+                }
+                state
+                    .session_epoch
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 v.install_master_key(mk);
             }
             // 身份库校验会解密整份 identities.enc。放在保险库锁外面，避免和状态查询、
@@ -325,8 +449,14 @@ pub fn vault_lock(state: State<AppState>) {
 }
 
 pub fn lock_in_memory(state: &AppState) {
-    if let Some(v) = recover_lock(&state.vault).as_mut() {
-        v.lock();
+    {
+        let mut current = recover_lock(&state.vault);
+        state
+            .session_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(v) = current.as_mut() {
+            v.lock();
+        }
     }
     crate::store::invalidate_plaintext_cache();
     {
@@ -336,7 +466,13 @@ pub fn lock_in_memory(state: &AppState) {
     crate::commands::sync::invalidate_cloud_view_cache();
     crate::commands::sync::invalidate_client_cache();
     crate::biometric::clear_session_secrets();
-    // 不清除进程级 sync_key：锁屏/托盘后定时云同步还要靠它。界面本身已锁。
+    *recover_lock(&state.pending_recovery) = None;
+    state
+        .pending_edit_publish
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    state
+        .pending_full_sync
+        .store(false, std::sync::atomic::Ordering::SeqCst);
     // 锁上了却把刚复制的密码留在剪贴板，等于没锁。
     crate::clipboard::clear_on_teardown();
     crate::commands::clear_reveal_grace(state);
@@ -363,22 +499,42 @@ pub fn try_grace_unlock_silent(state: &AppState) -> bool {
     if ensure_loaded(state).is_err() {
         return false;
     }
-    let workspace_id = {
+    let (workspace_id, epoch) = {
         let vault = recover_lock(&state.vault);
         match vault.as_ref() {
-            Some(v) => v.workspace_id().to_string(),
+            Some(v) => (
+                v.workspace_id().to_string(),
+                state
+                    .session_epoch
+                    .load(std::sync::atomic::Ordering::SeqCst),
+            ),
             None => return false,
         }
     };
     let Ok(mk) = session::try_restore(&workspace_id) else {
         return false;
     };
+    let mk = zeroize::Zeroizing::new(mk);
     {
         let mut vault = recover_lock(&state.vault);
         let Some(v) = vault.as_mut() else {
             return false;
         };
-        v.install_master_key(MasterKey::from_bytes(mk));
+        if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+            return false;
+        }
+        if v.workspace_id() != workspace_id
+            || state
+                .session_epoch
+                .load(std::sync::atomic::Ordering::SeqCst)
+                != epoch
+        {
+            return false;
+        }
+        state
+            .session_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        v.install_master_key(MasterKey::from_bytes(*mk));
     }
     if confirm_installed_key(state).is_err() {
         return false;
@@ -392,7 +548,13 @@ pub fn try_grace_unlock_silent(state: &AppState) -> bool {
 fn confirm_installed_key(state: &AppState) -> Result<()> {
     let snap = crate::commands::clone_unlocked_vault(state)?;
     if snap.master_key_opens_data().is_err() {
-        if let Some(v) = recover_lock(&state.vault).as_mut() {
+        if let Some(v) = recover_lock(&state.vault)
+            .as_mut()
+            .filter(|v| v.same_session(&snap))
+        {
+            state
+                .session_epoch
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             v.lock();
         }
         crate::store::invalidate_plaintext_cache();
@@ -432,13 +594,54 @@ pub fn change_password(
     old_password: String,
     new_password: String,
 ) -> Result<()> {
+    crate::commands::ensure_writes_allowed(&state)?;
+    validate_new_access_password(&new_password)?;
+    let old_password = zeroize::Zeroizing::new(old_password);
+    let new_password = zeroize::Zeroizing::new(new_password);
     ensure_loaded(&state)?;
     let mut vault = recover_lock(&state.vault);
     let v = vault.as_mut().ok_or(AppError::NotInitialized)?;
     v.change_password(&old_password, &new_password)?;
+    state
+        .session_epoch
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *recover_lock(&state.pending_recovery) = None;
+    crate::commands::clear_reveal_grace(&state);
     drop(vault);
     session::clear();
     grant_grace_if_configured(&state);
+    Ok(())
+}
+
+#[tauri::command(async)]
+pub fn reset_access_password_with_recovery(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    recovery_key: String,
+    new_password: String,
+) -> Result<()> {
+    validate_new_access_password(&new_password)?;
+    let recovery_key = zeroize::Zeroizing::new(recovery_key);
+    let new_password = zeroize::Zeroizing::new(new_password);
+    ensure_loaded(&state)?;
+    let target = calibrate(DEFAULT_TARGET_MS);
+    {
+        let mut guard = recover_lock(&state.vault);
+        let vault = guard.as_mut().ok_or(AppError::NotInitialized)?;
+        if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AppError::Busy);
+        }
+        vault.reset_password_with_recovery(&recovery_key, &new_password, target)?;
+        state
+            .session_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *recover_lock(&state.pending_recovery) = None;
+        crate::commands::clear_reveal_grace(&state);
+        crate::util::audit(vault.root(), "使用恢复密钥重设访问密码");
+    }
+    session::clear();
+    grant_grace_if_configured(&state);
+    crate::sync::scheduler::kick_publish(app);
     Ok(())
 }
 
@@ -500,19 +703,111 @@ pub fn relax_kdf_for_mobile(
     Ok(info)
 }
 
-/// 轮换恢复密钥（需已解锁），返回新恢复密钥。
-#[tauri::command]
-pub fn rotate_recovery_key(app: AppHandle, state: State<AppState>) -> Result<InitResult> {
-    let mut vault = recover_lock(&state.vault);
-    let v = vault.as_mut().ok_or(AppError::Locked)?;
-    let recovery_key = v.rotate_recovery_key()?;
+pub struct PendingRecovery {
+    token: String,
+    workspace_id: String,
+    epoch: u64,
+    expires: std::time::Instant,
+    envelope: crate::vault::header::Envelope,
+    // Keep only a digest for confirmation, never the displayed recovery secret.
+    confirmation: [u8; 32],
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryKeyPreparation {
+    pub token: String,
+    pub recovery_key: String,
+    pub workspace_id: String,
+}
+
+fn recovery_confirmation(input: &str) -> Result<[u8; 32]> {
+    use sha2::{Digest, Sha256};
+    let secret = crate::vault::recovery::parse(input)?;
+    Ok(Sha256::digest(secret.as_bytes()).into())
+}
+
+/// Fresh authentication is mandatory even when the ordinary reveal grace is active.
+#[tauri::command(async)]
+pub fn rotate_recovery_key(
+    state: State<'_, AppState>,
+    password: String,
+) -> Result<RecoveryKeyPreparation> {
+    let password = zeroize::Zeroizing::new(password);
+    let vault = recover_lock(&state.vault);
+    let v = vault
+        .as_ref()
+        .filter(|v| v.is_unlocked())
+        .ok_or(AppError::Locked)?;
+    v.verify_password(&password)?;
+    let (envelope, recovery_key) = v.prepare_recovery_key()?;
+    let token = uuid::Uuid::new_v4().to_string();
     let workspace_id = v.workspace_id().to_string();
-    drop(vault);
-    crate::sync::scheduler::kick_publish(app);
-    Ok(InitResult {
+    *recover_lock(&state.pending_recovery) = Some(PendingRecovery {
+        token: token.clone(),
+        workspace_id: workspace_id.clone(),
+        epoch: state
+            .session_epoch
+            .load(std::sync::atomic::Ordering::SeqCst),
+        expires: std::time::Instant::now() + std::time::Duration::from_secs(300),
+        envelope,
+        confirmation: recovery_confirmation(&recovery_key)?,
+    });
+    Ok(RecoveryKeyPreparation {
+        token,
         recovery_key,
         workspace_id,
     })
+}
+
+#[tauri::command]
+pub fn commit_recovery_key(
+    app: AppHandle,
+    state: State<AppState>,
+    token: String,
+    recovery_key: String,
+) -> Result<()> {
+    crate::commands::ensure_writes_allowed(&state)?;
+    let recovery_key = zeroize::Zeroizing::new(recovery_key);
+    let mut vault = recover_lock(&state.vault);
+    let v = vault
+        .as_mut()
+        .filter(|v| v.is_unlocked())
+        .ok_or(AppError::Locked)?;
+    let mut slot = recover_lock(&state.pending_recovery);
+    let pending = slot.as_ref().ok_or(AppError::NeedReauth)?;
+    if pending.token != token
+        || pending.workspace_id != v.workspace_id()
+        || pending.epoch
+            != state
+                .session_epoch
+                .load(std::sync::atomic::Ordering::SeqCst)
+        || std::time::Instant::now() >= pending.expires
+    {
+        *slot = None;
+        return Err(AppError::NeedReauth);
+    }
+    if pending.confirmation != recovery_confirmation(&recovery_key)? {
+        return Err(AppError::Invalid(
+            "恢复密钥确认不匹配，请重新核对已保存的恢复密钥".into(),
+        ));
+    }
+    v.commit_recovery_envelope(pending.envelope.clone())?;
+    *slot = None;
+    crate::util::audit(v.root(), "确认轮换恢复密钥");
+    drop(slot);
+    drop(vault);
+    crate::sync::scheduler::kick_publish(app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_recovery_key(state: State<AppState>, token: String) -> Result<()> {
+    let mut slot = recover_lock(&state.pending_recovery);
+    if slot.as_ref().is_some_and(|p| p.token == token) {
+        *slot = None;
+    }
+    Ok(())
 }
 
 fn grant_grace_if_configured(state: &AppState) {
@@ -526,6 +821,7 @@ fn grant_grace_if_configured(state: &AppState) {
         return;
     };
     if let Ok(mk) = v.master_key_bytes() {
+        let mk = zeroize::Zeroizing::new(mk);
         let _ = session::grant(v.workspace_id(), &mk, days);
     }
 }
@@ -658,7 +954,11 @@ pub fn set_launch_at_login(state: State<AppState>, enabled: bool) -> Result<()> 
 }
 
 #[tauri::command]
-pub fn set_mobile_background_run(app: AppHandle, state: State<AppState>, enabled: bool) -> Result<()> {
+pub fn set_mobile_background_run(
+    app: AppHandle,
+    state: State<AppState>,
+    enabled: bool,
+) -> Result<()> {
     {
         let mut cfg = recover_lock(&state.config);
         cfg.mobile_background_run = enabled;
@@ -731,36 +1031,54 @@ pub struct FactoryResetReport {
     pub steps: Vec<String>,
 }
 
-fn wipe_workspace_files(root: &std::path::Path) -> Vec<String> {
+fn wipe_workspace_files(root: &std::path::Path) -> Result<Vec<String>> {
     let mut steps = Vec::new();
     for name in [
-        "vault.json",
         "data",
         "keys",
         "backups",
         "sync",
         "ssh-keys",
         "ssh",
+        "blobs",
+        "icons",
+        ".store-transaction",
         "audit.log",
+        "vault.json.prev",
+        "vault.json",
     ] {
         let path = root.join(name);
         if path.is_dir() {
-            if std::fs::remove_dir_all(&path).is_ok() {
-                steps.push(format!("已删除目录 {}", path.display()));
-            }
-        } else if path.is_file() && std::fs::remove_file(&path).is_ok() {
+            std::fs::remove_dir_all(&path)?;
+            steps.push(format!("已删除目录 {}", path.display()));
+        } else if path.is_file() {
+            std::fs::remove_file(&path)?;
             steps.push(format!("已删除 {}", path.display()));
         }
     }
-    steps
+    for item in std::fs::read_dir(root)? {
+        let item = item?;
+        let name = item.file_name().to_string_lossy().into_owned();
+        if name
+            .strip_prefix(".store-done-")
+            .is_some_and(|suffix| uuid::Uuid::parse_str(suffix).is_ok())
+            && item.file_type()?.is_dir()
+        {
+            std::fs::remove_dir_all(item.path())?;
+            steps.push(format!("已删除已完成事务目录 {name}"));
+        }
+    }
+    Ok(steps)
 }
 
 /// 一键清空本机程序状态，回到未初始化。需二次确认：`confirmed=true` 且短语为「清空」。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn factory_reset(
-    state: State<AppState>,
+    state: State<'_, AppState>,
     confirmed: bool,
     confirm_phrase: String,
+    access_password: Option<String>,
+    recovery_key: Option<String>,
 ) -> Result<FactoryResetReport> {
     if !confirmed {
         return Err(AppError::Invalid("请先确认要清空还原本程序".into()));
@@ -770,15 +1088,66 @@ pub fn factory_reset(
             "请输入「清空」以确认不可恢复的还原".into(),
         ));
     }
+    if state
+        .reset_busy
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        return Err(AppError::Busy);
+    }
+    struct ResetGuard<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for ResetGuard<'_> {
+        fn drop(&mut self) {
+            self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    let _reset_guard = ResetGuard(&state.reset_busy);
+    {
+        let _current = recover_lock(&state.vault);
+        state
+            .session_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
 
-    let mut steps = Vec::new();
+    let access_password = access_password.map(zeroize::Zeroizing::new);
+    let recovery_key = recovery_key.map(zeroize::Zeroizing::new);
     let workspace = recover_lock(&state.config).workspace_path.clone();
+    let (authorized_workspace, managed_public_keys) = if let Some(path) = workspace
+        .as_ref()
+        .filter(|p| Vault::exists(&PathBuf::from(p)))
+    {
+        let mut checked = Vault::load(&PathBuf::from(path))?;
+        if let Some(password) = access_password.as_ref().filter(|p| !p.is_empty()) {
+            checked.unlock_with_password(password)?;
+        } else if let Some(recovery) = recovery_key.as_ref().filter(|p| !p.is_empty()) {
+            checked.unlock_with_recovery(recovery)?;
+        } else {
+            return Err(AppError::NeedReauth);
+        }
+        let public_keys = crate::store::load_data_uncached(&checked)
+            .map(|data| {
+                data.keys
+                    .into_iter()
+                    .map(|key| key.public_openssh)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        checked.lock();
+        (Some(path.clone()), public_keys)
+    } else {
+        (None, Vec::new())
+    };
+    // Stop new secret operations before removing their workspace, not only at
+    // the end; in-flight work observes the session change and fails closed.
+    lock_in_memory(&state);
+    let mut steps = Vec::new();
 
     let agent_snapshot = state.agent_env.lock().ok().map(|g| g.clone());
     if let Some(env) = agent_snapshot {
         if crate::agent::is_ready(&env) {
-            let _ = crate::agent::clear(&env);
-            steps.push("已清空 ssh-agent 中的密钥".into());
+            for public_key in &managed_public_keys {
+                let _ = crate::agent::unload_public(&env, public_key);
+            }
+            steps.push("已尝试卸载本工作空间管理的 SSH 密钥，保留其他程序的密钥".into());
         }
     }
     *recover_lock(&state.agent_env) = crate::agent::AgentEnv::default();
@@ -802,8 +1171,11 @@ pub fn factory_reset(
         }
     }
 
-    if let Some(path) = workspace {
-        steps.extend(wipe_workspace_files(&PathBuf::from(path)));
+    if let Some(path) = authorized_workspace {
+        let root = PathBuf::from(path);
+        steps.extend(crate::store::with_exclusive_workspace(&root, || {
+            wipe_workspace_files(&root)
+        })?);
     }
 
     session::clear();
@@ -811,7 +1183,13 @@ pub fn factory_reset(
     let _ = autostart::set_enabled(false);
     steps.push("已关闭开机自启动并清除免验证会话与指纹凭据".into());
 
-    *recover_lock(&state.vault) = None;
+    {
+        let mut current = recover_lock(&state.vault);
+        state
+            .session_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        *current = None;
+    }
     crate::sync::scheduler::clear_sync_key(&state);
     {
         let mut cfg = crate::app_config::AppConfig::default();
@@ -833,6 +1211,41 @@ pub fn factory_reset(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn new_password_policy_does_not_normalize_or_accept_common_passwords() {
+        assert!(super::validate_new_access_password("12345678").is_err());
+        assert!(super::validate_new_access_password("password").is_err());
+        assert!(super::validate_new_access_password("        ").is_err());
+        assert!(super::validate_new_access_password(" maple river 47 ").is_ok());
+    }
+
+    #[test]
+    fn workspace_wipe_has_an_exact_owner_boundary() {
+        let root = std::env::temp_dir().join(format!("gam-wipe-{}", uuid::Uuid::new_v4()));
+        for dir in [
+            "blobs",
+            "icons",
+            ".store-transaction",
+            "my-documents",
+            ".store-done-not-a-uuid",
+        ] {
+            std::fs::create_dir_all(root.join(dir)).unwrap();
+            std::fs::write(root.join(dir).join("sample"), b"synthetic").unwrap();
+        }
+        let done = format!(".store-done-{}", uuid::Uuid::new_v4());
+        std::fs::create_dir(root.join(&done)).unwrap();
+        std::fs::write(root.join("vault.json"), b"synthetic").unwrap();
+        std::fs::write(root.join("vault.json.prev"), b"synthetic").unwrap();
+        super::wipe_workspace_files(&root).unwrap();
+        assert!(!root.join("blobs").exists());
+        assert!(!root.join("icons").exists());
+        assert!(!root.join("vault.json.prev").exists());
+        assert!(!root.join(done).exists());
+        assert!(root.join("my-documents/sample").is_file());
+        assert!(root.join(".store-done-not-a-uuid/sample").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn vault_status_leaves_the_window_thread() {
         let src = include_str!("vault.rs");

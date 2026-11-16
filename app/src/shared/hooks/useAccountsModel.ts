@@ -358,7 +358,7 @@ export function useAccountsModel() {
         setErr(i18n.t("accounts.needUser"));
         return;
       }
-      if (!editor.id && !editor.password?.trim()) {
+      if (!editor.id && !editor.password) {
         setErr(i18n.t("accounts.needPassword"));
         return;
       }
@@ -379,11 +379,12 @@ export function useAccountsModel() {
       if (dup && !window.confirm(i18n.t("accounts.dupConfirm", { platform, username }))) {
         return;
       }
-      if (editor.id && editor.hasPassword === false && !editor.password?.trim()) {
+      if (editor.id && editor.hasPassword === false && !editor.password) {
         setErr(i18n.t("accounts.pwLostSave"));
         return;
       }
-      const cleanPassword = editor.password?.trim() || undefined;
+      // Password bytes belong to the external account; whitespace is significant.
+      const cleanPassword = editor.password || undefined;
       let extraFields: Record<string, string> | undefined;
       if (editor.extraFieldsDirty) {
         let draft = editor.extraFieldsDraft || [];

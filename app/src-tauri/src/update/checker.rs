@@ -46,6 +46,7 @@ pub async fn check(
 
     match updater.check().await {
         Ok(Some(update)) => {
+            manifest::verify_selected_asset(&doc, &platform, &update.version, &update.download_url, &update.signature)?;
             if !manifest::versions_equal(&update.version, &doc.version) {
                 return Err(AppError::Invalid(
                     "更新插件读到的版本与已验证清单不一致，已拒绝".into(),
@@ -104,6 +105,7 @@ pub fn build_updater(
 ) -> Result<Updater> {
     let mut builder = app
         .updater_builder()
+        .target(platform::updater_platform_key())
         .timeout(std::time::Duration::from_secs(20))
         .endpoints(endpoints)
         .map_err(map_updater_err)?;

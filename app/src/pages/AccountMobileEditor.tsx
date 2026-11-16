@@ -242,7 +242,7 @@ export function AccountMobileEditor({
     !m.busy &&
     !!value.platform?.trim() &&
     !!value.username?.trim() &&
-    (isEditing ? (value.hasPassword !== false || !!value.password?.trim()) : !!value.password?.trim());
+    (isEditing ? (value.hasPassword !== false || !!value.password) : !!value.password);
 
   return (
     <div className="m-subpage-stage">

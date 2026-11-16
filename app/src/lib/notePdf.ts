@@ -26,7 +26,7 @@ function stripInline(md: string): string {
     .replace(/~~([^~]+)~~/g, "$1");
 }
 
-function parseBlocks(markdown: string): Block[] {
+export function parseBlocks(markdown: string): Block[] {
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
   const blocks: Block[] = [];
   let i = 0;
@@ -88,7 +88,14 @@ function parseBlocks(markdown: string): Block[] {
       buf.push(stripInline(lines[i]));
       i += 1;
     }
-    if (buf.length) blocks.push({ type: "para", text: buf.join(" ") });
+    if (buf.length) {
+      blocks.push({ type: "para", text: buf.join(" ") });
+    } else {
+      // Unsupported or unfinished image syntax must still consume a line.
+      // Otherwise ![... can leave the outer loop on the same line forever.
+      blocks.push({ type: "para", text: stripInline(line) });
+      i += 1;
+    }
   }
   return blocks;
 }

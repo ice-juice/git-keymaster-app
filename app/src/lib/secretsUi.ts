@@ -16,6 +16,15 @@ export async function copyWithClear(text: string, seconds?: number, secret = tru
     throw e;
   }
   if (resolvePlatform() === "mobile") showAppToast(i18n.t("common.copied"));
+  if (clearTimer !== null) {
+    window.clearTimeout(clearTimer);
+    clearTimer = null;
+  }
+  // Native writes own their expiry and ownership generation. A WebView timer
+  // must not clear a newer native write after this one has been superseded.
+  if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+    return result;
+  }
   let wait = seconds;
   if (wait === undefined) {
     try {

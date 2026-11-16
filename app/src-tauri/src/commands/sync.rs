@@ -135,12 +135,7 @@ fn reuse_or_create_s3_client(
 }
 
 fn clone_unlocked_vault(state: &AppState) -> Result<Vault> {
-    let guard = recover_lock(&state.vault);
-    let vault = guard.as_ref().ok_or(AppError::Locked)?;
-    if !vault.is_unlocked() {
-        return Err(AppError::Locked);
-    }
-    Ok(vault.clone())
+    crate::commands::clone_unlocked_vault(state)
 }
 
 fn reuse_s3_client(state: &AppState, sync_config: S3Config) -> Result<S3Client> {
@@ -150,15 +145,14 @@ fn reuse_s3_client(state: &AppState, sync_config: S3Config) -> Result<S3Client> 
 
 // ==================== M6 本地加密备份导出/导入 ====================
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn export_vault_backup(
     state: State<AppState>,
     dest_path: String,
     password: String,
     access_password: String,
 ) -> Result<BackupSummary> {
-    let vault_guard = recover_lock(&state.vault);
-    let vault = vault_guard.as_ref().ok_or(AppError::Locked)?;
+    let vault = clone_unlocked_vault(&state)?;
     // 这一步会把全部私钥、账号密码、TOTP 种子和 PAT 打成一个可随手拷走的文件，
     // 加密口令还由调用方自己定。所以必须当场验访问密码，不吃免密查看窗口的便利——
     // 否则一台没锁的机器前，任何人点几下就能整仓带走。
@@ -166,26 +160,19 @@ pub fn export_vault_backup(
         return Err(AppError::Locked);
     }
     vault.verify_password(&access_password)?;
-    backup::export_backup(vault, Path::new(&dest_path), &password)
+    backup::export_backup(&vault, Path::new(&dest_path), &password)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn inspect_vault_backup(
     src_path: String,
     password: String,
 ) -> Result<BackupSummary> {
     let payload = backup::inspect_backup(Path::new(&src_path), &password)?;
-    Ok(BackupSummary {
-        workspace_id: payload.workspace_id,
-        created_at: payload.created_at,
-        identity_count: payload.data.identities.len(),
-        key_count: payload.data.keys.len(),
-        repo_count: payload.data.repos.len(),
-        has_github_pat: payload.secrets.github_pat.is_some(),
-    })
+    Ok(backup::summarize(&payload))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_vault_backup(
     app: AppHandle,
     state: State<AppState>,
@@ -194,10 +181,8 @@ pub fn import_vault_backup(
     merge: bool,
 ) -> Result<BackupSummary> {
     crate::commands::ensure_writes_allowed(&state)?;
-    let vault_guard = recover_lock(&state.vault);
-    let vault = vault_guard.as_ref().ok_or(AppError::Locked)?;
-    let summary = backup::import_backup(vault, Path::new(&src_path), &password, merge)?;
-    drop(vault_guard);
+    let vault = clone_unlocked_vault(&state)?;
+    let summary = backup::import_backup(&vault, Path::new(&src_path), &password, merge)?;
     crate::sync::scheduler::kick_publish(app);
     Ok(summary)
 }
@@ -564,29 +549,24 @@ pub async fn list_cloud_snapshots(
     Ok(items)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn restore_cloud_snapshot(
     app: AppHandle,
     state: State<AppState>,
     snapshot_id: String,
 ) -> Result<SyncResult> {
     crate::commands::ensure_writes_allowed(&state)?;
-    let vault_guard = recover_lock(&state.vault);
-    let vault = vault_guard.as_ref().ok_or(AppError::Locked)?;
+    let vault = clone_unlocked_vault(&state)?;
     let client = require_client(&state)?;
-    let result = engine::restore_snapshot(vault, &client, &snapshot_id)?;
-    let _ = crate::commands::write::reconcile_ssh_hosts(vault);
+    let mut result = engine::restore_snapshot(&vault, &client, &snapshot_id)?;
+    if let Err(e) = crate::commands::write::reconcile_ssh_hosts(&vault) {
+        result.message.push_str(&format!("；SSH 部署未完成：{e}"));
+    }
     invalidate_view_cache();
-    // 直接推送恢复结果，避免再拉一次把当前云端较新数据合并回来。
-    let result = if let Ok(pushed) = engine::push_to_cloud(vault, &client) {
-        invalidate_view_cache();
-        SyncResult {
-            message: format!("{}；已推送到云端：{}", result.message, pushed.message),
-            ..pushed
-        }
-    } else {
-        result
-    };
+    match engine::push_to_cloud(&vault, &client) {
+        Ok(pushed) => result.message.push_str(&format!("；已推送到云端：{}", pushed.message)),
+        Err(e) => result.message.push_str(&format!("；本地已恢复，但云端未确认提交：{e}")),
+    }
     let _ = app.emit("vault-data-changed", ());
     Ok(result)
 }
@@ -630,7 +610,7 @@ pub fn preview_cloud_restore(
 }
 
 /// 新设备：用恢复密钥重建工作空间并拉取云端数据，再设置本机访问密码。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn restore_from_cloud(
     app: AppHandle,
     state: State<AppState>,
@@ -642,9 +622,7 @@ pub fn restore_from_cloud(
 ) -> Result<SyncResult> {
     validate_s3_config(&sync_config)?;
     crate::workspace_path::reject_if_invalid(&path)?;
-    if password.len() < 8 {
-        return Err(AppError::Invalid("访问密码至少 8 位".into()));
-    }
+    crate::commands::vault::validate_new_access_password(&password)?;
     if recovery_key.trim().is_empty() {
         return Err(AppError::Invalid("请输入恢复密钥".into()));
     }

@@ -1,7 +1,7 @@
 //! 备忘录：元数据 CRUD、正文/图片 blob、无损压缩与导出。
 
 use crate::app_config;
-use crate::commands::{ensure_writes_allowed, recover_lock, AppState};
+use crate::commands::{ensure_reveal_authorized, ensure_writes_allowed, recover_lock, AppState};
 use crate::error::{AppError, Result};
 use crate::model::{collect_blob_hashes_all, GroupMeta, GroupRemap, NoteEntry};
 use crate::store;
@@ -448,15 +448,31 @@ pub fn note_asset_add(
 }
 
 #[tauri::command(async)]
-pub fn note_asset_get(state: State<'_, AppState>, hash: String) -> Result<String> {
+pub fn note_asset_get(state: State<'_, AppState>, hash: String, password: Option<String>) -> Result<String> {
+    read_note_asset(&state, &hash, password.as_deref())
+}
+
+fn read_note_asset(state: &AppState, hash: &str, password: Option<&str>) -> Result<String> {
+    // Hashes are content addresses, not capabilities. Files, account images and
+    // notes share this blob store, so every arbitrary-hash read needs the same
+    // authorization as file_read_bytes. A user-editable note reference is not
+    // proof that a protected attachment may be revealed.
+    let epoch = state.session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+    ensure_reveal_authorized(state, password)?;
     let hash = hash.trim().to_ascii_lowercase();
     if !blob::is_sha256_hex(&hash) {
         return Err(AppError::Invalid("无效的图片哈希".into()));
     }
     let vault = recover_lock(&state.vault);
     let v = unlocked_vault(&vault)?;
+    if state.session_epoch.load(std::sync::atomic::Ordering::SeqCst) != epoch {
+        return Err(AppError::Locked);
+    }
     let bytes = blob::read_blob_bytes(v, &hash)?;
     let mime = sniff_image_mime(&bytes);
+    if mime == "application/octet-stream" {
+        return Err(AppError::Invalid("该附件不是受支持的图片".into()));
+    }
     Ok(format!("data:{mime};base64,{}", B64.encode(bytes)))
 }
 
@@ -544,11 +560,19 @@ pub fn note_export(
     id: String,
     dest_path: String,
     mode: Option<String>,
+    password: Option<String>,
 ) -> Result<()> {
     ensure_writes_allowed(&state)?;
+    let epoch = state.session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+    if mode.as_deref() == Some("md_inline") {
+        ensure_reveal_authorized(&state, password.as_deref())?;
+    }
     let dest = resolve_export_dest(&dest_path)?;
     let vault = recover_lock(&state.vault);
     let v = unlocked_vault(&vault)?;
+    if state.session_epoch.load(std::sync::atomic::Ordering::SeqCst) != epoch {
+        return Err(AppError::Locked);
+    }
     let body = note_markdown_for_export(v, &id, mode.as_deref())?;
     std::fs::write(&dest, body.as_bytes())?;
     util::audit(v.root(), &format!("导出备忘录 id={id}"));
@@ -560,9 +584,17 @@ pub fn note_export_content(
     state: State<'_, AppState>,
     id: String,
     mode: Option<String>,
+    password: Option<String>,
 ) -> Result<String> {
+    let epoch = state.session_epoch.load(std::sync::atomic::Ordering::SeqCst);
+    if mode.as_deref() == Some("md_inline") {
+        ensure_reveal_authorized(&state, password.as_deref())?;
+    }
     let vault = recover_lock(&state.vault);
     let v = unlocked_vault(&vault)?;
+    if state.session_epoch.load(std::sync::atomic::Ordering::SeqCst) != epoch {
+        return Err(AppError::Locked);
+    }
     note_markdown_for_export(v, &id, mode.as_deref())
 }
 
@@ -574,6 +606,8 @@ pub fn note_write_export_file(
 ) -> Result<()> {
     ensure_writes_allowed(&state)?;
     let dest = resolve_export_dest(&dest_path)?;
+    let vault = recover_lock(&state.vault);
+    let _v = unlocked_vault(&vault)?;
     std::fs::write(&dest, bytes)?;
     Ok(())
 }
@@ -583,6 +617,9 @@ fn inline_note_assets(v: &crate::vault::Vault, markdown: &str) -> Result<String>
     for hash in collect_asset_hashes(markdown) {
         let bytes = blob::read_blob_bytes(v, &hash)?;
         let mime = sniff_image_mime(&bytes);
+        if mime == "application/octet-stream" {
+            return Err(AppError::Invalid("笔记引用了不受支持的图片附件".into()));
+        }
         let data = format!("data:{mime};base64,{}", B64.encode(bytes));
         out = out.replace(&format!("kmasset://{hash}"), &data);
     }
@@ -601,6 +638,35 @@ fn original_name_from_path(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arbitrary_hash_read_requires_reauth_and_rejects_non_images() {
+        let root = std::env::temp_dir().join(format!("km-note-auth-{}", uuid::Uuid::new_v4()));
+        let kdf = crate::vault::header::KdfParams::new(
+            crate::vault::kdf::MEM_FLOOR_KIB, crate::vault::kdf::ITERS_FLOOR, 1,
+        );
+        let (vault, _) = crate::vault::Vault::init(&root, "test password ", kdf).unwrap();
+        let secret_blob = blob::write_blob(&vault, Cursor::new(b"private file contents")).unwrap();
+        let mut png = Cursor::new(Vec::new());
+        DynamicImage::new_rgba8(1, 1).write_to(&mut png, ImageFormat::Png).unwrap();
+        let image_blob = blob::write_blob(&vault, Cursor::new(png.into_inner())).unwrap();
+        let mut config = crate::app_config::AppConfig::default();
+        config.reveal_grace_minutes = 0;
+        let state = AppState::new_for_test(config);
+        *recover_lock(&state.vault) = Some(vault);
+
+        assert_eq!(read_note_asset(&state, &secret_blob.sha256, None).unwrap_err().code(), "NEED_REAUTH");
+        assert_eq!(read_note_asset(&state, &image_blob.sha256, None).unwrap_err().code(), "NEED_REAUTH");
+        assert_eq!(read_note_asset(&state, &image_blob.sha256, Some("wrong")).unwrap_err().code(), "BAD_PASSWORD");
+        assert_eq!(read_note_asset(&state, &secret_blob.sha256, Some("test password ")).unwrap_err().code(), "INVALID");
+        assert!(read_note_asset(&state, &image_blob.sha256, Some("test password ")).unwrap().starts_with("data:image/png;base64,"));
+        // Zero-minute grace never turns the generic hash endpoint into an open reader.
+        assert_eq!(read_note_asset(&state, &image_blob.sha256, None).unwrap_err().code(), "NEED_REAUTH");
+        recover_lock(&state.vault).as_mut().unwrap().lock();
+        assert_eq!(read_note_asset(&state, &image_blob.sha256, Some("test password ")).unwrap_err().code(), "LOCKED");
+        drop(state);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn excerpt_strips_images_and_markup() {

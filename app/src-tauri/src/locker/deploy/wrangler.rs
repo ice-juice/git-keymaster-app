@@ -245,6 +245,7 @@ pub fn write_temp_project(bucket: &str, database_id: &str) -> Result<TempProject
     std::fs::create_dir_all(dir.join("migrations"))?;
     std::fs::write(dir.join("index.js"), assets::WORKER_SCRIPT)?;
     std::fs::write(dir.join("migrations/0001_locker.sql"), assets::LOCKER_MIGRATION_SQL)?;
+    std::fs::write(dir.join("migrations/0002_locker_v2.sql"), assets::LOCKER_V2_MIGRATION_SQL)?;
     let toml = format!(
         "name = \"{}\"\nmain = \"index.js\"\ncompatibility_date = \"{}\"\n\n[[d1_databases]]\nbinding = \"{}\"\ndatabase_name = \"{}\"\ndatabase_id = \"{database_id}\"\nmigrations_dir = \"migrations\"\n\n[[r2_buckets]]\nbinding = \"{}\"\nbucket_name = \"{}\"\n\n[triggers]\ncrons = [\"{}\"]\n",
         assets::SCRIPT_NAME,
@@ -359,6 +360,21 @@ pub fn apply_locker_sql(project: &TempProject) -> Result<()> {
     )?;
     if code != 0 {
         return Err(AppError::Invalid(format!("建立寄存表失败：{}", brief(&out, &err))));
+    }
+    Ok(())
+}
+
+pub fn apply_locker_v2_sql(project: &TempProject) -> Result<()> {
+    let (out, err, code) = run_wrangler(
+        Some(&project.dir),
+        &[
+            "d1", "execute", assets::D1_NAME, "--remote",
+            "--file=migrations/0002_locker_v2.sql",
+        ],
+        Duration::from_secs(90),
+    )?;
+    if code != 0 {
+        return Err(AppError::Invalid(format!("升级寄存领取协议失败：{}", brief(&out, &err))));
     }
     Ok(())
 }

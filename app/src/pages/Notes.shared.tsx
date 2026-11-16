@@ -12,7 +12,6 @@ import { moveGroupNames } from "../ui/groupOrder";
 import { MarkdownToolbar } from "../ui/MarkdownToolbar";
 import { NoteMarkdownEditor } from "../ui/NoteMarkdownEditor";
 import {
-  extractKmassetHashes,
   type NoteExportFormat,
   type NoteExportScope,
   type NotesModel,
@@ -20,10 +19,9 @@ import {
 } from "../shared/hooks/useNotesModel";
 import { useOverlayBack } from "../shared/mobileBack";
 import { noteTagColor } from "../shared/tagColor";
-import { api } from "../lib/ipc";
 import type { NoteEntry } from "../lib/ipc";
 
-const assetCache = new Map<string, string>();
+import { readSensitiveAsset, subscribeSensitiveAssetsInvalidated } from "../lib/secureAssets";
 
 const SOURCE_LINE_BLOCKS = new Set([
   "p",
@@ -126,25 +124,20 @@ function NoteImg({ src, alt }: { src?: string; alt?: string }) {
   const [url, setUrl] = useState<string | null>(() => {
     if (!src) return null;
     if (src.startsWith("data:")) return src;
-    if (src.startsWith("kmasset://")) {
-      const hash = src.slice("kmasset://".length, "kmasset://".length + 64).toLowerCase();
-      return assetCache.get(hash) || null;
-    }
     return null;
   });
 
   useEffect(() => {
-    if (!src?.startsWith("kmasset://")) return;
-    const hash = src.slice("kmasset://".length, "kmasset://".length + 64).toLowerCase();
-    if (assetCache.has(hash)) {
-      setUrl(assetCache.get(hash) || null);
-      return;
-    }
     let cancelled = false;
-    api
-      .noteAssetGet(hash)
+    const unsubscribe = subscribeSensitiveAssetsInvalidated(() => {
+      cancelled = true;
+      setUrl(null);
+    });
+    setUrl(src?.startsWith("data:") ? src : null);
+    if (!src?.startsWith("kmasset://")) return unsubscribe;
+    const hash = src.slice("kmasset://".length, "kmasset://".length + 64).toLowerCase();
+    readSensitiveAsset(hash)
       .then((data) => {
-        assetCache.set(hash, data);
         if (!cancelled) setUrl(data);
       })
       .catch(() => {
@@ -152,6 +145,7 @@ function NoteImg({ src, alt }: { src?: string; alt?: string }) {
       });
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [src]);
 
@@ -164,16 +158,6 @@ export const NotePreview = forwardRef<
   { markdown: string; onScroll?: (event: UIEvent<HTMLDivElement>) => void; breaks?: boolean }
 >(function NotePreview({ markdown, onScroll, breaks }, ref) {
   const { t } = useTranslation();
-
-  useEffect(() => {
-    for (const hash of extractKmassetHashes(markdown)) {
-      if (assetCache.has(hash)) continue;
-      api
-        .noteAssetGet(hash)
-        .then((data) => assetCache.set(hash, data))
-        .catch(() => {});
-    }
-  }, [markdown]);
 
   if (!markdown.trim()) {
     return (
@@ -932,6 +916,7 @@ export function NoteLayoutSwitch({
 }) {
   const { t } = useTranslation();
   const items: { id: NotesViewLayout; label: string; icon: ReactNode }[] = [
+    { id: "live", label: t("notes.layoutLive"), icon: <Type size={13} /> },
     { id: "edit", label: t("notes.layoutEdit"), icon: <FileCode2 size={13} /> },
     { id: "split", label: t("notes.layoutSplit"), icon: splitStacked ? <Rows2 size={13} /> : <Columns2 size={13} /> },
     { id: "preview", label: t("notes.layoutPreview"), icon: <Eye size={13} /> },
@@ -945,6 +930,7 @@ export function NoteLayoutSwitch({
             key={item.id}
             type="button"
             className={"view-btn" + (layout === item.id ? " on" : "")}
+            aria-pressed={layout === item.id}
             onClick={() => onLayout(item.id)}
           >
             {item.icon}
@@ -983,7 +969,7 @@ export function NoteEditorCard({
   const { t } = useTranslation();
   const stats = notePlainStats(m.draft.markdown);
   const showSource = layout !== "preview";
-  const showPreview = layout !== "edit";
+  const showPreview = layout === "preview" || layout === "split";
   const previewRef = useRef<HTMLDivElement>(null);
   const syncToken = useRef(0);
   const syncOrigin = useRef<"source" | "preview" | null>(null);
@@ -1091,38 +1077,39 @@ export function NoteEditorCard({
         </div>
       </div>
       <div className={"notes-panes" + (layout === "split" ? " split" : "")}>
-        {showSource && (
-          <div
-            className="note-pane"
-            onBlur={(ev) => {
-              const next = ev.relatedTarget as Node | null;
-              if (next && ev.currentTarget.contains(next)) return;
-              m.onEditorFocusLeave();
-            }}
-          >
-            {layout === "split" && <div className="note-pane-label">{t("notes.paneSource")}</div>}
-            <NoteMarkdownEditor
-              ref={m.editorRef}
-              value={m.draft.markdown}
-              syncEpoch={m.editorEpoch}
-              onChange={(markdown) => m.updateDraft({ markdown })}
-              placeholder={t("notes.sourcePlaceholder")}
-              disabled={m.writesLocked}
-              mobile={mobile}
-              onImageFile={(file) => ingestNoteImage(m, file)}
-              onScrollLine={
-                syncScroll
-                  ? (line) => {
-                      scheduleSync("source", () => {
-                        const preview = previewRef.current;
-                        if (preview) scrollPreviewToLine(preview, line);
-                      });
-                    }
-                  : undefined
-              }
-            />
-          </div>
-        )}
+        <div
+          className={"note-pane" + (showSource ? "" : " is-parked")}
+          aria-hidden={!showSource}
+          onBlur={(ev) => {
+            const next = ev.relatedTarget as Node | null;
+            if (next && ev.currentTarget.contains(next)) return;
+            m.onEditorFocusLeave();
+          }}
+        >
+          {layout === "split" && <div className="note-pane-label">{t("notes.paneSource")}</div>}
+          <NoteMarkdownEditor
+            ref={m.editorRef}
+            value={m.draft.markdown}
+            syncEpoch={m.editorEpoch}
+            onChange={(markdown) => m.updateDraft({ markdown })}
+            placeholder={t("notes.sourcePlaceholder")}
+            disabled={m.writesLocked}
+            mobile={mobile}
+            live={layout === "live"}
+            onSave={() => void m.saveCurrentNote()}
+            onImageFile={(file) => ingestNoteImage(m, file)}
+            onScrollLine={
+              syncScroll
+                ? (line) => {
+                    scheduleSync("source", () => {
+                      const preview = previewRef.current;
+                      if (preview) scrollPreviewToLine(preview, line);
+                    });
+                  }
+                : undefined
+            }
+          />
+        </div>
         {showPreview && (
           <div className="note-pane note-pane-preview">
             {layout === "split" && <div className="note-pane-label">{t("notes.panePreview")}</div>}

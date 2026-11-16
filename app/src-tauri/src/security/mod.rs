@@ -562,8 +562,8 @@ mod tests {
     }
 
     #[test]
-    fn default_app_findings_are_ok_except_platform_exclude() {
-        let cfg = AppConfig::default();
+    fn protected_app_findings_are_ok_except_platform_exclude() {
+        let cfg = AppConfig { allow_screenshots: false, ..AppConfig::default() };
         let list = build_checklist(&cfg);
         for id in [
             "app.clipboard-clear",
@@ -607,8 +607,8 @@ mod tests {
 
     #[test]
     fn allowing_screenshots_is_info() {
-        let mut cfg = AppConfig::default();
-        cfg.allow_screenshots = true;
+        let cfg = AppConfig::default();
+        assert_eq!(build_checklist(&cfg).level, SecurityLevel::Caution);
         let item = build_checklist(&cfg)
             .items
             .into_iter()

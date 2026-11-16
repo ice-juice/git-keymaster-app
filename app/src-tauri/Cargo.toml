@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "1.12.1"
+version = "1.13.0"
 description = "御钥师 (Git Keymaster) - 本地 Git 多账号/身份保险库与智能识别管理"
 authors = ["Jeck"]
 license = ""
@@ -84,6 +84,7 @@ winreg = "0.55"
 windows-sys = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_Security_Cryptography",
+    "Win32_Security_Authorization",
     "Win32_System_DataExchange",
     "Win32_System_Memory",
     "Win32_System_StationsAndDesktops",

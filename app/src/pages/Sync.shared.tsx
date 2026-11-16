@@ -43,6 +43,18 @@ import { can } from "../platform/capabilities";
 
 type S3AuthIntent = "export" | "share" | "reveal";
 
+function BackupCoverage({ summary }: { summary: BackupSummary }) {
+  const { t } = useTranslation();
+  return <div className="backup-coverage" style={{ marginTop: 8, lineHeight: 1.6 }}>
+    <div>{t("securityBackup.coverage", {
+      accounts: summary.accountCount, totp: summary.totpCount, files: summary.fileCount,
+      notes: summary.noteCount, blobs: summary.blobCount, locker: summary.lockerCount,
+    })}</div>
+    <div>{t("securityBackup.verifyHint")}</div>
+    {!summary.lockerRemoteFilesIncluded && <div role="note">{t("securityBackup.remoteExcluded")}</div>}
+  </div>;
+}
+
 export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
   const { t } = useTranslation();
   const { writesLocked } = useApp();
@@ -1241,6 +1253,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   keys: exportResult.keyCount,
                   repos: exportResult.repoCount,
                 })}
+                <BackupCoverage summary={exportResult} />
               </div>
             )}
 
@@ -1309,6 +1322,8 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                   identities: importSuccess.identityCount,
                   keys: importSuccess.keyCount,
                 })}
+                <BackupCoverage summary={importSuccess} />
+                <div>{t("securityBackup.sshExplicit")}</div>
               </div>
             )}
 
@@ -1333,6 +1348,7 @@ export function SyncView({ variant }: { variant: "desktop" | "mobile" }) {
                     keys: importSummary.keyCount,
                     repos: importSummary.repoCount,
                   })}
+                  <BackupCoverage summary={importSummary} />
                 </div>
               </div>
             )}

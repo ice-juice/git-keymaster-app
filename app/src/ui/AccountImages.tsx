@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronLeft, ChevronRight, ImagePlus, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { api, errMessage } from "../lib/ipc";
+import { readSensitiveAsset, subscribeSensitiveAssetsInvalidated } from "../lib/secureAssets";
 import { resolvePlatform } from "../platform/resolve";
 import {
   clampPan,
@@ -50,9 +51,9 @@ export function AccountImageGallery({
 
   useEffect(() => {
     let cancelled = false;
+    const unsubscribe = subscribeSensitiveAssetsInvalidated(() => { cancelled = true; setUrls({}); });
     for (const item of hashes) {
-      void api
-        .noteAssetGet(item)
+      void readSensitiveAsset(item)
         .then((url) => {
           if (!cancelled) setUrls((prev) => (prev[item] ? prev : { ...prev, [item]: url }));
         })
@@ -60,6 +61,7 @@ export function AccountImageGallery({
     }
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [hashes]);
 
@@ -355,9 +357,9 @@ export function AccountImages({
   const hashKey = hashes.join("\n");
   useEffect(() => {
     let cancelled = false;
+    const unsubscribe = subscribeSensitiveAssetsInvalidated(() => { cancelled = true; setUrls({}); });
     for (const hash of hashKey ? hashKey.split("\n") : []) {
-      void api
-        .noteAssetGet(hash)
+      void readSensitiveAsset(hash)
         .then((url) => {
           if (!cancelled) setUrls((prev) => (prev[hash] ? prev : { ...prev, [hash]: url }));
         })
@@ -365,6 +367,7 @@ export function AccountImages({
     }
     return () => {
       cancelled = true;
+      unsubscribe();
     };
   }, [hashKey]);
 

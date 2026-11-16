@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import type { UnlockAnimStyle } from "../lib/prefs";
+import { prefersReducedMotion } from "../lib/prefs";
 import "./UnlockAnimation.css";
 
 interface Props {
@@ -31,6 +32,7 @@ export function UnlockAnimation({ style = "cyber", onDone }: Props) {
   const hardTimeout = isMinimal ? 2000 : 3200;
 
   useEffect(() => {
+    if (prefersReducedMotion()) { onDone(); return; }
     finished.current = false;
     setPhase("play");
     const timers: ReturnType<typeof setTimeout>[] = [];

@@ -355,6 +355,14 @@ export interface BackupSummary {
   keyCount: number;
   repoCount: number;
   hasGithubPat: boolean;
+  accountCount: number;
+  totpCount: number;
+  fileCount: number;
+  noteCount: number;
+  blobCount: number;
+  lockerCount: number;
+  complete: boolean;
+  lockerRemoteFilesIncluded: boolean;
 }
 
 export interface S3Config {
@@ -506,7 +514,11 @@ export const api = {
   vaultLock: () => invoke<void>("vault_lock"),
   changePassword: (oldPassword: string, newPassword: string) =>
     invoke<void>("change_password", { oldPassword, newPassword }),
-  rotateRecoveryKey: () => invoke<InitResult>("rotate_recovery_key"),
+  rotateRecoveryKey: (password: string) => invoke<{ token: string; recoveryKey: string; workspaceId: string }>("rotate_recovery_key", { password }),
+  commitRecoveryKey: (token: string, recoveryKey: string) => invoke<void>("commit_recovery_key", { token, recoveryKey }),
+  cancelRecoveryKey: (token: string) => invoke<void>("cancel_recovery_key", { token }),
+  resetAccessPasswordWithRecovery: (recoveryKey: string, newPassword: string) =>
+    invoke<void>("reset_access_password_with_recovery", { recoveryKey, newPassword }),
   getKdfInfo: () => invoke<KdfInfo>("get_kdf_info"),
   relaxKdfForMobile: (password: string) => invoke<KdfInfo>("relax_kdf_for_mobile", { password }),
   vaultTryGraceUnlock: () => invoke<boolean>("vault_try_grace_unlock"),
@@ -519,8 +531,8 @@ export const api = {
   setMobileBackgroundRun: (enabled: boolean) =>
     invoke<void>("set_mobile_background_run", { enabled }),
   mobileLeaveApp: (keepAlive: boolean) => invoke<void>("mobile_leave_app", { keepAlive }),
-  factoryReset: (confirmed: boolean, confirmPhrase: string) =>
-    invoke<{ steps: string[] }>("factory_reset", { confirmed, confirmPhrase }),
+  factoryReset: (confirmed: boolean, confirmPhrase: string, accessPassword?: string, recoveryKey?: string) =>
+    invoke<{ steps: string[] }>("factory_reset", { confirmed, confirmPhrase, accessPassword: accessPassword ?? null, recoveryKey: recoveryKey ?? null }),
   applyCloseChoice: (action: "tray" | "quit" | "cancel", remember: boolean) =>
     invoke<void>("apply_close_choice", { action, remember }),
   getClosePreference: () => invoke<"tray" | "quit" | null>("get_close_preference"),
@@ -831,13 +843,13 @@ export const api = {
   noteDelete: (id: string) => invoke<void>("note_delete", { id }),
   noteAssetAdd: (args: { path?: string; bytes?: number[] }) =>
     invoke<NoteAssetAddResult>("note_asset_add", { path: args.path ?? null, bytes: args.bytes ?? null }),
-  noteAssetGet: (hash: string) => invoke<string>("note_asset_get", { hash }),
+  noteAssetGet: (hash: string, password?: string) => invoke<string>("note_asset_get", { hash, password: password ?? null }),
   noteSaveGroups: (groups: GroupMeta[], remap?: GroupRemap | null) =>
     invoke<void>("note_save_groups", { groups, remap: remap ?? null }),
-  noteExport: (id: string, destPath: string, mode?: string) =>
-    invoke<void>("note_export", { id, destPath, mode: mode ?? null }),
-  noteExportContent: (id: string, mode?: string) =>
-    invoke<string>("note_export_content", { id, mode: mode ?? null }),
+  noteExport: (id: string, destPath: string, mode?: string, password?: string) =>
+    invoke<void>("note_export", { id, destPath, mode: mode ?? null, password: password ?? null }),
+  noteExportContent: (id: string, mode?: string, password?: string) =>
+    invoke<string>("note_export_content", { id, mode: mode ?? null, password: password ?? null }),
   noteWriteExportFile: (destPath: string, bytes: number[]) =>
     invoke<void>("note_write_export_file", { destPath, bytes }),
 

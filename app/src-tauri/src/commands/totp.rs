@@ -120,33 +120,36 @@ pub fn totp_add(app: AppHandle, state: State<AppState>, args: TotpUpsertArgs) ->
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_totp(v)?;
-    let mut secrets = store::load_secrets(v)?;
-    let now = now();
-    let icon = args.icon.clone().or_else(|| icons::suggest_builtin(&args.issuer));
-    let entry = TotpEntry {
-        id: uuid::Uuid::new_v4().to_string(),
-        issuer: args.issuer.trim().to_string(),
-        account: args.account.trim().to_string(),
-        note: empty_none(args.note),
-        url: empty_none(args.url),
-        group: empty_none(args.group),
-        algorithm: args.algorithm.unwrap_or_else(|| "SHA1".into()),
-        digits: args.digits.unwrap_or(6).clamp(6, 8),
-        period: args.period.unwrap_or(30).max(1),
-        icon,
-        sort_order: args.sort_order.unwrap_or(0),
-        created_at: now.clone(),
-        updated_at: now,
-        has_seed: true,
-    };
-    if entry.issuer.is_empty() || entry.account.is_empty() {
-        return Err(AppError::Invalid("平台名与账号不能为空".into()));
-    }
-    secrets.totp_seeds.insert(entry.id.clone(), secret);
-    data.entries.push(entry.clone());
-    store::save_secrets(v, &secrets)?;
-    store::save_totp(v, &data)?;
+    let entry = store::transaction(v, || {
+        let mut data = store::load_totp(v)?;
+        let mut secrets = store::load_secrets(v)?;
+        let now = now();
+        let icon = args.icon.clone().or_else(|| icons::suggest_builtin(&args.issuer));
+        let entry = TotpEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            issuer: args.issuer.trim().to_string(),
+            account: args.account.trim().to_string(),
+            note: empty_none(args.note),
+            url: empty_none(args.url),
+            group: empty_none(args.group),
+            algorithm: args.algorithm.unwrap_or_else(|| "SHA1".into()),
+            digits: args.digits.unwrap_or(6).clamp(6, 8),
+            period: args.period.unwrap_or(30).max(1),
+            icon,
+            sort_order: args.sort_order.unwrap_or(0),
+            created_at: now.clone(),
+            updated_at: now,
+            has_seed: true,
+        };
+        if entry.issuer.is_empty() || entry.account.is_empty() {
+            return Err(AppError::Invalid("平台名与账号不能为空".into()));
+        }
+        secrets.totp_seeds.insert(entry.id.clone(), secret);
+        data.entries.push(entry.clone());
+        store::save_secrets(v, &secrets)?;
+        store::save_totp(v, &data)?;
+        Ok(entry)
+    })?;
     util::audit(v.root(), &format!("新增 TOTP id={}", entry.id));
     drop(vault);
     publish(app);
@@ -162,43 +165,46 @@ pub fn totp_update(app: AppHandle, state: State<AppState>, args: TotpUpsertArgs)
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_totp(v)?;
-    let mut secrets = store::load_secrets(v)?;
-    let entry = data
-        .entries
-        .iter_mut()
-        .find(|e| e.id == id)
-        .ok_or_else(|| AppError::Invalid("TOTP 条目不存在".into()))?;
-    entry.issuer = args.issuer.trim().to_string();
-    entry.account = args.account.trim().to_string();
-    entry.note = empty_none(args.note);
-    entry.url = empty_none(args.url);
-    entry.group = empty_none(args.group);
-    if let Some(alg) = args.algorithm {
-        entry.algorithm = alg;
-    }
-    if let Some(d) = args.digits {
-        entry.digits = d.clamp(6, 8);
-    }
-    if let Some(p) = args.period {
-        entry.period = p.max(1);
-    }
-    if args.icon.is_some() {
-        entry.icon = args.icon;
-    }
-    if let Some(s) = args.sort_order {
-        entry.sort_order = s;
-    }
-    entry.updated_at = now();
-    if let Some(secret) = args.secret.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        secrets.totp_seeds.insert(id.clone(), totp::normalize_secret(secret)?);
-    } else if !secrets.totp_seeds.contains_key(&id) {
-        return Err(AppError::Invalid("这条记录没有种子，请重新填入 TOTP 密钥".into()));
-    }
-    let mut out = entry.clone();
-    out.has_seed = secrets.totp_seeds.contains_key(&id);
-    store::save_secrets(v, &secrets)?;
-    store::save_totp(v, &data)?;
+    let out = store::transaction(v, || {
+        let mut data = store::load_totp(v)?;
+        let mut secrets = store::load_secrets(v)?;
+        let entry = data
+            .entries
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or_else(|| AppError::Invalid("TOTP 条目不存在".into()))?;
+        entry.issuer = args.issuer.trim().to_string();
+        entry.account = args.account.trim().to_string();
+        entry.note = empty_none(args.note);
+        entry.url = empty_none(args.url);
+        entry.group = empty_none(args.group);
+        if let Some(alg) = args.algorithm {
+            entry.algorithm = alg;
+        }
+        if let Some(d) = args.digits {
+            entry.digits = d.clamp(6, 8);
+        }
+        if let Some(p) = args.period {
+            entry.period = p.max(1);
+        }
+        if args.icon.is_some() {
+            entry.icon = args.icon;
+        }
+        if let Some(s) = args.sort_order {
+            entry.sort_order = s;
+        }
+        entry.updated_at = now();
+        if let Some(secret) = args.secret.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            secrets.totp_seeds.insert(id.clone(), totp::normalize_secret(secret)?);
+        } else if !secrets.totp_seeds.contains_key(&id) {
+            return Err(AppError::Invalid("这条记录没有种子，请重新填入 TOTP 密钥".into()));
+        }
+        let mut out = entry.clone();
+        out.has_seed = secrets.totp_seeds.contains_key(&id);
+        store::save_secrets(v, &secrets)?;
+        store::save_totp(v, &data)?;
+        Ok(out)
+    })?;
     util::audit(v.root(), &format!("更新 TOTP id={id}"));
     drop(vault);
     publish(app);
@@ -213,17 +219,20 @@ pub fn totp_delete(app: AppHandle, state: State<AppState>, id: String) -> Result
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_totp(v)?;
-    let mut secrets = store::load_secrets(v)?;
-    let before = data.entries.len();
-    data.entries.retain(|e| e.id != id);
-    if data.entries.len() == before {
-        return Err(AppError::Invalid("TOTP 条目不存在".into()));
-    }
-    data.deleted_entries.insert(id.clone(), now());
-    secrets.totp_seeds.remove(&id);
-    store::save_secrets(v, &secrets)?;
-    store::save_totp(v, &data)?;
+    store::transaction(v, || {
+        let mut data = store::load_totp(v)?;
+        let mut secrets = store::load_secrets(v)?;
+        let before = data.entries.len();
+        data.entries.retain(|e| e.id != id);
+        if data.entries.len() == before {
+            return Err(AppError::Invalid("TOTP 条目不存在".into()));
+        }
+        data.deleted_entries.insert(id.clone(), now());
+        secrets.totp_seeds.remove(&id);
+        store::save_secrets(v, &secrets)?;
+        store::save_totp(v, &data)?;
+        Ok(())
+    })?;
     util::audit(v.root(), &format!("删除 TOTP id={id}"));
     drop(vault);
     publish(app);
@@ -243,14 +252,17 @@ pub fn totp_save_groups(
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_totp(v)?;
-    if let Some(remap) = remap.as_ref() {
-        for entry in &mut data.entries {
-            crate::model::remap_entry_group(&mut entry.group, remap);
+    store::transaction(v, || {
+        let mut data = store::load_totp(v)?;
+        if let Some(remap) = remap.as_ref() {
+            for entry in &mut data.entries {
+                crate::model::remap_entry_group(&mut entry.group, remap);
+            }
         }
-    }
-    data.groups = groups;
-    store::save_totp(v, &data)?;
+        data.groups = groups;
+        store::save_totp(v, &data)?;
+        Ok(())
+    })?;
     drop(vault);
     publish(app);
     Ok(())

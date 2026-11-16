@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { OnboardingSettingsCard } from "../ui/OnboardingSettingsCard";
+import { RecoveryKeyRotation } from "../ui/RecoveryKeyRotation";
 import { pushMobileBack } from "../shared/mobileBack";
 import { useTranslation } from "react-i18next";
 import {
@@ -34,7 +36,6 @@ import {
   UNLOCK_ANIM_STYLES,
 } from "../lib/prefs";
 import { clampMaskKeep, MAX_MASK_KEEP, MIN_MASK_KEEP } from "../shared/maskAccount";
-import { writeClipboard } from "../lib/clipboard";
 import { Badge, Card, ErrorDialog, FieldLabel } from "../ui/common";
 import { OptionSelect } from "../ui/OptionSelect";
 import {
@@ -488,53 +489,7 @@ export function SettingsMobile() {
 
         {/* 7. 恢复密钥 */}
         {subSection === "recovery" && (
-          <Card title={t("settings.rotateTitle")}>
-            <div className="stack">
-              <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                {t("settings.rotateIntro")}
-              </div>
-
-              {m.newRecovery ? (
-                <div className="stack" style={{ marginTop: 6 }}>
-                  <div className="callout danger">
-                    {t("settings.rotateOnce")}
-                  </div>
-                  <div className="reckey" style={{ fontSize: 13, wordBreak: "break-all" }}>
-                    {m.newRecovery}
-                  </div>
-                  <div className="row" style={{ marginTop: 4 }}>
-                    <button
-                      type="button"
-                      className="btn primary sm"
-                      style={{ flex: 1 }}
-                      onClick={() => writeClipboard(m.newRecovery, true)}
-                    >
-                      {t("common.copy")}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn ghost sm"
-                      onClick={() => m.setNewRecovery("")}
-                    >
-                      {t("settings.rotateSaved")}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ marginTop: 10 }}>
-                  <button
-                    type="button"
-                    className="btn danger"
-                    style={{ width: "100%" }}
-                    disabled={m.busy}
-                    onClick={m.rotate}
-                  >
-                    <RefreshCw size={14} /> {t("settings.rotateBtn")}
-                  </button>
-                </div>
-              )}
-            </div>
-          </Card>
+          <Card title={t("settings.rotateTitle")}><RecoveryKeyRotation /></Card>
         )}
 
         {/* 8. 工作空间信息 */}
@@ -600,6 +555,7 @@ export function SettingsMobile() {
       {m.msg && <div className="callout info">{m.msg}</div>}
 
       {/* 顶部应用信息卡片 */}
+      <OnboardingSettingsCard />
       <div className="m-settings-app-card">
         <div className="m-settings-app-avatar" style={{ background: "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)" }}>
           <ShieldCheck size={28} style={{ color: "#ffffff" }} />

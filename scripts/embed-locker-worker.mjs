@@ -1,6 +1,5 @@
 /**
- * 把同级 file-locker-worker 打成单文件脚本，连同 0001_locker.sql 写入
- * app/src-tauri/assets。同级仓库不在时由 build.rs 沿用已提交产物。
+ * Build the maintained, vendored Worker source and both migrations into Tauri.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -11,7 +10,7 @@ import { createRequire } from "node:module";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const assetsDir = path.join(repoRoot, "app", "src-tauri", "assets");
-const workerDir = path.resolve(repoRoot, "..", "file-locker-worker");
+const workerDir = path.resolve(repoRoot, "services", "file-locker-worker");
 
 function fail(msg) {
   console.error(msg);
@@ -19,14 +18,14 @@ function fail(msg) {
 }
 
 function run(cmd, args, cwd) {
-  const r = spawnSync(cmd, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
+  const r = spawnSync(cmd, args, { cwd, stdio: "inherit", shell: process.platform === "win32" && cmd === "npm" });
   if (r.status !== 0) {
     fail(`${cmd} ${args.join(" ")} 失败（exit ${r.status ?? "null"}）`);
   }
 }
 
 if (!fs.existsSync(path.join(workerDir, "src", "index.ts"))) {
-  fail(`未找到同级 Worker 仓库：${workerDir}`);
+  fail(`未找到内置 Worker 源码：${workerDir}`);
 }
 
 const requireFromWorker = createRequire(path.join(workerDir, "package.json"));
@@ -72,5 +71,6 @@ if (/IF\s+NOT\s+EXISTS/i.test(sql)) {
 fs.mkdirSync(assetsDir, { recursive: true });
 fs.writeFileSync(path.join(assetsDir, "file-locker.js"), js);
 fs.writeFileSync(path.join(assetsDir, "0001_locker.sql"), sql);
+fs.copyFileSync(path.join(workerDir, "migrations", "0002_locker_v2.sql"), path.join(assetsDir, "0002_locker_v2.sql"));
 fs.writeFileSync(path.join(assetsDir, "compatibility_date.txt"), `${compatibilityDate}\n`);
 console.log(`embedded worker ${js.length} bytes, compatibility_date=${compatibilityDate}`);

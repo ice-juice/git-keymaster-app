@@ -106,7 +106,6 @@ pub fn account_add(app: AppHandle, state: State<AppState>, args: AccountUpsertAr
     let password = args
         .password
         .as_deref()
-        .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| AppError::Invalid("请填写密码".into()))?
         .to_string();
@@ -115,54 +114,57 @@ pub fn account_add(app: AppHandle, state: State<AppState>, args: AccountUpsertAr
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_accounts(v)?;
-    let mut secrets = store::load_secrets(v)?;
-    let username = args.username.trim().to_string();
-    if args.platform.trim().is_empty() || username.is_empty() {
-        return Err(AppError::Invalid("平台与用户名不能为空".into()));
-    }
-    let (platform, icon) = resolve_and_align(
-        &mut data.entries,
-        None,
-        args.platform.trim(),
-        nonempty_icon(args.icon.clone()),
-    );
-    let now = now();
-    let entry = AccountEntry {
-        id: uuid::Uuid::new_v4().to_string(),
-        platform,
-        username,
-        display_name: empty_none(args.display_name),
-        url: empty_none(args.url),
-        note: empty_none(args.note),
-        group: empty_none(args.group),
-        tags: args.tags.unwrap_or_default(),
-        icon,
-        pinned: args.pinned.unwrap_or(false),
-        sort_order: args.sort_order.unwrap_or(0),
-        totp_ref: empty_none(args.totp_ref),
-        last_used_at: None,
-        created_at: now.clone(),
-        updated_at: now,
-        has_password: true,
-        extra_field_keys: vec![],
-        image_hashes: sanitize_image_hashes(args.image_hashes.unwrap_or_default()),
-    };
-    let extra_fields = sanitize_extra_fields(args.extra_fields);
-    let extra_field_keys = extra_field_keys_of(&extra_fields);
-    secrets.account_secrets.insert(
-        entry.id.clone(),
-        AccountSecret {
-            password,
-            extra_fields,
-            history: vec![],
-        },
-    );
-    let mut entry = entry;
-    entry.extra_field_keys = extra_field_keys;
-    data.entries.push(entry.clone());
-    store::save_secrets(v, &secrets)?;
-    store::save_accounts(v, &data)?;
+    let entry = store::transaction(v, || {
+        let mut data = store::load_accounts(v)?;
+        let mut secrets = store::load_secrets(v)?;
+        let username = args.username.trim().to_string();
+        if args.platform.trim().is_empty() || username.is_empty() {
+            return Err(AppError::Invalid("平台与用户名不能为空".into()));
+        }
+        let (platform, icon) = resolve_and_align(
+            &mut data.entries,
+            None,
+            args.platform.trim(),
+            nonempty_icon(args.icon.clone()),
+        );
+        let now = now();
+        let entry = AccountEntry {
+            id: uuid::Uuid::new_v4().to_string(),
+            platform,
+            username,
+            display_name: empty_none(args.display_name),
+            url: empty_none(args.url),
+            note: empty_none(args.note),
+            group: empty_none(args.group),
+            tags: args.tags.unwrap_or_default(),
+            icon,
+            pinned: args.pinned.unwrap_or(false),
+            sort_order: args.sort_order.unwrap_or(0),
+            totp_ref: empty_none(args.totp_ref),
+            last_used_at: None,
+            created_at: now.clone(),
+            updated_at: now,
+            has_password: true,
+            extra_field_keys: vec![],
+            image_hashes: sanitize_image_hashes(args.image_hashes.unwrap_or_default()),
+        };
+        let extra_fields = sanitize_extra_fields(args.extra_fields);
+        let extra_field_keys = extra_field_keys_of(&extra_fields);
+        secrets.account_secrets.insert(
+            entry.id.clone(),
+            AccountSecret {
+                password,
+                extra_fields,
+                history: vec![],
+            },
+        );
+        let mut entry = entry;
+        entry.extra_field_keys = extra_field_keys;
+        data.entries.push(entry.clone());
+        store::save_secrets(v, &secrets)?;
+        store::save_accounts(v, &data)?;
+        Ok(entry)
+    })?;
     gc_account_blobs(v)?;
     util::audit(v.root(), &format!("新增隐私账号 id={}", entry.id));
     drop(vault);
@@ -183,92 +185,95 @@ pub fn account_update(app: AppHandle, state: State<AppState>, args: AccountUpser
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_accounts(v)?;
-    let mut secrets = store::load_secrets(v)?;
-    if !data.entries.iter().any(|e| e.id == id) {
-        return Err(AppError::Invalid("账号不存在".into()));
-    }
-    let incoming_icon = nonempty_icon(args.icon.clone()).or_else(|| {
-        data.entries
-            .iter()
-            .find(|e| e.id == id)
-            .and_then(|e| e.icon.clone())
-    });
-    let (platform, icon) = resolve_and_align(
-        &mut data.entries,
-        Some(&id),
-        args.platform.trim(),
-        incoming_icon,
-    );
-    let entry = data
-        .entries
-        .iter_mut()
-        .find(|e| e.id == id)
-        .ok_or_else(|| AppError::Invalid("账号不存在".into()))?;
-    entry.platform = platform;
-    entry.username = args.username.trim().to_string();
-    entry.display_name = empty_none(args.display_name);
-    entry.url = empty_none(args.url);
-    entry.note = empty_none(args.note);
-    entry.group = empty_none(args.group);
-    if let Some(tags) = args.tags {
-        entry.tags = tags;
-    }
-    entry.icon = icon;
-    if let Some(p) = args.pinned {
-        entry.pinned = p;
-    }
-    if let Some(s) = args.sort_order {
-        entry.sort_order = s;
-    }
-    entry.totp_ref = empty_none(args.totp_ref);
-    if let Some(hashes) = args.image_hashes {
-        entry.image_hashes = sanitize_image_hashes(hashes);
-    }
-    entry.updated_at = now();
-
-    if let Some(new_pw) = args.password.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        let secret = secrets.account_secrets.entry(id.clone()).or_default();
-        if secret.password != new_pw {
-            if !secret.password.is_empty() {
-                secret.history.insert(
-                    0,
-                    PasswordHistoryItem {
-                        password: secret.password.clone(),
-                        replaced_at: now(),
-                    },
-                );
-                if secret.history.len() > limit as usize {
-                    secret.history.truncate(limit as usize);
-                }
-            }
-            secret.password = new_pw.to_string();
+    let out = store::transaction(v, || {
+        let mut data = store::load_accounts(v)?;
+        let mut secrets = store::load_secrets(v)?;
+        if !data.entries.iter().any(|e| e.id == id) {
+            return Err(AppError::Invalid("账号不存在".into()));
         }
-    } else if secrets
-        .account_secrets
-        .get(&id)
-        .map(|s| s.password.is_empty())
-        .unwrap_or(true)
-    {
-        return Err(AppError::Invalid("这条记录没有密码，请重新填入".into()));
-    }
-    if let Some(fields) = args.extra_fields {
-        let secret = secrets.account_secrets.entry(id.clone()).or_default();
-        secret.extra_fields = sanitize_extra_fields(Some(fields));
-    }
-    let mut out = entry.clone();
-    out.has_password = secrets
-        .account_secrets
-        .get(&id)
-        .map(|s| !s.password.is_empty())
-        .unwrap_or(false);
-    out.extra_field_keys = secrets
-        .account_secrets
-        .get(&id)
-        .map(|s| extra_field_keys_of(&s.extra_fields))
-        .unwrap_or_default();
-    store::save_secrets(v, &secrets)?;
-    store::save_accounts(v, &data)?;
+        let incoming_icon = nonempty_icon(args.icon.clone()).or_else(|| {
+            data.entries
+                .iter()
+                .find(|e| e.id == id)
+                .and_then(|e| e.icon.clone())
+        });
+        let (platform, icon) = resolve_and_align(
+            &mut data.entries,
+            Some(&id),
+            args.platform.trim(),
+            incoming_icon,
+        );
+        let entry = data
+            .entries
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or_else(|| AppError::Invalid("账号不存在".into()))?;
+        entry.platform = platform;
+        entry.username = args.username.trim().to_string();
+        entry.display_name = empty_none(args.display_name);
+        entry.url = empty_none(args.url);
+        entry.note = empty_none(args.note);
+        entry.group = empty_none(args.group);
+        if let Some(tags) = args.tags {
+            entry.tags = tags;
+        }
+        entry.icon = icon;
+        if let Some(p) = args.pinned {
+            entry.pinned = p;
+        }
+        if let Some(s) = args.sort_order {
+            entry.sort_order = s;
+        }
+        entry.totp_ref = empty_none(args.totp_ref);
+        if let Some(hashes) = args.image_hashes {
+            entry.image_hashes = sanitize_image_hashes(hashes);
+        }
+        entry.updated_at = now();
+
+        if let Some(new_pw) = args.password.as_deref().filter(|s| !s.is_empty()) {
+            let secret = secrets.account_secrets.entry(id.clone()).or_default();
+            if secret.password != new_pw {
+                if !secret.password.is_empty() {
+                    secret.history.insert(
+                        0,
+                        PasswordHistoryItem {
+                            password: secret.password.clone(),
+                            replaced_at: now(),
+                        },
+                    );
+                    if secret.history.len() > limit as usize {
+                        secret.history.truncate(limit as usize);
+                    }
+                }
+                secret.password = new_pw.to_string();
+            }
+        } else if secrets
+            .account_secrets
+            .get(&id)
+            .map(|s| s.password.is_empty())
+            .unwrap_or(true)
+        {
+            return Err(AppError::Invalid("这条记录没有密码，请重新填入".into()));
+        }
+        if let Some(fields) = args.extra_fields {
+            let secret = secrets.account_secrets.entry(id.clone()).or_default();
+            secret.extra_fields = sanitize_extra_fields(Some(fields));
+        }
+        let mut out = entry.clone();
+        out.has_password = secrets
+            .account_secrets
+            .get(&id)
+            .map(|s| !s.password.is_empty())
+            .unwrap_or(false);
+        out.extra_field_keys = secrets
+            .account_secrets
+            .get(&id)
+            .map(|s| extra_field_keys_of(&s.extra_fields))
+            .unwrap_or_default();
+        store::save_secrets(v, &secrets)?;
+        store::save_accounts(v, &data)?;
+        Ok(out)
+    })?;
     gc_account_blobs(v)?;
     util::audit(v.root(), &format!("更新隐私账号 id={id}"));
     drop(vault);
@@ -284,17 +289,20 @@ pub fn account_delete(app: AppHandle, state: State<AppState>, id: String) -> Res
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_accounts(v)?;
-    let mut secrets = store::load_secrets(v)?;
-    let before = data.entries.len();
-    data.entries.retain(|e| e.id != id);
-    if data.entries.len() == before {
-        return Err(AppError::Invalid("账号不存在".into()));
-    }
-    data.deleted_entries.insert(id.clone(), now());
-    secrets.account_secrets.remove(&id);
-    store::save_secrets(v, &secrets)?;
-    store::save_accounts(v, &data)?;
+    store::transaction(v, || {
+        let mut data = store::load_accounts(v)?;
+        let mut secrets = store::load_secrets(v)?;
+        let before = data.entries.len();
+        data.entries.retain(|e| e.id != id);
+        if data.entries.len() == before {
+            return Err(AppError::Invalid("账号不存在".into()));
+        }
+        data.deleted_entries.insert(id.clone(), now());
+        secrets.account_secrets.remove(&id);
+        store::save_secrets(v, &secrets)?;
+        store::save_accounts(v, &data)?;
+        Ok(())
+    })?;
     gc_account_blobs(v)?;
     util::audit(v.root(), &format!("删除隐私账号 id={id}"));
     drop(vault);
@@ -315,14 +323,17 @@ pub fn account_save_groups(
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_accounts(v)?;
-    if let Some(remap) = remap.as_ref() {
-        for entry in &mut data.entries {
-            crate::model::remap_entry_group(&mut entry.group, remap);
+    store::transaction(v, || {
+        let mut data = store::load_accounts(v)?;
+        if let Some(remap) = remap.as_ref() {
+            for entry in &mut data.entries {
+                crate::model::remap_entry_group(&mut entry.group, remap);
+            }
         }
-    }
-    data.groups = groups;
-    store::save_accounts(v, &data)?;
+        data.groups = groups;
+        store::save_accounts(v, &data)?;
+        Ok(())
+    })?;
     drop(vault);
     publish(app);
     Ok(())
@@ -365,12 +376,14 @@ pub fn account_touch(state: State<AppState>, id: String) -> Result<()> {
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut data = store::load_accounts(v)?;
-    if let Some(e) = data.entries.iter_mut().find(|e| e.id == id) {
-        e.last_used_at = Some(now());
-        store::save_accounts(v, &data)?;
-    }
-    Ok(())
+    store::transaction(v, || {
+        let mut data = store::load_accounts(v)?;
+        if let Some(e) = data.entries.iter_mut().find(|e| e.id == id) {
+            e.last_used_at = Some(now());
+            store::save_accounts(v, &data)?;
+        }
+        Ok(())
+    })
 }
 
 #[tauri::command]
@@ -433,34 +446,37 @@ pub fn account_rollback_history(app: AppHandle, state: State<AppState>, id: Stri
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut secrets = store::load_secrets(v)?;
-    let mut data = store::load_accounts(v)?;
-    let secret = secrets
-        .account_secrets
-        .get_mut(&id)
-        .ok_or_else(|| AppError::Invalid("账号机密不存在".into()))?;
-    if index >= secret.history.len() {
-        return Err(AppError::Invalid("历史版本不存在".into()));
-    }
-    let old = secret.history[index].password.clone();
-    if !secret.password.is_empty() {
-        secret.history.insert(
-            0,
-            PasswordHistoryItem {
-                password: secret.password.clone(),
-                replaced_at: now(),
-            },
-        );
-    }
-    secret.password = old;
-    if secret.history.len() > limit as usize {
-        secret.history.truncate(limit as usize);
-    }
-    if let Some(e) = data.entries.iter_mut().find(|e| e.id == id) {
-        e.updated_at = now();
-    }
-    store::save_secrets(v, &secrets)?;
-    store::save_accounts(v, &data)?;
+    store::transaction(v, || {
+        let mut secrets = store::load_secrets(v)?;
+        let mut data = store::load_accounts(v)?;
+        let secret = secrets
+            .account_secrets
+            .get_mut(&id)
+            .ok_or_else(|| AppError::Invalid("账号机密不存在".into()))?;
+        if index >= secret.history.len() {
+            return Err(AppError::Invalid("历史版本不存在".into()));
+        }
+        let old = secret.history[index].password.clone();
+        if !secret.password.is_empty() {
+            secret.history.insert(
+                0,
+                PasswordHistoryItem {
+                    password: secret.password.clone(),
+                    replaced_at: now(),
+                },
+            );
+        }
+        secret.password = old;
+        if secret.history.len() > limit as usize {
+            secret.history.truncate(limit as usize);
+        }
+        if let Some(e) = data.entries.iter_mut().find(|e| e.id == id) {
+            e.updated_at = now();
+        }
+        store::save_secrets(v, &secrets)?;
+        store::save_accounts(v, &data)?;
+        Ok(())
+    })?;
     util::audit(v.root(), &format!("回滚账号密码 id={id}"));
     drop(vault);
     publish(app);
@@ -475,10 +491,17 @@ pub fn account_clear_history(app: AppHandle, state: State<AppState>, id: String)
     if !v.is_unlocked() {
         return Err(AppError::Locked);
     }
-    let mut secrets = store::load_secrets(v)?;
-    if let Some(s) = secrets.account_secrets.get_mut(&id) {
-        s.history.clear();
-        store::save_secrets(v, &secrets)?;
+    let changed = store::transaction(v, || {
+        let mut secrets = store::load_secrets(v)?;
+        if let Some(s) = secrets.account_secrets.get_mut(&id) {
+            s.history.clear();
+            store::save_secrets(v, &secrets)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    })?;
+    if changed {
         util::audit(v.root(), &format!("清空账号密码历史 id={id}"));
         drop(vault);
         publish(app);

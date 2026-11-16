@@ -3,6 +3,7 @@ import { EditorSelection, EditorState } from "@codemirror/state";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api, errMessage, type GroupMeta, type NoteEntry } from "../../lib/ipc";
 import { markdownToPdfBytes } from "../../lib/notePdf";
+import { withSensitiveAuthorization } from "../../lib/secureAssets";
 import { resolvePlatform } from "../../platform/resolve";
 import { appendGroupIfNew, resolveGroupName } from "../../ui/GroupPicker";
 import { applyGroupOrder, removeGroupMeta, renameGroupMeta, sortGroups } from "../../ui/groupOrder";
@@ -29,10 +30,10 @@ export interface NoteDraftState {
   pinned: boolean;
 }
 
-export type NotesViewLayout = "split" | "edit" | "preview";
+export type NotesViewLayout = "live" | "split" | "edit" | "preview";
 export type NotesMobileTab = NotesViewLayout;
 
-const LAYOUT_KEY = "km.notes.viewLayout";
+const LAYOUT_KEY = "km.notes.viewLayout.v2";
 
 function emptyDraft(): NoteDraftState {
   return { title: "", markdown: "", tags: [], pinned: false };
@@ -41,11 +42,11 @@ function emptyDraft(): NoteDraftState {
 function readLayout(): NotesViewLayout {
   try {
     const v = localStorage.getItem(LAYOUT_KEY);
-    if (v === "edit" || v === "preview" || v === "split") return v;
+    if (v === "live" || v === "edit" || v === "preview" || v === "split") return v;
   } catch {
     /* ignore */
   }
-  return "split";
+  return "live";
 }
 
 function readOfflineDraft(id?: string): { draft: NoteDraftState; savedAt: string } | null {
@@ -102,12 +103,12 @@ function joinExportPath(dir: string, file: string): string {
 
 async function writeNoteExport(entry: NoteEntry, dest: string, format: NoteExportFormat) {
   if (format === "pdf") {
-    const markdown = await api.noteExportContent(entry.id, "md_inline");
+    const markdown = await withSensitiveAuthorization((password) => api.noteExportContent(entry.id, "md_inline", password));
     const pdf = await markdownToPdfBytes(entry.title.trim() || "note", markdown);
     await api.noteWriteExportFile(dest, Array.from(pdf));
     return;
   }
-  await api.noteExport(entry.id, dest, format);
+  await withSensitiveAuthorization((password) => api.noteExport(entry.id, dest, format, password));
 }
 
 export function useNotesModel() {
@@ -121,7 +122,7 @@ export function useNotesModel() {
   const [group, setGroup] = useState("全部");
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [viewLayout, setViewLayoutState] = useState<NotesViewLayout>(readLayout);
-  const [mobileTab, setMobileTab] = useState<NotesMobileTab>("edit");
+  const [mobileTab, setMobileTab] = useState<NotesMobileTab>("live");
   const [saving, setSaving] = useState(false);
   const [assetUploading, setAssetUploading] = useState(false);
   const [exportModal, setExportModal] = useState(false);
@@ -243,7 +244,7 @@ export function useNotesModel() {
   }, [draft, isDirty]);
 
   const saveCurrentNote = useCallback(async () => {
-    if (writesLocked || savingRef.current) return;
+    if (writesLocked || savingRef.current) return false;
     const snapshot = draftRef.current;
     const gen = ++saveGenRef.current;
     savingRef.current = true;
@@ -252,7 +253,7 @@ export function useNotesModel() {
       const created = appendGroupIfNew(groups, snapshot.group);
       if (created) {
         await api.noteSaveGroups(created);
-        if (gen !== saveGenRef.current) return;
+        if (gen !== saveGenRef.current) return false;
         setGroups(created);
       }
       const groupName = resolveGroupName(created || groups, snapshot.group);
@@ -265,7 +266,7 @@ export function useNotesModel() {
         pinned: snapshot.pinned,
         markdown: snapshot.markdown,
       });
-      if (gen !== saveGenRef.current) return;
+      if (gen !== saveGenRef.current) return false;
       const latest = draftRef.current;
       const next = {
         ...latest,
@@ -286,8 +287,10 @@ export function useNotesModel() {
       clearOfflineDraft(snapshot.id);
       if (saved.id !== snapshot.id) clearOfflineDraft(saved.id);
       await load();
+      return stillSame && gen === saveGenRef.current && draftRef.current === next;
     } catch (e) {
       if (gen === saveGenRef.current) setErr(errMessage(e));
+      return false;
     } finally {
       if (gen === saveGenRef.current) {
         savingRef.current = false;
@@ -366,7 +369,7 @@ export function useNotesModel() {
       setActiveBody("");
       rememberSaved(d);
       setDetailOpen(true);
-      setMobileTab("edit");
+      setMobileTab("live");
       const cached = readOfflineDraft();
       setOfflineDraft(cached);
     };
@@ -647,9 +650,9 @@ export function useNotesModel() {
 
   async function confirmLeave(saveFirst: boolean) {
     const go = leaveConfirm;
+    if (saveFirst && !(await saveCurrentNote())) return;
     setLeaveConfirm(null);
-    if (saveFirst) await saveCurrentNote();
-    else rememberSaved(draft);
+    if (!saveFirst) rememberSaved(draft);
     await go?.();
   }
 

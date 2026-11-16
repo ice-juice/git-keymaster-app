@@ -3,19 +3,21 @@
 
 pub mod accounts;
 pub mod agent;
-pub mod files;
-pub mod gh_cli;
-pub mod locker;
-pub mod notes;
 pub mod assets;
 pub mod biometric;
+pub mod files;
+pub mod gh_cli;
 pub mod locale;
+pub mod locker;
+pub mod notes;
+pub mod onboarding;
 pub mod proxy;
 pub mod qr;
 pub mod repo;
 pub mod screen;
 pub mod secrets_ui;
 pub mod security;
+pub mod security_migration;
 pub mod sync;
 pub mod totp;
 pub mod update;
@@ -26,7 +28,7 @@ pub mod write;
 use crate::app_config::AppConfig;
 use crate::error::{AppError, Result};
 use crate::vault::Vault;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
@@ -44,6 +46,9 @@ pub fn vault_is_unlocked(state: &AppState) -> bool {
 /// 复制一份已解锁的保险库后立刻放开进程锁。
 /// 解密大文件时不能占着这把锁：`vault_status` 在桌面跑在窗口线程、在安卓跑在 WebView 桥上。
 pub fn clone_unlocked_vault(state: &AppState) -> Result<Vault> {
+    if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(AppError::Busy);
+    }
     let guard = recover_lock(&state.vault);
     let Some(v) = guard.as_ref() else {
         return Err(AppError::NotInitialized);
@@ -115,6 +120,11 @@ impl UnlockGuard {
 
 /// 全局应用状态。
 pub struct AppState {
+    /// Prevent workspace adoption/unlock while a destructive reset is authenticating or running.
+    pub reset_busy: AtomicBool,
+    /// Changes under the vault mutex on every lock/unlock/workspace replacement.
+    /// Long-running operations must not deliver stale secrets into a new session.
+    pub session_epoch: AtomicU64,
     pub vault: Mutex<Option<Vault>>,
     pub config: Mutex<AppConfig>,
     pub unlock_guard: Mutex<UnlockGuard>,
@@ -132,9 +142,8 @@ pub struct AppState {
     pub pending_full_sync: AtomicBool,
     /// 本进程是否已经尝试过首启云同步。失败也不在本进程里重打；持久标记见配置。
     pub startup_sync_done: AtomicBool,
-    /// 界面锁定后 Vault 会清掉主密钥，定时同步仍用这份进程级副本。
-    /// 只在进程退出或恢复出厂时丢掉，锁定/托盘不会清。
-    pub sync_key: Mutex<Option<crate::vault::crypto::MasterKey>>,
+    /// Prepared recovery rotations never replace the live credential until confirmed.
+    pub pending_recovery: Mutex<Option<vault::PendingRecovery>>,
     /// 历史字段：云同步不再用它挡住写入。手动路径仍会检查。
     pub writes_locked: AtomicBool,
     /// 后台启动任务进行中，避免重叠。
@@ -153,9 +162,20 @@ pub struct AppState {
 
 impl AppState {
     pub fn new() -> Self {
+        Self::with_config(AppConfig::load())
+    }
+
+    #[cfg(test)]
+    pub fn new_for_test(config: AppConfig) -> Self {
+        Self::with_config(config)
+    }
+
+    fn with_config(config: AppConfig) -> Self {
         AppState {
+            reset_busy: AtomicBool::new(false),
+            session_epoch: AtomicU64::new(1),
             vault: Mutex::new(None),
-            config: Mutex::new(AppConfig::load()),
+            config: Mutex::new(config),
             unlock_guard: Mutex::new(UnlockGuard::default()),
             agent_env: Mutex::new(crate::agent::AgentEnv::default()),
             allow_exit: AtomicBool::new(false),
@@ -164,7 +184,7 @@ impl AppState {
             pending_edit_publish: AtomicBool::new(false),
             pending_full_sync: AtomicBool::new(false),
             startup_sync_done: AtomicBool::new(false),
-            sync_key: Mutex::new(None),
+            pending_recovery: Mutex::new(None),
             writes_locked: AtomicBool::new(false),
             bootstrap_busy: AtomicBool::new(false),
             startup_note: Mutex::new(None),
@@ -194,10 +214,19 @@ pub fn refresh_reveal_grace(state: &AppState) {
 }
 
 /// 查看 OTP/密码：窗口内可免密；否则必须 verify_password。
-pub fn ensure_reveal_authorized(state: &AppState, password: Option<&str>) -> crate::error::Result<()> {
+pub fn ensure_reveal_authorized(
+    state: &AppState,
+    password: Option<&str>,
+) -> crate::error::Result<()> {
     use crate::error::AppError;
     let minutes = recover_lock(&state.config).reveal_grace_minutes;
     let now = Instant::now();
+    // Publish authorization while the session is stable, not after a concurrent lock.
+    let vault = recover_lock(&state.vault);
+    let v = vault
+        .as_ref()
+        .filter(|v| v.is_unlocked())
+        .ok_or(AppError::Locked)?;
     {
         let g = recover_lock(&state.reveal_grace);
         if let Some(until) = *g {
@@ -206,17 +235,10 @@ pub fn ensure_reveal_authorized(state: &AppState, password: Option<&str>) -> cra
             }
         }
     }
-    let Some(pw) = password.map(str::trim).filter(|s| !s.is_empty()) else {
+    let Some(pw) = password.filter(|s| !s.is_empty()) else {
         return Err(AppError::NeedReauth);
     };
-    {
-        let vault = recover_lock(&state.vault);
-        let v = vault.as_ref().ok_or(AppError::Locked)?;
-        if !v.is_unlocked() {
-            return Err(AppError::Locked);
-        }
-        v.verify_password(pw)?;
-    }
+    v.verify_password(pw)?;
     if minutes > 0 {
         *recover_lock(&state.reveal_grace) =
             Some(now + std::time::Duration::from_secs(u64::from(minutes) * 60));
@@ -226,9 +248,12 @@ pub fn ensure_reveal_authorized(state: &AppState, password: Option<&str>) -> cra
     Ok(())
 }
 
-
 pub fn ensure_writes_allowed(state: &AppState) -> crate::error::Result<()> {
-    if state.writes_locked.load(std::sync::atomic::Ordering::SeqCst) {
+    if state.reset_busy.load(std::sync::atomic::Ordering::SeqCst)
+        || state
+            .writes_locked
+            .load(std::sync::atomic::Ordering::SeqCst)
+    {
         return Err(crate::error::AppError::Busy);
     }
     Ok(())
@@ -243,6 +268,32 @@ impl Default for AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reauthentication_preserves_password_spaces_and_rejects_locked_grace() {
+        let root = std::env::temp_dir().join(format!("gam-reauth-{}", uuid::Uuid::new_v4()));
+        let (vault, _) = Vault::init(
+            &root,
+            " abc def ",
+            crate::vault::header::KdfParams::new(
+                crate::vault::kdf::MEM_FLOOR_KIB,
+                crate::vault::kdf::ITERS_FLOOR,
+                1,
+            ),
+        )
+        .unwrap();
+        let mut config = AppConfig::default();
+        config.reveal_grace_minutes = 5;
+        let state = AppState::new_for_test(config);
+        *recover_lock(&state.vault) = Some(vault);
+        assert!(ensure_reveal_authorized(&state, Some("abc def")).is_err());
+        assert!(ensure_reveal_authorized(&state, Some(" abc def ")).is_ok());
+        assert!(ensure_reveal_authorized(&state, None).is_ok());
+        // Do not invoke app teardown/real clipboard from a unit test.
+        recover_lock(&state.vault).as_mut().unwrap().lock();
+        assert!(ensure_reveal_authorized(&state, None).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn unlock_guard_backs_off_and_resets() {

@@ -5,6 +5,7 @@ use crate::error::{AppError, Result};
 use crate::vault::crypto::KEY_LEN;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use zeroize::{Zeroize, Zeroizing};
 
 pub const MAX_GRACE_DAYS: u32 = 30;
 
@@ -63,6 +64,7 @@ pub fn clamp_days(days: u32) -> u32 {
 
 pub fn clear() {
     let _ = std::fs::remove_file(session_path());
+    let _ = std::fs::remove_file(crate::vault::previous_path(&session_path()));
 }
 
 pub fn grant(workspace_id: &str, mk: &[u8; KEY_LEN], days: u32) -> Result<u64> {
@@ -72,11 +74,9 @@ pub fn grant(workspace_id: &str, mk: &[u8; KEY_LEN], days: u32) -> Result<u64> {
         return Ok(0);
     }
     let expires_at = now_unix().saturating_add(u64::from(days) * 86_400);
-    let plain = pack(workspace_id, mk, expires_at);
+    let plain = Zeroizing::new(pack(workspace_id, mk, expires_at));
     let blob = protect(&plain)?;
     crate::vault::atomic_write(&session_path(), &blob)?;
-    // 用完即清零明文。
-    let _ = plain;
     Ok(expires_at)
 }
 
@@ -86,8 +86,8 @@ pub fn try_restore(expected_workspace_id: &str) -> Result<[u8; KEY_LEN]> {
         return Err(AppError::Locked);
     }
     let blob = std::fs::read(&path)?;
-    let plain = unprotect(&blob)?;
-    let (id, mk, expires) = match unpack(&plain) {
+    let plain = Zeroizing::new(unprotect(&blob)?);
+    let (id, mut mk, expires) = match unpack(&plain) {
         Ok(v) => v,
         Err(e) => {
             clear();
@@ -95,10 +95,12 @@ pub fn try_restore(expected_workspace_id: &str) -> Result<[u8; KEY_LEN]> {
         }
     };
     if expires <= now_unix() {
+        mk.zeroize();
         clear();
         return Err(AppError::Invalid("免验证已过期，请输入访问密码".into()));
     }
     if id != expected_workspace_id {
+        mk.zeroize();
         clear();
         return Err(AppError::Invalid("免验证会话与当前工作空间不匹配".into()));
     }
@@ -119,18 +121,19 @@ pub fn info(expected_workspace_id: Option<&str>) -> GraceInfo {
             expires_at: None,
         };
     };
-    let Ok(plain) = unprotect(&blob) else {
+    let Ok(plain) = unprotect(&blob).map(Zeroizing::new) else {
         return GraceInfo {
             active: false,
             expires_at: None,
         };
     };
-    let Ok((id, _mk, expires)) = unpack(&plain) else {
+    let Ok((id, mut mk, expires)) = unpack(&plain) else {
         return GraceInfo {
             active: false,
             expires_at: None,
         };
     };
+    mk.zeroize();
     if expires <= now_unix() || expected_workspace_id.is_some_and(|w| w != id) {
         if expires <= now_unix() {
             clear();
@@ -149,7 +152,10 @@ pub fn info(expected_workspace_id: Option<&str>) -> GraceInfo {
 fn unix_to_rfc3339(ts: u64) -> Option<String> {
     time::OffsetDateTime::from_unix_timestamp(ts as i64)
         .ok()
-        .and_then(|t| t.format(&time::format_description::well_known::Rfc3339).ok())
+        .and_then(|t| {
+            t.format(&time::format_description::well_known::Rfc3339)
+                .ok()
+        })
 }
 
 #[cfg(windows)]
@@ -177,8 +183,9 @@ mod dpapi {
     use crate::error::{AppError, Result};
     use windows_sys::Win32::Foundation::LocalFree;
     use windows_sys::Win32::Security::Cryptography::{
-        CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
+    use zeroize::Zeroize;
 
     pub fn protect(data: &[u8]) -> Result<Vec<u8>> {
         crypt(data, true)
@@ -222,8 +229,12 @@ mod dpapi {
         if ok == 0 {
             return Err(AppError::Crypto);
         }
-        let out = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
+        let out =
+            unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize) }.to_vec();
         unsafe {
+            if !wrap {
+                std::slice::from_raw_parts_mut(output.pbData, output.cbData as usize).zeroize();
+            }
             LocalFree(output.pbData as _);
         }
         Ok(out)

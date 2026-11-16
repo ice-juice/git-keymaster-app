@@ -65,15 +65,33 @@
     "current": "Theme: {{name}} (click to switch)",
     "toggle": "Switch interface theme",
     "options": {
-      "light": { "name": "Classic indigo (default)", "desc": "Deep sidebar, bright cards, indigo accents" },
-      "dark": { "name": "Cold brew", "desc": "Low-saturation charcoal, easy on the eyes at night" },
-      "navy": { "name": "Deep navy", "desc": "Business navy, calm and professional" }
+      "light": {
+        "name": "Classic indigo (default)",
+        "desc": "Deep sidebar, bright cards, indigo accents"
+      },
+      "dark": {
+        "name": "Cold brew",
+        "desc": "Low-saturation charcoal, easy on the eyes at night"
+      },
+      "navy": {
+        "name": "Deep navy",
+        "desc": "Business navy, calm and professional"
+      }
     }
   },
   "anim": {
-    "cyber": { "label": "Cyber hologram", "desc": "Holo-cat scan · laser key · airlock doors" },
-    "classic": { "label": "Classic golden key", "desc": "Lucky cat · solid gold key · warm doorway" },
-    "minimal": { "label": "Geek quantum", "desc": "Quantum lock · code stream · instant unlock" }
+    "cyber": {
+      "label": "Cyber hologram",
+      "desc": "Holo-cat scan · laser key · airlock doors"
+    },
+    "classic": {
+      "label": "Classic golden key",
+      "desc": "Lucky cat · solid gold key · warm doorway"
+    },
+    "minimal": {
+      "label": "Geek quantum",
+      "desc": "Quantum lock · code stream · instant unlock"
+    }
   },
   "nav": {
     "group": "Navigation",
@@ -656,7 +674,7 @@
     "status": "Status",
     "risk": "At risk",
     "caution": "Needs attention",
-    "safe": "Safe",
+    "safe": "Configuration checks passed",
     "intro1": "This list only reads local config and the workspace path. Everything is computed on this device. No telemetry.",
     "intro2": "The OS will not tell this app who is watching the clipboard or capturing the screen, so we cannot name a listener.",
     "intro3": "Clipboard exclusion is a cooperative hint for history, cloud clipboards, and well-behaved managers. Malware can ignore it. It does not stop trojans or black out screenshots.",
@@ -1465,6 +1483,11 @@
     "saved": "Saved",
     "saving": "Saving…",
     "dirty": "Unsaved",
+    "layoutLive": "Live edit",
+    "liveTask": "Toggle task completion",
+    "liveImage": "Image",
+    "liveEditImage": "Click to edit image description or URL",
+    "liveEditTable": "Edit table cell directly",
     "layoutEdit": "Source",
     "layoutSplit": "Split",
     "layoutPreview": "Preview",
@@ -1528,6 +1551,11 @@
     "tbH1": "Heading 1",
     "tbH2": "Heading 2",
     "tbH3": "Heading 3",
+    "tbH4": "Heading 4",
+    "tbH5": "Heading 5",
+    "tbH6": "Heading 6",
+    "tbMore": "More",
+    "tbMoreHeadings": "More heading levels",
     "tbTable": "Insert table",
     "tbUl": "Bullet list",
     "tbOl": "Numbered list",
@@ -1813,7 +1841,7 @@
     "iconColorPick": "Tap the icon to choose a color",
     "iconUploadFailed": "Couldn't upload the icon",
     "iconHint": "Optional. Common sites like GitHub or Google get an icon automatically.",
-    "more": "More (display name, group, URL, 2FA…)",
+    "more": "More",
     "less": "Hide extra fields",
     "displayName": "Display name",
     "displayNameTip": "Use this when one site has several logins, e.g. “Work”.",
@@ -1859,7 +1887,6 @@
     "copiedAccount": "Account copied",
     "account": "Account",
     "historyShort": "History",
-    "more": "More",
     "showUser": "Show full username",
     "hideUser": "Hide the middle of the username",
     "allTags": "All tags",
@@ -1982,7 +2009,7 @@
     "ownersPh": "Comma-separated, e.g. nova-labs, polar-box, acme-*",
     "ownersHint": "URLs that contain these org names will recommend this identity.",
     "strictMode": "Strict private-key mode",
-    "strictHint": "The private key never lands in ~/.ssh. It stays in the vault and must go through ssh-agent.",
+    "strictHint": "Strict mode does not persist a deployed private key and relies on ssh-agent. Some platforms require a restricted temporary file when loading.",
     "deleteIdentity": "Delete identity",
     "saveChanges": "Save changes",
     "confirmAliasTitle": "Confirm Host alias change",
@@ -2475,6 +2502,25 @@
     "otherf2": "Bucket = bucket name",
     "otherf3": "Region = documented region, or try auto",
     "otherf4": "Prefix = gam-sync/"
+  },
+  "securityFix": {
+    "rotationIntro": "Verify your access password and save the new recovery key before activating it. Cancelling keeps the existing key.",
+    "rotationDone": "New recovery key activated. The master key is unchanged: holders of an old header and credentials may still decrypt later data encrypted with that master key. Migrate to a new vault after exposure.",
+    "rotationPending": "This key is not active yet. Store it in a separate safe location and enter it below within 5 minutes.",
+    "rotationConfirm": "Enter the complete recovery key you saved",
+    "rotationCommit": "Saved securely — activate key",
+    "rotationPassword": "Access password (fresh verification)",
+    "rotationPrepare": "Verify and prepare recovery key",
+    "resetBackup": "Save and verify a complete backup elsewhere first. This removes the local vault, including file and note attachments.",
+    "resetAuth": "Verify again before clearing",
+    "passwordRecovered": "Access password reset. The master key is unchanged. If credentials were exposed, migrate to a new vault.",
+    "forgotAccessPassword": "Forgot the access password? Reset with a recovery key",
+    "resetPassword": "Verify recovery key and reset password"
+  },
+  "securityBackup": {
+    "coverage": "Verified: accounts {{accounts}} · 2FA {{totp}} · files {{files}} · notes {{notes}} · attachments {{blobs}} · locker records {{locker}}",
+    "remoteExcluded": "Locker records and retrieval keys are included; remote locker file bytes are not in this offline backup. Save important files separately.",
+    "verifyHint": "Backup content integrity was checked. Complete a restore drill in a separate empty workspace.",
+    "sshExplicit": "Reapply SSH deployment from the identities page."
   }
 }
-

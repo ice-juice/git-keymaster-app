@@ -111,6 +111,17 @@ impl S3Client {
         }
     }
 
+    /// Non-secret namespace binding for locally trusted sync revision anchors.
+    pub fn sync_scope_id(&self) -> String {
+        let scope = format!(
+            "{}\n{}\n{}",
+            self.config.endpoint.trim_end_matches('/'),
+            self.config.bucket,
+            self.config.prefix.trim_matches('/')
+        );
+        format!("{:x}", Sha256::digest(scope.as_bytes()))
+    }
+
     /// 测试云端存储连通性（读写删探针），返回往返延迟毫秒
     pub fn test_connection(&self) -> Result<u128> {
         let probe_key = self.full_key("probe.tmp");
@@ -144,7 +155,8 @@ impl S3Client {
         let payload_hash = sha256_file(path)?;
         let size = std::fs::metadata(path)?.len();
         let (url, host, canonical_uri) = self.build_target(&full_key, "")?;
-        let (headers, _) = self.sign_request_hashed("PUT", &host, &canonical_uri, "", &payload_hash)?;
+        let (headers, _) =
+            self.sign_request_hashed("PUT", &host, &canonical_uri, "", &payload_hash)?;
         let file = std::fs::File::open(path)?;
         let mut req = self
             .client
@@ -214,9 +226,8 @@ impl S3Client {
             )));
         }
         if let Err(e) = std::fs::rename(&tmp, dest) {
-            std::fs::copy(&tmp, dest).map_err(|copy_err| {
-                AppError::Io(format!("保存下载文件失败：{e} / {copy_err}"))
-            })?;
+            std::fs::copy(&tmp, dest)
+                .map_err(|copy_err| AppError::Io(format!("保存下载文件失败：{e} / {copy_err}")))?;
             let _ = std::fs::remove_file(&tmp);
         }
         Ok(true)
@@ -226,6 +237,83 @@ impl S3Client {
     pub fn get_object(&self, key: &str) -> Result<Option<Vec<u8>>> {
         let full_key = self.full_key(key);
         self.get_object_internal(&full_key)
+    }
+
+    /// Read a control object and its exact server revision in one request.
+    /// A backend without ETags cannot safely participate in multi-device commits.
+    pub fn get_object_versioned(&self, key: &str) -> Result<Option<(Vec<u8>, String)>> {
+        let full_key = self.full_key(key);
+        let (url, host, uri) = self.build_target(&full_key, "")?;
+        let (headers, _) = self.sign_request("GET", &host, &uri, "", &[])?;
+        let mut req = self.client.get(&url);
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        let mut response = req
+            .send()
+            .map_err(|e| AppError::Invalid(format!("读取云端版本失败：{e}")))?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(AppError::Invalid(format!(
+                "读取云端版本失败：HTTP {}",
+                response.status()
+            )));
+        }
+        let etag = response
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| AppError::Invalid("云存储未提供 ETag，无法安全同步".into()))?
+            .to_owned();
+        let mut bytes = Vec::new();
+        response
+            .by_ref()
+            .take(MAX_INMEM_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_INMEM_BYTES {
+            return Err(AppError::Invalid("云端控制对象过大".into()));
+        }
+        Ok(Some((bytes, etag)))
+    }
+
+    /// CAS commit. None creates only when absent; Some replaces only the read revision.
+    pub fn put_object_conditional(
+        &self,
+        key: &str,
+        bytes: &[u8],
+        expected: Option<&str>,
+    ) -> Result<()> {
+        let full_key = self.full_key(key);
+        let (url, host, uri) = self.build_target(&full_key, "")?;
+        let (headers, _) = self.sign_request("PUT", &host, &uri, "", bytes)?;
+        let mut req = self.client.put(&url).body(bytes.to_vec());
+        for (k, v) in headers {
+            req = req.header(k, v);
+        }
+        req = match expected {
+            Some(etag) => req.header(reqwest::header::IF_MATCH, etag),
+            None => req.header(reqwest::header::IF_NONE_MATCH, "*"),
+        };
+        let response = req.send().map_err(|e| {
+            AppError::Invalid(format!(
+                "云端提交结果未知，请先重新读取状态，不要直接重试：{e}"
+            ))
+        })?;
+        if matches!(response.status().as_u16(), 409 | 412) {
+            return Err(AppError::Invalid(
+                "另一设备已修改云端数据，请先同步合并后再推送".into(),
+            ));
+        }
+        if !response.status().is_success() {
+            return Err(AppError::Invalid(format!(
+                "云端条件提交失败：HTTP {}；未回退为无条件覆盖",
+                response.status()
+            )));
+        }
+        Ok(())
     }
 
     /// 判断对象是否存在。优先 HEAD，不支持时回退 GET。
@@ -370,11 +458,7 @@ impl S3Client {
         }
     }
 
-    fn build_target(
-        &self,
-        full_key: &str,
-        query: &str,
-    ) -> Result<(String, String, String)> {
+    fn build_target(&self, full_key: &str, query: &str) -> Result<(String, String, String)> {
         let endpoint = self.config.endpoint.trim().trim_end_matches('/');
         let bucket = self.config.bucket.trim();
 
@@ -452,12 +536,7 @@ impl S3Client {
             now.minute(),
             now.second()
         );
-        let date_stamp = format!(
-            "{:04}{:02}{:02}",
-            now.year(),
-            now.month() as u8,
-            now.day()
-        );
+        let date_stamp = format!("{:04}{:02}{:02}", now.year(), now.month() as u8, now.day());
 
         // Canonical Headers
         let canonical_headers = format!(
@@ -536,8 +615,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 }
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Result<[u8; 32]> {
-    let mut mac = <HmacSha256 as Mac>::new_from_slice(key)
-        .map_err(|_| AppError::Crypto)?;
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).map_err(|_| AppError::Crypto)?;
     mac.update(data);
     let mut out = [0u8; 32];
     out.copy_from_slice(&mac.finalize().into_bytes());
@@ -596,14 +674,17 @@ pub fn write_s3_config_file(path: &std::path::Path, config: &S3Config) -> Result
 }
 
 pub fn read_s3_config_file(path: &std::path::Path) -> Result<S3Config> {
-    let raw = std::fs::read_to_string(path).map_err(|e| AppError::Io(format!("读取配置文件失败：{e}")))?;
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| AppError::Io(format!("读取配置文件失败：{e}")))?;
     parse_s3_config_file(&raw)
 }
 
 pub fn parse_s3_config_file(raw: &str) -> Result<S3Config> {
     if let Ok(file) = serde_json::from_str::<S3ConfigFile>(raw) {
         if !crate::identity::accepted_s3_kind(&file.kind) {
-            return Err(AppError::Invalid("这不是本程序导出的 S3/R2 配置文件".into()));
+            return Err(AppError::Invalid(
+                "这不是本程序导出的 S3/R2 配置文件".into(),
+            ));
         }
         return Ok(file.config);
     }
@@ -614,6 +695,46 @@ pub fn parse_s3_config_file(raw: &str) -> Result<S3Config> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conditional_put_uses_revision_and_does_not_retry_conflict() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut raw = Vec::new();
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = stream.read(&mut buf).unwrap();
+                raw.extend_from_slice(&buf[..n]);
+                if raw.windows(4).any(|w| w == b"\r\n\r\n") || n == 0 {
+                    break;
+                }
+            }
+            let text = String::from_utf8_lossy(&raw).to_lowercase();
+            assert!(text.starts_with("put "));
+            assert!(text.contains("if-match: \"revision-one\""));
+            stream.write_all(b"HTTP/1.1 412 Precondition Failed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+        });
+        let client = S3Client::new(S3Config {
+            endpoint: format!("http://{address}"),
+            bucket: "test".into(),
+            region: "auto".into(),
+            access_key_id: "test-only".into(),
+            secret_access_key: "synthetic-only".into(),
+            prefix: String::new(),
+        })
+        .unwrap();
+        let error = client
+            .put_object_conditional("manifest.enc", b"ciphertext", Some("\"revision-one\""))
+            .unwrap_err();
+        assert!(error.to_string().contains("另一设备"));
+        server.join().unwrap();
+    }
 
     #[test]
     fn parse_wrapped_and_raw_s3_config() {

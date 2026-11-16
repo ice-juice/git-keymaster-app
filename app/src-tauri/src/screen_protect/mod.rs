@@ -1,4 +1,4 @@
-//! 窗口防截屏：默认禁止系统截图 / 录屏捕获本应用画面，用户可在设置里打开。
+//! 新配置允许截图；用户确认引导后应用防护。旧配置保持原来的捕获策略。
 //!
 //! 各平台能力不同，设置页必须如实展示，不能假装 Linux / iOS 已经涂黑。
 
@@ -98,7 +98,23 @@ pub fn apply(app: &AppHandle, allow_screenshots: bool) {
     linux::apply(app, protect);
 }
 
-/// 从已注册的 AppState 读配置再套用。状态还没挂上时按默认（禁止截屏）。
+/// Onboarding must not equate saving a preference with a successful native API call.
+/// macOS remains best-effort; iOS provides an overlay, never screenshot exclusion.
+pub fn apply_checked(app: &AppHandle, allow_screenshots: bool) -> Result<(), String> {
+    #[cfg(target_os = "android")]
+    { android::set_secure_checked(app, !allow_screenshots) }
+    #[cfg(not(target_os = "android"))]
+    {
+        #[cfg(windows)]
+        windows::check_root(app, !allow_screenshots)?;
+        #[cfg(target_os = "linux")]
+        if !allow_screenshots { return Err("Screen capture exclusion is not supported on this platform".into()); }
+        apply(app, allow_screenshots);
+        Ok(())
+    }
+}
+
+/// 未识别配置前保守防护；加载后以新配置或已有用户的真实设置为准。
 pub fn apply_from_app(app: &AppHandle) {
     let allow = app
         .try_state::<crate::commands::AppState>()
@@ -122,8 +138,8 @@ mod tests {
     }
 
     #[test]
-    fn default_config_disallows_screenshots() {
+    fn fresh_config_allows_screenshots_before_consent() {
         let cfg = crate::app_config::AppConfig::default();
-        assert!(!cfg.allow_screenshots);
+        assert!(cfg.allow_screenshots);
     }
 }

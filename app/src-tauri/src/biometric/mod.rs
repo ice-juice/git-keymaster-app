@@ -2,36 +2,33 @@
 
 pub(crate) mod store;
 
-#[cfg(windows)]
-mod windows;
-#[cfg(target_os = "macos")]
-mod macos;
-#[cfg(target_os = "ios")]
-mod ios;
 #[cfg(target_os = "android")]
 mod android;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod apple;
 #[cfg(not(any(windows, target_os = "macos", target_os = "ios", target_os = "android")))]
 mod linux;
-
 #[cfg(windows)]
-use windows as backend;
-#[cfg(target_os = "macos")]
-use macos as backend;
-#[cfg(target_os = "ios")]
-use ios as backend;
+mod windows;
+
 #[cfg(target_os = "android")]
 use android as backend;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+use apple as backend;
 #[cfg(not(any(windows, target_os = "macos", target_os = "ios", target_os = "android")))]
 use linux as backend;
+#[cfg(windows)]
+use windows as backend;
 
 use crate::error::{AppError, Result};
 use crate::vault::crypto::{MasterKey, KEY_LEN};
 use crate::vault::envelope;
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::{AppHandle, Runtime};
 #[cfg(any(windows, target_os = "android"))]
 use tauri::Manager;
+use tauri::{AppHandle, Runtime};
+use zeroize::Zeroizing;
 
 pub use store::{is_enrolled_for, BiometricEnvFile};
 
@@ -72,7 +69,8 @@ pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
         .setup(|app, api| {
             #[cfg(target_os = "android")]
             {
-                let handle = api.register_android_plugin("com.jeck.gitkeymaster", "BiometricPlugin")?;
+                let handle =
+                    api.register_android_plugin("com.jeck.gitkeymaster", "BiometricPlugin")?;
                 app.manage(android::BiometricHandle(handle));
             }
             #[cfg(not(target_os = "android"))]
@@ -85,6 +83,8 @@ pub fn init<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
 }
 
 pub fn bind_window(app: &AppHandle) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    retire_legacy_apple_binding();
     #[cfg(windows)]
     {
         if let Some(w) = app.get_webview_window("main") {
@@ -129,6 +129,8 @@ pub fn availability() -> BiometricAvailability {
 }
 
 pub fn status(workspace_id: Option<&str>, cfg: &crate::app_config::AppConfig) -> BiometricStatus {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    retire_legacy_apple_binding();
     let avail = availability();
     let preferred = crate::app_config::clamp_biometric_method(&cfg.biometric_method);
     set_session_method(&preferred);
@@ -163,12 +165,18 @@ pub fn status(workspace_id: Option<&str>, cfg: &crate::app_config::AppConfig) ->
     }
 }
 
-pub fn enable(workspace_id: &str, mk: &MasterKey, method: &str) -> Result<()> {
+pub fn enable(vault: &crate::vault::Vault, method: &str) -> Result<()> {
+    if !vault.is_unlocked() {
+        return Err(AppError::Locked);
+    }
+    let workspace_id = vault.workspace_id();
     let method = crate::app_config::clamp_biometric_method(method);
     set_session_method(&method);
     let avail = availability();
     if method == "password" {
-        return Err(AppError::Invalid("当前解锁方式为访问密码，无需绑定指纹".into()));
+        return Err(AppError::Invalid(
+            "当前解锁方式为访问密码，无需绑定指纹".into(),
+        ));
     }
     if !avail.fingerprint && !avail.available {
         return Err(AppError::Invalid("本机未检测到可用的指纹".into()));
@@ -178,17 +186,24 @@ pub fn enable(workspace_id: &str, mk: &MasterKey, method: &str) -> Result<()> {
             "本机未检测到可用的指纹 / 人脸 / Windows Hello 硬件".into(),
         ));
     }
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let key_ref = format!("{}{}", apple::KEY_PREFIX, workspace_id);
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
     let key_ref = format!("gam-vault-{workspace_id}");
     let mut challenge = vec![0u8; KEY_LEN];
     crate::vault::crypto::fill_random(&mut challenge);
     let raw = match backend::enroll(&key_ref, &challenge) {
-        Ok(v) => v,
+        Ok(v) => Zeroizing::new(v),
         Err(e) => {
             let _ = backend::remove(&key_ref);
             return Err(e);
         }
     };
-    let envelope = match envelope::wrap_with_biometric(mk, &raw) {
+    // Acquire a key only after the system prompt; a concurrent lock revokes vault.
+    let wrapped = vault
+        .master_key()
+        .and_then(|mk| envelope::wrap_with_biometric(&mk, &raw));
+    let envelope = match wrapped {
         Ok(env) => env,
         Err(e) => {
             let _ = backend::remove(&key_ref);
@@ -224,7 +239,7 @@ pub fn unlock_master_key(workspace_id: &str) -> Result<MasterKey> {
     let file = store::load_for_workspace(workspace_id)?;
     set_session_method(file.method.as_deref().unwrap_or("auto"));
     let challenge = store::decode_challenge(&file.challenge)?;
-    let raw = backend::derive(&file.key_ref, &challenge)?;
+    let raw = Zeroizing::new(backend::derive(&file.key_ref, &challenge)?);
     envelope::unwrap_with_biometric(&file.envelope, &raw)
 }
 
@@ -244,6 +259,20 @@ pub fn factory_reset_cleanup() {
 }
 
 pub fn clear_session_secrets() {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
     backend::clear_cache();
+}
+
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn retire_legacy_apple_binding() {
+    if let Ok(file) = store::load() {
+        if file.platform == store::current_platform()
+            && !file.key_ref.starts_with(apple::KEY_PREFIX)
+        {
+            match backend::remove(&file.key_ref) {
+                Ok(()) => store::clear(),
+                Err(error) => log::warn!("旧生物识别绑定已禁用，但旧密钥材料清理失败：{error}"),
+            }
+        }
+    }
 }

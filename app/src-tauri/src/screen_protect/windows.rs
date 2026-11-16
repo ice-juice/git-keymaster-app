@@ -15,6 +15,16 @@ const WDA_EXCLUDEFROMCAPTURE: u32 = 0x0000_0011;
 
 static GEN: AtomicU32 = AtomicU32::new(0);
 
+pub fn check_root(app: &AppHandle, protect: bool) -> Result<(), String> {
+    let win = app.get_webview_window("main").ok_or("Main window is not ready")?;
+    let hwnd = win.hwnd().map_err(|e| e.to_string())?;
+    let affinity = if protect { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+    if unsafe { SetWindowDisplayAffinity(hwnd.0 as HWND, affinity) } == 0 {
+        return Err(format!("Could not apply screen capture protection: {}", std::io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
 pub fn set_excluded(app: &AppHandle, protect: bool) {
     let affinity = if protect {
         WDA_EXCLUDEFROMCAPTURE

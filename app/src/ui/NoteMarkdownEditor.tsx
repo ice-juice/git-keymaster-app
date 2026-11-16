@@ -1,11 +1,13 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
-import { markdown } from "@codemirror/lang-markdown";
+import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { EditorSelection, Transaction, type EditorState } from "@codemirror/state";
-import { EditorView, ViewPlugin, drawSelection, placeholder as cmPlaceholder } from "@codemirror/view";
+import { EditorView, ViewPlugin, drawSelection, keymap, placeholder as cmPlaceholder } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 import { useApp } from "../store";
+import { markdownLivePreview, syncTableSelection } from "./markdownLivePreview";
+import "./NoteMarkdownEditor.css";
 import { editorStateReplacingDoc, isWholesaleReplace, planMinimalReplace } from "./markdownDocSync";
 import {
   dispatchMarkdownEdit,
@@ -18,6 +20,7 @@ import {
   toggleLinePrefix,
   toggleWrap,
   type LinePrefixKind,
+  type HeadingLevel,
   type PlannedEdit,
 } from "./markdownCommands";
 
@@ -32,7 +35,7 @@ export type NoteMarkdownEditorHandle = {
   setMarkdown: (text: string) => void;
   revealCursor: () => void;
   applyEdit: (plan: (state: EditorState) => PlannedEdit) => boolean;
-  toggleHeading: (level: 1 | 2 | 3) => void;
+  toggleHeading: (level: HeadingLevel) => void;
   toggleLinePrefix: (kind: LinePrefixKind) => void;
   toggleWrap: (before: string, after?: string) => void;
   insertCodeBlock: () => void;
@@ -215,6 +218,8 @@ export const NoteMarkdownEditor = forwardRef<
     placeholder?: string;
     disabled?: boolean;
     mobile?: boolean;
+    live?: boolean;
+    onSave?: () => void;
     /** 打开另一篇笔记时递增，用来清空撤销栈。保存后拿到 id 不要变这个值。 */
     syncEpoch?: number;
     onImageFile?: (file: File) => void;
@@ -222,7 +227,7 @@ export const NoteMarkdownEditor = forwardRef<
     onScrollLine?: (line: number) => void;
   }
 >(function NoteMarkdownEditor(
-  { value, onChange, placeholder, disabled, mobile, syncEpoch = 0, onImageFile, onScrollRatio, onScrollLine },
+  { value, onChange, placeholder, disabled, mobile, live = false, onSave, syncEpoch = 0, onImageFile, onScrollRatio, onScrollLine },
   ref,
 ) {
   const theme = useApp((s) => s.theme);
@@ -235,6 +240,8 @@ export const NoteMarkdownEditor = forwardRef<
   const emittedRef = useRef(value);
   const epochRef = useRef(syncEpoch);
   const initialDocRef = useRef(value);
+  const onSaveRef = useRef(onSave);
+  useEffect(() => { onSaveRef.current = onSave; }, [onSave]);
   onChangeRef.current = onChange;
 
   useEffect(() => {
@@ -254,10 +261,11 @@ export const NoteMarkdownEditor = forwardRef<
 
   const withView = useCallback((fn: (view: EditorView) => void) => {
     const view = cmRef.current?.view;
-    if (!view) return false;
+    if (!view || disabled || view.composing) return false;
+    syncTableSelection(view);
     fn(view);
     return true;
-  }, []);
+  }, [disabled]);
 
   useImperativeHandle(ref, () => ({
     wrapSelection(before, after = before) {
@@ -337,11 +345,20 @@ export const NoteMarkdownEditor = forwardRef<
 
   const extensions = useMemo(
     () => [
-      markdown(),
+      markdown({ base: markdownLanguage }),
+      // Tauri adds a style nonce to the document CSP. Without forwarding it,
+      // style-mod's entire CodeMirror stylesheet is blocked in native builds.
+      EditorView.cspNonce.of(document.querySelector<HTMLStyleElement>("style[nonce]")?.nonce || ""),
       EditorView.lineWrapping,
       drawSelection(),
       syntaxHighlighting(mdHighlight),
       chromeTheme,
+      ...(live ? markdownLivePreview() : []),
+      keymap.of([
+        { key: "Mod-s", run: view => { if (!disabled && !view.composing) onSaveRef.current?.(); return true; } },
+        { key: "Mod-b", run: view => { if (disabled || view.composing) return false; toggleWrap(view, "**"); return true; } },
+        { key: "Mod-i", run: view => { if (disabled || view.composing) return false; toggleWrap(view, "*"); return true; } },
+      ]),
       ...(mobile ? [mobileScrollTheme] : []),
       cmPlaceholder(placeholder || ""),
       ...(mobile
@@ -379,6 +396,7 @@ export const NoteMarkdownEditor = forwardRef<
           return false;
         },
         drop(event) {
+          if (disabled) return false;
           const file = event.dataTransfer?.files?.[0];
           if (!file || !file.type.startsWith("image/")) return false;
           event.preventDefault();
@@ -386,6 +404,7 @@ export const NoteMarkdownEditor = forwardRef<
           return true;
         },
         paste(event) {
+          if (disabled) return false;
           const item = [...(event.clipboardData?.items || [])].find((it) => it.type.startsWith("image/"));
           if (!item) return false;
           const file = item.getAsFile();
@@ -396,21 +415,22 @@ export const NoteMarkdownEditor = forwardRef<
         },
       }),
     ],
-    [placeholder, mobile],
+    [placeholder, mobile, live, disabled],
   );
 
   return (
     <CodeMirror
       ref={cmRef}
-      className={"note-cm" + (mobile ? " is-mobile" : "")}
+      className={"note-cm" + (mobile ? " is-mobile" : "") + (live ? " is-live" : "")}
       value={initialDocRef.current}
       height="100%"
       theme={theme === "light" ? "light" : "dark"}
       editable={!disabled}
+      readOnly={!!disabled}
       basicSetup={{
-        lineNumbers: !mobile,
+        lineNumbers: !mobile && !live,
         foldGutter: false,
-        highlightActiveLineGutter: !mobile,
+        highlightActiveLineGutter: !mobile && !live,
         highlightActiveLine: true,
         bracketMatching: true,
         closeBrackets: true,

@@ -1,0 +1,9 @@
+﻿{
+    "passed":  true,
+    "results":  [
+                    "completed settings survive restart",
+                    "legacy missing fields keep capture protection",
+                    "corrupt config preserved and recovered through retry",
+                    "skip preserves real defaults and screenshot permission"
+                ]
+}

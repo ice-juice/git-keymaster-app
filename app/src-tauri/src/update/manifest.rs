@@ -32,12 +32,10 @@ pub struct LatestManifest {
     pub platforms: HashMap<String, PlatformAsset>,
 }
 
-/// 清单信任结果。无签自定义源在这里就会被拒，不会走到 `is_newer`。
+/// All sources require a signed manifest before version comparisons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManifestTrust {
     Signed,
-    /// 官方默认 GitHub 源、尚未发出带签清单的过渡期。
-    OfficialUnsigned,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -84,7 +82,7 @@ pub fn canonical_manifest_payload(manifest: &LatestManifest) -> String {
     lines.join("\n")
 }
 
-/// 官方默认仓库才享受「尚未发出带签清单」的过渡期；自定义 GitHub / 自建清单必须带签。
+/// Identify the official source for display only; it receives no trust bypass.
 pub fn is_official_default_source(src: &UpdateSource) -> bool {
     if src.kind.trim() != "github" {
         return false;
@@ -99,9 +97,9 @@ pub fn is_official_default_source(src: &UpdateSource) -> bool {
 }
 
 pub fn evaluate_manifest_trust(
-    src: &UpdateSource,
+    _src: &UpdateSource,
     manifest: &LatestManifest,
-    wm: &UpdateWatermark,
+    _wm: &UpdateWatermark,
     pubkey: &str,
 ) -> Result<ManifestTrust> {
     let sig = manifest.manifest_signature.trim();
@@ -110,16 +108,8 @@ pub fn evaluate_manifest_trust(
         crate::update::minisign::verify_bytes(payload.as_bytes(), sig, pubkey)?;
         return Ok(ManifestTrust::Signed);
     }
-    if wm.require_signed_manifest {
-        return Err(AppError::Invalid(
-            "本机已验证过带签清单，拒绝再接受无签回放".into(),
-        ));
-    }
-    if is_official_default_source(src) {
-        return Ok(ManifestTrust::OfficialUnsigned);
-    }
     Err(AppError::Invalid(
-        "自定义更新源必须提供清单签名，不能单凭自报版本升级".into(),
+        "所有更新源都必须提供有效的清单签名；已拒绝无签清单，请联系发布者更新清单".into(),
     ))
 }
 
@@ -135,13 +125,37 @@ pub fn accept_manifest(
     Ok(trust)
 }
 
-/// 带签清单在检查通过时就抬地板；官方无签只在「包验签即将安装」时抬，避免无签假 version 污染。
-pub fn record_verified_manifest(trust: ManifestTrust, version: &str, at_install: bool) -> Result<()> {
+/// Only authenticated versions can advance the local rollback floor.
+pub fn record_verified_manifest(trust: ManifestTrust, version: &str, _at_install: bool) -> Result<()> {
     match trust {
         ManifestTrust::Signed => watermark::raise_verified(version, true),
-        ManifestTrust::OfficialUnsigned if at_install => watermark::raise_verified(version, false),
-        ManifestTrust::OfficialUnsigned => Ok(()),
     }
+}
+
+/// Bind the actual plugin-selected package to the already authenticated document.
+/// Comparing only a version accepts a different, historically signed package.
+pub fn verify_selected_asset(
+    manifest: &LatestManifest,
+    platform: &str,
+    version: &str,
+    download_url: &Url,
+    signature: &str,
+) -> Result<()> {
+    if !versions_equal(version, &manifest.version) {
+        return Err(AppError::Invalid("更新版本与已验证清单不一致".into()));
+    }
+    let expected = manifest.platforms.get(platform)
+        .ok_or_else(|| AppError::Invalid("已验证清单缺少当前平台安装包".into()))?;
+    let expected_url = Url::parse(expected.url.trim())
+        .map_err(|_| AppError::Invalid("已验证清单的安装包地址无效".into()))?;
+    if expected_url.scheme() != "https"
+        || expected.signature.trim().is_empty()
+        || &expected_url != download_url
+        || expected.signature.trim() != signature.trim()
+    {
+        return Err(AppError::Invalid("下载地址或安装包签名与已验证清单不一致，已拒绝更新".into()));
+    }
+    Ok(())
 }
 
 fn async_http_client(timeout: Duration, proxy: Option<&NetworkProxy>) -> Result<reqwest::Client> {
@@ -444,21 +458,20 @@ mod tests {
         )
         .unwrap_err()
         .to_string();
-        assert!(err.contains("自定义"), "{err}");
+        assert!(err.contains("清单签名"), "{err}");
     }
 
     #[test]
-    fn official_unsigned_allowed_until_signed_seen() {
+    fn official_unsigned_is_rejected_even_on_first_install() {
         let doc = sample_manifest("1.7.0", "apk-sig", "");
-        assert_eq!(
+        assert!(
             evaluate_manifest_trust(
                 &official_src(),
                 &doc,
                 &UpdateWatermark::default(),
                 "unused",
             )
-            .unwrap(),
-            ManifestTrust::OfficialUnsigned
+            .is_err()
         );
         let require = UpdateWatermark {
             highest_seen_version: Some("1.7.0".into()),
@@ -467,7 +480,7 @@ mod tests {
         let err = evaluate_manifest_trust(&official_src(), &doc, &require, "unused")
             .unwrap_err()
             .to_string();
-        assert!(err.contains("带签"), "{err}");
+        assert!(err.contains("清单签名"), "{err}");
     }
 
     #[test]
@@ -484,18 +497,15 @@ mod tests {
     }
 
     #[test]
-    fn unsigned_check_does_not_raise_floor() {
-        let mut wm = UpdateWatermark::default();
-        // 检查路径对 OfficialUnsigned 不调用 apply_raise。
-        assert!(wm.highest_seen_version.is_none());
-        watermark::apply_raise(&mut wm, "99.0.0", false);
-        // apply_raise 本身会抬；record_verified_manifest 在非安装的无签路径不会调用它。
-        let mut guarded = UpdateWatermark::default();
-        match ManifestTrust::OfficialUnsigned {
-            ManifestTrust::OfficialUnsigned => {}
-            _ => watermark::apply_raise(&mut guarded, "99.0.0", false),
-        }
-        assert!(guarded.highest_seen_version.is_none());
+    fn selected_package_must_match_signed_platform_url_and_signature() {
+        let doc = sample_manifest("1.9.0", "apk-sig", "");
+        let url = Url::parse("https://example.com/old.exe").unwrap();
+        assert!(verify_selected_asset(&doc, "windows-x86_64", "1.9.0", &url, "old-pkg-sig").is_ok());
+        assert!(verify_selected_asset(&doc, "windows-x86_64", "1.9.0", &url, "different-signed-package").is_err());
+        let swapped = Url::parse("https://example.com/replayed.exe").unwrap();
+        assert!(verify_selected_asset(&doc, "windows-x86_64", "1.9.0", &swapped, "old-pkg-sig").is_err());
+        assert!(verify_selected_asset(&doc, "windows-x86_64", "1.8.0", &url, "old-pkg-sig").is_err());
+        assert!(verify_selected_asset(&doc, "linux-x86_64", "1.9.0", &url, "old-pkg-sig").is_err());
     }
 
     #[test]

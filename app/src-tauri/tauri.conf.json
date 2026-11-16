@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "御钥师",
   "mainBinaryName": "git-keymaster",
-  "version": "1.12.1",
+  "version": "1.13.0",
   "identifier": "com.jeck.gitkeymaster",
   "build": {
     "frontendDist": "../dist",
@@ -52,6 +52,7 @@
       "en.lproj/InfoPlist.strings": "en.lproj/InfoPlist.strings"
     },
     "macOS": {
+      "minimumSystemVersion": "10.15",
       "infoPlist": "Info.plist"
     },
     "windows": {

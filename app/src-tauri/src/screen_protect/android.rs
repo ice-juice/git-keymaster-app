@@ -11,13 +11,15 @@ struct SetSecureArgs {
 }
 
 pub fn set_secure(app: &AppHandle, protect: bool) {
+    if let Err(e) = set_secure_checked(app, protect) { log::warn!("无法更新 Android FLAG_SECURE：{e}"); }
+}
+
+pub fn set_secure_checked(app: &AppHandle, protect: bool) -> Result<(), String> {
     let Some(handle) = app.try_state::<ScreenProtectHandle<tauri::Wry>>() else {
-        return;
+        return Err("Android screen protection plugin is not ready".into());
     };
-    if let Err(e) = handle.0.run_mobile_plugin::<()>(
+    handle.0.run_mobile_plugin::<()>(
         "setSecure",
         SetSecureArgs { secure: protect },
-    ) {
-        log::warn!("无法更新 Android FLAG_SECURE：{e}");
-    }
+    ).map_err(|e| e.to_string())
 }

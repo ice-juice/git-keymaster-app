@@ -1,0 +1,16 @@
+{
+  "result": "passed",
+  "scope": "real Chromium and local workerd/D1/R2; no cloud deployment",
+  "checks": [
+    "lookup does not consume",
+    "actual ciphertext decrypt/download hash matches",
+    "ACK loss uses status, no second content",
+    "fragment key never transmitted or stored",
+    "lost reserve response + stop-share + reload reuses original op with code re-entry",
+    "single quota debit",
+    "390px layout",
+    "legacy/tampered size/name fragments rejected before claim",
+    "header-only and authenticated whole-chunk truncation prevent download and ACK"
+  ],
+  "date": "2026-11-15T03:59:27.369Z"
+}

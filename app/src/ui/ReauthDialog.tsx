@@ -1,5 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { errMessage } from "../lib/ipc";
 
 export function ReauthDialog({
   title,
@@ -16,16 +17,21 @@ export function ReauthDialog({
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const submitting = useRef(false);
 
   async function submit() {
-    if (!pw.trim()) return setErr(t("reauth.needPassword"));
+    if (submitting.current) return;
+    if (!pw.length) return setErr(t("reauth.needPassword"));
+    submitting.current = true;
     setBusy(true);
     setErr("");
     try {
       await onConfirm(pw);
+      setPw("");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
+      setErr(errMessage(e));
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -51,7 +57,7 @@ export function ReauthDialog({
           </div>
           {err && <div className="callout danger sm">{err}</div>}
           <div className="row" style={{ justifyContent: "flex-end" }}>
-            <button type="button" className="btn ghost sm" onClick={onCancel}>
+            <button type="button" className="btn ghost sm" onClick={() => { setPw(""); onCancel(); }}>
               {t("common.cancel")}
             </button>
             <button type="button" className="btn primary sm" disabled={busy} onClick={submit}>

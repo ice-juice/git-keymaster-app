@@ -1,0 +1,33 @@
+{
+  "date": "2026-11-15T04:20:07.971Z",
+  "engine": "157.0.4341.46",
+  "processId": 23816,
+  "realNative": {
+    "initialized": false,
+    "unlocked": false,
+    "checks": [
+      {
+        "command": "locker_list",
+        "registered": true,
+        "errorCode": "LOCKED"
+      },
+      {
+        "command": "locker_operations_list",
+        "registered": true,
+        "errorCode": "LOCKED"
+      },
+      {
+        "command": "locker_operation_status",
+        "registered": true,
+        "errorCode": "LOCKED"
+      }
+    ]
+  },
+  "ui": "actual React rendered in native WebView2 with synthetic IPC; no real vault or cloud operation",
+  "checks": [
+    "release app starts in isolated profile",
+    "native locker IPC is registered",
+    "native workbench layout",
+    "staged deposit through result"
+  ]
+}

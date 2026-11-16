@@ -57,6 +57,9 @@ export async function writeClipboard(text: string, secret = false): Promise<Clip
       }
       return result;
     } catch (e) {
+      // Never silently downgrade a failed native secret copy to an unmarked
+      // WebView copy without the native expiry/ownership protection.
+      if (secret) throw e;
       if (syncOk || (await copyTextWeb(text))) {
         return { excluded: false, fallback: true };
       }

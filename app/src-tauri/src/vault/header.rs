@@ -1,6 +1,6 @@
 //! `vault.json` 头部结构：版本、KDF 参数、两个信封。**不含任何明文机密**。
 
-use crate::vault::kdf::{ITERS_FLOOR, MEM_CEIL_KIB, MEM_FLOOR_KIB};
+use crate::vault::kdf::{ITERS_CEIL, ITERS_FLOOR, MEM_CEIL_KIB, MEM_FLOOR_KIB};
 use serde::{Deserialize, Serialize};
 
 pub const VAULT_VERSION: u32 = 1;
@@ -32,12 +32,26 @@ impl KdfParams {
     /// `kdf::calibrate_with` 在**新建时**收口 + `Vault::relax_kdf` 主动降参解决。
     pub fn clamp_to_safe_bounds(&mut self) {
         self.mem_kib = self.mem_kib.clamp(MEM_FLOOR_KIB, MEM_CEIL_KIB);
-        self.iters = self.iters.max(ITERS_FLOOR);
+        self.iters = self.iters.clamp(ITERS_FLOOR, ITERS_CEIL);
         self.parallelism = self.parallelism.clamp(1, 8);
         // Argon2 要求 mem >= 8 * parallelism（KiB），此处已远超。
         if self.mem_kib < 8 * self.parallelism {
             self.mem_kib = 8 * self.parallelism;
         }
+    }
+
+    /// Validate untrusted parameters without changing the bytes used to derive an old key.
+    pub fn validate(&self) -> crate::error::Result<()> {
+        if self.algo != "argon2id"
+            || !(MEM_FLOOR_KIB..=MEM_CEIL_KIB).contains(&self.mem_kib)
+            || !(ITERS_FLOOR..=ITERS_CEIL).contains(&self.iters)
+            || !(1..=8).contains(&self.parallelism)
+        {
+            return Err(crate::error::AppError::Invalid(
+                "保险库 KDF 参数不受支持或超过资源上限，请使用恢复密钥恢复".into(),
+            ));
+        }
+        Ok(())
     }
 }
 

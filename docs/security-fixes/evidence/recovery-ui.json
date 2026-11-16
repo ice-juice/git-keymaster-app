@@ -1,0 +1,27 @@
+{
+  "date": "2026-11-15T04:23:45.690Z",
+  "results": [
+    {
+      "width": 980,
+      "prepareDoesNotCommit": true,
+      "confirmationRequired": true,
+      "cancelPreservesOldKey": true,
+      "lockClearsDisplayedKey": true,
+      "migrationPrepareDoesNotSwitch": true,
+      "migrationRejectsWrongConfirmation": true,
+      "migrationActivatesOnlyAfterConfirmation": true,
+      "overflow": false
+    },
+    {
+      "width": 390,
+      "prepareDoesNotCommit": true,
+      "confirmationRequired": true,
+      "cancelPreservesOldKey": true,
+      "lockClearsDisplayedKey": true,
+      "migrationPrepareDoesNotSwitch": true,
+      "migrationRejectsWrongConfirmation": true,
+      "migrationActivatesOnlyAfterConfirmation": true,
+      "overflow": false
+    }
+  ]
+}

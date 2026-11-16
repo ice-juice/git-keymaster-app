@@ -1,0 +1,28 @@
+{
+  "name": "file-locker-worker",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:page": "node scripts/build-page.mjs",
+    "pretest": "node scripts/build-page.mjs",
+    "test": "node --test test/api.test.ts test/frame.test.ts test/page-source.test.ts test/v2.integration.test.mjs",
+    "test:browser": "npm run build:page && node test/browser.integration.mjs",
+    "predev": "node scripts/build-page.mjs",
+    "dev": "wrangler dev",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json",
+    "check": "npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^1.3.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261006.1",
+    "esbuild": "^0.25.10",
+    "miniflare": "^5.20261012.1-beta",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.42.0"
+  }
+}

@@ -1,5 +1,5 @@
-//! 构建期把同级 `file-locker-worker` 打成单文件脚本嵌进 assets。
-//! 同级仓库不在、或本机没有 Node 时，沿用已经提交的产物，保证能编译。
+//! Build the maintained services/file-locker-worker source into assets.
+//! A failed source build must not silently ship stale protocol code.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,13 +14,13 @@ fn embed_locker_worker() {
     let repo_root = manifest_dir.join("../..");
     let assets = manifest_dir.join("assets");
     let script = repo_root.join("scripts/embed-locker-worker.mjs");
-    let worker = repo_root.join("../file-locker-worker");
+    let worker = repo_root.join("services/file-locker-worker");
 
     println!("cargo:rerun-if-changed={}", script.display());
     println!("cargo:rerun-if-changed={}", worker.join("src").display());
     println!(
         "cargo:rerun-if-changed={}",
-        worker.join("migrations/0001_locker.sql").display()
+        worker.join("migrations").display()
     );
     println!(
         "cargo:rerun-if-changed={}",
@@ -34,6 +34,7 @@ fn embed_locker_worker() {
         "cargo:rerun-if-changed={}",
         assets.join("0001_locker.sql").display()
     );
+    println!("cargo:rerun-if-changed={}", assets.join("0002_locker_v2.sql").display());
     println!(
         "cargo:rerun-if-changed={}",
         assets.join("compatibility_date.txt").display()
@@ -48,32 +49,17 @@ fn embed_locker_worker() {
                 .status();
             match status {
                 Ok(s) if s.success() => {}
-                Ok(s) => {
-                    if assets_ready(&assets) {
-                        println!(
-                            "cargo:warning=embed-locker-worker 退出 {}，沿用已提交产物",
-                            s
-                        );
-                    } else {
-                        panic!("embed-locker-worker 失败且 assets 不完整（exit {s}）");
-                    }
-                }
-                Err(e) => {
-                    if assets_ready(&assets) {
-                        println!("cargo:warning=无法运行 Node 嵌入 Worker（{e}），沿用已提交产物");
-                    } else {
-                        panic!("无法运行 Node 嵌入 Worker（{e}），且 assets 不完整");
-                    }
-                }
+                Ok(s) => panic!("embed-locker-worker failed (exit {s}); refusing stale protocol assets"),
+                Err(e) => panic!("Cannot build embedded Worker: {e}"),
             }
-        } else if !assets_ready(&assets) {
-            panic!("未找到 Node，且 app/src-tauri/assets 缺少 file-locker 产物");
+        } else {
+            panic!("未找到 Node，无法验证并重建 services/file-locker-worker；拒绝使用可能过期的内嵌产物");
         }
     }
 
     if !assets_ready(&assets) {
         panic!(
-            "缺少内嵌分享 Worker 产物。请把同级仓库 file-locker-worker 放在旁边后重新构建，或恢复已提交的 app/src-tauri/assets。"
+            "缺少内嵌分享 Worker 产物。请恢复 services/file-locker-worker 并安装 Node 后重新构建。"
         );
     }
 }
@@ -81,6 +67,7 @@ fn embed_locker_worker() {
 fn assets_ready(assets: &Path) -> bool {
     assets.join("file-locker.js").is_file()
         && assets.join("0001_locker.sql").is_file()
+        && assets.join("0002_locker_v2.sql").is_file()
         && assets.join("compatibility_date.txt").is_file()
 }
 

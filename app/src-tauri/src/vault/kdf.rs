@@ -11,6 +11,8 @@ use std::time::Instant;
 pub const MEM_FLOOR_KIB: u32 = 19 * 1024; // 19 MiB
 pub const MEM_CEIL_KIB: u32 = 512 * 1024; // 512 MiB
 pub const ITERS_FLOOR: u32 = 2;
+/// Previous releases' calibrator capped iterations at 64; keep that compatibility ceiling.
+pub const ITERS_CEIL: u32 = 64;
 pub const DEFAULT_TARGET_MS: u128 = 500;
 
 /// 移动端可安全承受的 Argon2 内存上限（KiB）。
@@ -66,11 +68,13 @@ pub fn ensure_affordable(p: &KdfParams) -> Result<()> {
             ceiling_mib: ceiling / 1024,
         });
     }
+    p.validate()?;
     Ok(())
 }
 
 /// 用给定参数把密码派生成 32 字节 KEK。
 pub fn derive_kek(password: &[u8], salt: &[u8], p: &KdfParams) -> Result<[u8; KEY_LEN]> {
+    p.validate()?;
     let params = argon2::Params::new(p.mem_kib, p.iters, p.parallelism, Some(KEY_LEN))
         .map_err(|_| AppError::Crypto)?;
     let argon = argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
@@ -133,6 +137,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hostile_iteration_count_rejected_without_derivation() {
+        let params = KdfParams::new(MEM_FLOOR_KIB, u32::MAX, 1);
+        assert!(derive_kek(b"pw", &[0u8; 16], &params).is_err());
+        assert_eq!(params.iters, u32::MAX, "拒绝非法头部，不能静默改参数");
+    }
+
+    #[test]
     fn derive_is_deterministic() {
         let p = KdfParams::new(MEM_FLOOR_KIB, ITERS_FLOOR, 1);
         let salt = [1u8; 16];
@@ -156,8 +167,14 @@ mod tests {
     #[test]
     fn mobile_ceiling_is_below_desktop_ceiling() {
         assert!(MEM_CEIL_MOBILE_SAFE_KIB < MEM_CEIL_KIB);
-        assert!(MEM_CEIL_MOBILE_SAFE_KIB >= MEM_FLOOR_KIB, "不能低于 OWASP 兜底");
-        assert_eq!(KdfProfile::CrossDevice.mem_ceiling_kib(), MEM_CEIL_MOBILE_SAFE_KIB);
+        assert!(
+            MEM_CEIL_MOBILE_SAFE_KIB >= MEM_FLOOR_KIB,
+            "不能低于 OWASP 兜底"
+        );
+        assert_eq!(
+            KdfProfile::CrossDevice.mem_ceiling_kib(),
+            MEM_CEIL_MOBILE_SAFE_KIB
+        );
         assert_eq!(KdfProfile::DesktopOnly.mem_ceiling_kib(), MEM_CEIL_KIB);
     }
 

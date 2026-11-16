@@ -13,6 +13,9 @@ import {
   Heading1,
   Heading2,
   Heading3,
+  Heading4,
+  Heading5,
+  Heading6,
   ImagePlus,
   Italic,
   Link,
@@ -35,6 +38,7 @@ import { useTranslation } from "react-i18next";
 import { ingestNoteImage, NoteDraftBanner, NotePreview, notePlainStats, NoteTagEditor } from "./Notes.shared";
 import { GroupMenuList } from "../ui/GroupMenu";
 import { NoteMarkdownEditor } from "../ui/NoteMarkdownEditor";
+import type { HeadingLevel } from "../ui/markdownCommands";
 import { useOverlayBack } from "../shared/mobileBack";
 import type { NotesModel, NotesViewLayout } from "../shared/hooks/useNotesModel";
 
@@ -66,12 +70,13 @@ export function NoteMobileEditor({
   const isPreview = layout === "preview";
   const isSplit = layout === "split";
   const showSource = layout !== "preview";
-  const showPreview = layout !== "edit";
+  const showPreview = layout === "preview" || layout === "split";
   const currentGroup = (m.draft.group || "").trim();
   const matchedGroup = m.groups.find((g) => g.name === currentGroup);
   const [imeInset, setImeInset] = useState(0);
   const wasPreviewRef = useRef(isPreview);
   const layoutOptions: { id: NotesViewLayout; label: string; icon: typeof FileCode2 }[] = [
+    { id: "live", label: t("notes.layoutLive"), icon: Type },
     { id: "edit", label: t("notes.layoutEdit"), icon: FileCode2 },
     { id: "split", label: t("notes.layoutSplit"), icon: Rows2 },
     { id: "preview", label: t("notes.layoutPreview"), icon: Eye },
@@ -125,10 +130,13 @@ export function NoteMobileEditor({
     }
   }
 
-  const headingOptions: { id: "h1" | "h2" | "h3"; label: string; icon: typeof Heading1; level: 1 | 2 | 3 }[] = [
+  const headingOptions: { id: string; label: string; icon: typeof Heading1; level: HeadingLevel }[] = [
     { id: "h1", label: t("notes.tbH1"), icon: Heading1, level: 1 },
     { id: "h2", label: t("notes.tbH2"), icon: Heading2, level: 2 },
     { id: "h3", label: t("notes.tbH3"), icon: Heading3, level: 3 },
+    { id: "h4", label: t("notes.tbH4"), icon: Heading4, level: 4 },
+    { id: "h5", label: t("notes.tbH5"), icon: Heading5, level: 5 },
+    { id: "h6", label: t("notes.tbH6"), icon: Heading6, level: 6 },
   ];
 
   function placeHeadingMenu() {
@@ -150,7 +158,7 @@ export function NoteMobileEditor({
     });
   }
 
-  function insertHeading(level: 1 | 2 | 3) {
+  function insertHeading(level: HeadingLevel) {
     m.editorRef.current?.toggleHeading(level);
     setHeadingOpen(false);
   }
@@ -263,7 +271,7 @@ export function NoteMobileEditor({
                 onKeyDown={(e) => {
                   if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
                   e.preventDefault();
-                  if (isPreview) m.setMobileTab("edit");
+                  if (isPreview) m.setMobileTab("live");
                   m.editorRef.current?.focus();
                 }}
               />
@@ -308,6 +316,8 @@ export function NoteMobileEditor({
               placeholder={t("notes.sourcePlaceholder")}
               disabled={m.writesLocked}
               mobile
+              live={layout === "live"}
+              onSave={() => void m.saveCurrentNote()}
               onImageFile={(file) => ingestNoteImage(m, file)}
             />
           </div>

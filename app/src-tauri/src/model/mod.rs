@@ -438,6 +438,35 @@ pub struct LockerEntry {
     pub pulls_left: Option<u32>,
     #[serde(default)]
     pub share: Option<ShareMeta>,
+    /// V2 authority binding is independent of an optional public sharing alias.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<LockerService>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub storage_binding: Option<LockerStorageBinding>,
+    #[serde(default)]
+    pub share_requested: bool,
+    #[serde(default)]
+    pub share_stopped: bool,
+    #[serde(default)]
+    pub share_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LockerStorageBinding {
+    pub endpoint: String,
+    pub bucket: String,
+    pub region: String,
+    pub prefix: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LockerService {
+    pub base_url: String,
+    pub version: String,
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 /// data/locker.enc
@@ -829,9 +858,13 @@ fn merge_locker_entry(local: LockerEntry, remote: LockerEntry) -> LockerEntry {
     let (newer, older) = if local_newer { (local, remote) } else { (remote, local) };
     let pulls_left = min_pulls_left(newer.pulls_left, older.pulls_left);
     let share = pick_share(newer.share.clone(), older.share);
+    let service = newer.service.clone().or(older.service);
+    let storage_binding = newer.storage_binding.clone().or(older.storage_binding);
     LockerEntry {
         pulls_left,
         share,
+        service,
+        storage_binding,
         ..newer
     }
 }
@@ -1217,20 +1250,29 @@ pub fn merge_secrets_with_meta(
             local.totp_seeds.insert(k, v);
         }
     }
-    for (k, v) in remote.account_secrets.clone() {
-        if !usable_account_secret(&v) {
+    for (k, remote_secret) in &remote.account_secrets {
+        let Some(local_secret) = local.account_secrets.get(k) else {
+            local.account_secrets.insert(k.clone(), remote_secret.clone());
             continue;
-        }
-        if take_remote_secret(
-            account_updated_at(local_accounts, &k),
-            account_updated_at(remote_accounts, &k),
-            local
-                .account_secrets
-                .get(&k)
-                .is_some_and(usable_account_secret),
-        ) {
-            local.account_secrets.insert(k, v);
-        }
+        };
+        let local_ts = account_updated_at(local_accounts, k);
+        let remote_ts = account_updated_at(remote_accounts, k);
+        let same_time = match (local_ts, remote_ts) {
+            (Some(a), Some(b)) => timestamp_newer_or_eq(a, b) && timestamp_newer_or_eq(b, a),
+            _ => false,
+        };
+        // Equal timestamps must converge on both peers, while retaining the
+        // non-selected value. Never silently discard a conflicting password.
+        let use_remote = usable_account_secret(remote_secret)
+            && (take_remote_secret(local_ts, remote_ts, usable_account_secret(local_secret))
+                || (same_time && remote_secret.password > local_secret.password));
+        let (winner, other, replacement_at) = if use_remote {
+            (remote_secret, local_secret, remote_ts)
+        } else {
+            (local_secret, remote_secret, local_ts)
+        };
+        let merged = merge_account_secret_history(winner, other, replacement_at);
+        local.account_secrets.insert(k.clone(), merged);
     }
     local
 }
@@ -1240,7 +1282,32 @@ fn usable_seed(secret: &str) -> bool {
 }
 
 fn usable_account_secret(secret: &AccountSecret) -> bool {
-    !secret.password.trim().is_empty()
+    !secret.password.is_empty()
+}
+
+fn merge_account_secret_history(winner: &AccountSecret, other: &AccountSecret, replacement_at: Option<&str>) -> AccountSecret {
+    let mut result = winner.clone();
+    let mut versions: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for item in winner.history.iter().chain(&other.history) {
+        if item.password.is_empty() || item.password == winner.password { continue; }
+        versions.entry(item.password.clone()).and_modify(|ts| {
+            if timestamp_newer_or_eq(&item.replaced_at, ts) { *ts = item.replaced_at.clone(); }
+        }).or_insert_with(|| item.replaced_at.clone());
+    }
+    if !other.password.is_empty() && other.password != winner.password {
+        versions.entry(other.password.clone()).or_insert_with(|| replacement_at.unwrap_or("1970-01-01T00:00:00Z").to_owned());
+    }
+    result.history = versions.into_iter().map(|(password, replaced_at)| PasswordHistoryItem { password, replaced_at }).collect();
+    result.history.sort_by(|a, b| {
+        let time = match (parse_rfc3339(&a.replaced_at), parse_rfc3339(&b.replaced_at)) {
+            (Some(a), Some(b)) => b.cmp(&a),
+            _ => b.replaced_at.cmp(&a.replaced_at),
+        };
+        time.then(a.password.cmp(&b.password))
+    });
+    // User-configured edit history caps must not discard unreviewed sync
+    // conflicts. Explicit history cleanup remains available after review.
+    result
 }
 
 /// 本地条目还在，但对应密码/种子已经空了。推送前应先尝试从云端补回。
@@ -1677,6 +1744,59 @@ mod tests {
         );
     }
 
+    fn account_metadata_for_merge(updated_at: &str) -> AccountData {
+        let entry: AccountEntry = serde_json::from_value(serde_json::json!({
+            "id":"acc", "platform":"test", "username":"test", "tags":[],
+            "pinned":false, "sortOrder":0, "createdAt":updated_at, "updatedAt":updated_at
+        })).unwrap();
+        AccountData { entries: vec![entry], ..Default::default() }
+    }
+
+    #[test]
+    fn conflicting_account_passwords_keep_both_histories_and_converge() {
+        let older = account_metadata_for_merge("2026-11-14T00:00:00Z");
+        let newer = account_metadata_for_merge("2026-11-15T00:00:00Z");
+        let secret = |password: &str, history: &[&str]| AccountSecret {
+            password: password.into(), extra_fields: HashMap::new(),
+            history: history.iter().map(|value| PasswordHistoryItem {
+                password: (*value).into(), replaced_at: "2026-11-13T00:00:00Z".into(),
+            }).collect(),
+        };
+        let mut local = Secrets::default();
+        local.account_secrets.insert("acc".into(), secret(" local ", &["old-a", "shared"]));
+        let mut remote = Secrets::default();
+        remote.account_secrets.insert("acc".into(), secret("remote", &["old-b", "shared"]));
+        let forward = merge_secrets_with_meta(local.clone(), &remote, None, None, Some(&older), Some(&newer));
+        let reverse = merge_secrets_with_meta(remote.clone(), &local, None, None, Some(&newer), Some(&older));
+        assert_eq!(forward.account_secrets, reverse.account_secrets);
+        let merged = &forward.account_secrets["acc"];
+        assert_eq!(merged.password, "remote");
+        let kept: std::collections::HashSet<_> = merged.history.iter().map(|h| h.password.as_str()).collect();
+        assert_eq!(kept, std::collections::HashSet::from([" local ", "old-a", "old-b", "shared"]));
+        assert_eq!(merged.history.len(), kept.len());
+        let again = merge_secrets_with_meta(forward.clone(), &remote, None, None, Some(&newer), Some(&newer));
+        assert_eq!(again.account_secrets, forward.account_secrets);
+        let equal_forward = merge_secrets_with_meta(local.clone(), &remote, None, None, Some(&newer), Some(&newer));
+        let equal_reverse = merge_secrets_with_meta(remote, &local, None, None, Some(&newer), Some(&newer));
+        assert_eq!(equal_forward.account_secrets, equal_reverse.account_secrets);
+    }
+
+    #[test]
+    fn whitespace_password_is_usable_and_old_history_survives_same_password_merge() {
+        let mut local = Secrets::default();
+        let mut remote = Secrets::default();
+        local.account_secrets.insert("acc".into(), AccountSecret { password: "  ".into(), ..Default::default() });
+        remote.account_secrets.insert("acc".into(), AccountSecret {
+            password: "  ".into(),
+            history: vec![PasswordHistoryItem { password: "older".into(), replaced_at: "2026-11-14T00:00:00Z".into() }],
+            ..Default::default()
+        });
+        let merged = merge_secrets(local, &remote);
+        assert!(usable_account_secret(&merged.account_secrets["acc"]));
+        assert_eq!(merged.account_secrets["acc"].password, "  ");
+        assert_eq!(merged.account_secrets["acc"].history[0].password, "older");
+    }
+
     #[test]
     fn secrets_incomplete_when_entry_has_no_usable_secret() {
         let totp = TotpData {
@@ -2068,6 +2188,11 @@ mod tests {
             max_pulls: pulls_left,
             pulls_left,
             share: None,
+            service: None,
+            storage_binding: None,
+            share_requested: false,
+            share_stopped: false,
+            share_error: None,
         }
     }
 

@@ -8,6 +8,16 @@ const NOTES_AUTO_SAVE_KEY = "gam.notesAutoSave";
 const MASK_ACCOUNT_KEY = "gam.maskAccountMiddle";
 const MASK_ACCOUNT_KEEP_KEY = "gam.maskAccountKeep";
 const PREFS_EVENT = "gam-prefs-changed";
+const STARTUP_ANIM_KEY = "gam.startupAnim";
+
+/** No animation before explicit first-run consent; also preserves existing users. */
+export function getStartupAnimEnabled(): boolean {
+  try { return localStorage.getItem(STARTUP_ANIM_KEY) === "on"; } catch { return false; }
+}
+export function setStartupAnimEnabledStored(on: boolean): void {
+  localStorage.setItem(STARTUP_ANIM_KEY, on ? "on" : "off");
+  emitPrefsChanged();
+}
 
 function emitPrefsChanged() {
   try {
